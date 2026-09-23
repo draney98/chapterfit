@@ -1,0 +1,48 @@
+# Secrets / local config
+.env
+.env.*
+.secrets/
+**/chapterfit.env
+!**/chapterfit.env.example
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# Toolkit caches and generated sidecars
+*.silences.json
+*.envelope.i8
+*.analysis.json
+*.ffmeta.tmp
+# Keep committed test fixtures
+!tests/fixtures/**
+
+# Media (library data, not source)
+*.mp3
+*.m4b
+*.m4a
+*.flac
+*.ogg
+*.opus
+*.wav
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.nfo
+
+# Work / whisper caches
+.cache/
+**/clips/
+**/transcripts/

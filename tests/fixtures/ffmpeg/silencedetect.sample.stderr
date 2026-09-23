@@ -1,0 +1,6 @@
+silence_start: 10.000
+silence_end: 13.500 | silence_duration: 3.500
+silence_start: 50.250
+silence_end: 53.000 | silence_duration: 2.750
+silence_start: 120.000
+silence_end: 124.000 | silence_duration: 4.000

@@ -1,0 +1,1629 @@
+"""Main-area controller and stage panels: measure → … → finalize.
+
+WorkflowPanel owns the command plumbing (one method per chapterfit
+subcommand, all subprocess-driven via app.runner) and builds the main
+area: header, stage bar, one visible stage panel, and the notebook tabs
+(Chapters, Transcripts). The Log tab and the status bar belong to the app.
+"""
+from __future__ import annotations
+
+import json
+import math
+import os
+import shutil
+import statistics
+import subprocess
+import sys
+import tkinter as tk
+import tkinter.font as tkfont
+from pathlib import Path
+from tkinter import filedialog, messagebox, simpledialog, ttk
+
+from chaptertools.util import clock, hms, parse_time
+
+from . import fonts, tips
+from .harvest import found_summary, harvest_book
+from .library import load_analysis, work_dir_for
+from .runner import Job
+from .stages import (
+    ATTENTION,
+    DONE,
+    STAGE_KEYS,
+    STAGE_LABELS,
+    DiskFacts,
+    StageBar,
+    first_pending,
+    stage_states,
+)
+
+
+def resolve_chapterfit() -> list[str] | None:
+    """Root chapterfit.py when running from the project tree, else installed.
+
+    Runs with -u: stdout is unbuffered, so when a step dies its stderr
+    (errors, tracebacks) interleaves in true order in the log instead of
+    appearing above the flushed stdout block.
+    """
+    root = Path(__file__).resolve().parents[3]
+    script = root / "chapterfit.py"
+    if script.is_file():
+        return [sys.executable, "-u", str(script)]
+    exe = shutil.which("chapterfit")
+    return [exe] if exe else None
+
+
+def whisper_python() -> str | None:
+    p = os.environ.get("WHISPER_PYTHON") \
+        or os.path.expanduser("~/.venvs/whisper/bin/python")
+    return p if os.path.isfile(p) and os.access(p, os.X_OK) else None
+
+
+def _live(t: float) -> str:
+    """Playback clock with hundredths: 1:02:03.45."""
+    h, rem = divmod(t, 3600)
+    m, s = divmod(rem, 60)
+    return f"{int(h)}:{int(m):02d}:{s:05.2f}"
+
+
+def _t(v) -> str:
+    """No empty time cells: a zero clock instead of '-' or blank."""
+    if v is None or v == "" or v == "-":
+        return "0:00:00.000"
+    return str(v) if isinstance(v, str) and ":" in v else hms(v)
+
+
+def _withheld(results: list[dict], thr: float) -> set[int]:
+    """Chapter numbers that emit would NOT write.
+
+    Mirrors cmd_emit's keep-rule (chapterfit.py): keep placed chapters at
+    confidence >= thr, plus pins and chapter 1 regardless of confidence;
+    then drop any kept mark that lands within 2s of the previous kept one.
+    Everything not kept is withheld.
+    """
+    keep = []
+    for r in results:
+        if r.get("time") is None:
+            continue
+        if r.get("pinned") or r["index"] == 0 \
+                or (r.get("confidence") or 0) >= thr:
+            keep.append(r)
+    keep.sort(key=lambda r: r["time"])
+    kept: set[int] = set()
+    last: float | None = None
+    for r in keep:
+        if last is not None and r["time"] - last < 2.0:
+            continue
+        kept.add(r["index"] + 1)
+        last = r["time"]
+    return {r["index"] + 1 for r in results} - kept
+
+
+CADENCE_WINDOW = 300.0  # a predicted position only claims silences this near
+
+
+def similar_gaps(gaps: list[dict], pins: dict[int, float],
+                 chapters: list[dict], mode: str,
+                 limit: int = 25) -> list[dict]:
+    """The gaps most similar to the pinned chapters.
+
+    mode "cadence": the pins (published start -> pin time) anchor a local
+    reading rate; each unpinned chapter's position is predicted and the
+    silences nearest those predictions are the candidates.
+    mode "duration": the reference is the median duration of the silences
+    the pins sit on; the closest-duration silences are the candidates.
+
+    Returns [{"gap": g, "pred": s|None, "chapter_title": str,
+              "ref": s|None}] best-first, capped at `limit`.
+    """
+    if not pins or not gaps:
+        return []
+
+    def on_gap(t):
+        best, bd = None, 1e9
+        for g in gaps:
+            d = abs(g["mid"] - t)
+            if d < bd:
+                best, bd = g, d
+        return best if bd <= 0.06 else None
+
+    pin_mids = {round(g["mid"], 3) for t in pins.values()
+                if (g := on_gap(t))}
+
+    if mode == "duration":
+        ref_durs = [g["dur"] for t in pins.values() if (g := on_gap(t))]
+        if not ref_durs:
+            return []
+        ref = statistics.median(ref_durs)
+        out = []
+        for g in sorted(gaps, key=lambda g: abs(g["dur"] - ref)):
+            if round(g["mid"], 3) in pin_mids:
+                continue
+            out.append({"gap": g, "pred": None, "chapter_title": "",
+                        "ref": ref})
+            if len(out) >= limit:
+                break
+        return out
+
+    # cadence: predict each unpinned chapter from the pin anchors
+    anchors = sorted((chapters[i]["start"], t) for i, t in pins.items()
+                     if i < len(chapters))
+
+    def predict(i):
+        if not anchors:
+            return None
+        p = chapters[i]["start"]
+        if len(anchors) == 1:
+            return anchors[0][1] + (p - anchors[0][0])
+        if anchors[0][0] <= p <= anchors[-1][0]:
+            for (p1, t1), (p2, t2) in zip(anchors, anchors[1:], strict=False):
+                if p1 <= p <= p2:
+                    if p2 == p1:
+                        return t1
+                    return t1 + (t2 - t1) * (p - p1) / (p2 - p1)
+        if p < anchors[0][0]:
+            (p1, t1), (p2, t2) = anchors[0], anchors[1]
+        else:
+            (p1, t1), (p2, t2) = anchors[-2], anchors[-1]
+        rate = (t2 - t1) / (p2 - p1)
+        return t1 + rate * (p - p1)
+
+    candidates = []
+    for i, ch in enumerate(chapters):
+        if i in pins:
+            continue
+        pred = predict(i)
+        if pred is None:
+            continue
+        for g in gaps:
+            dist = abs(g["mid"] - pred)
+            if dist <= CADENCE_WINDOW and round(g["mid"], 3) not in pin_mids:
+                candidates.append((dist, g, pred, ch.get("title", "")))
+    candidates.sort(key=lambda x: x[0])
+    out, seen = [], set()
+    for _dist, g, pred, title in candidates:
+        key = round(g["mid"], 3)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"gap": g, "pred": pred, "chapter_title": title,
+                    "ref": None})
+        if len(out) >= limit:
+            break
+    return out
+
+
+class WorkflowPanel(ttk.Frame):
+    """The main area: header, stage bar, stage panels, notebook tabs."""
+
+    def __init__(self, master, app):
+        super().__init__(master, padding=8)
+        self.app = app
+        self.notebook = ttk.Notebook(self)
+        self.audio: str | None = None
+        self.work_dir: str | None = None
+        self.analysis: dict = {}
+        self.harvest: dict = {}
+        self._row_data: dict = {}
+        self._cf = resolve_chapterfit()
+        self._stage: str = "measure"
+        self._disk: DiskFacts | None = None
+        self._emit_stale = False
+        self._finalize_dry_ok = False
+        self._pin_autofilled = False
+
+        self._build()
+        style = ttk.Style(self)
+        style.configure("Accent.TButton",
+                        font=fonts.derived(self, weight="bold"))
+        self._refresh()
+
+    # ------------------------------------------------------------ widgets --
+    def _build(self):
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(4, weight=1)
+
+        head = ttk.Frame(self)
+        head.grid(row=0, column=0, sticky="ew")
+        head.columnconfigure(0, weight=1)
+        self.book_var = tk.StringVar(value="(nothing selected)")
+        book_lbl = ttk.Label(head, textvariable=self.book_var,
+                             font=tkfont.nametofont("TkHeadingFont"))
+        book_lbl.pack(side="left")
+        self.head_tooltip = None
+        book_lbl.bind("<Enter>", self._show_path_tip)
+        book_lbl.bind("<Leave>", self._hide_tip)
+        self.found_var = tk.StringVar(value="")
+        ttk.Label(head, textvariable=self.found_var).pack(
+            side="top", anchor="w")
+
+        self.stage_bar = StageBar(self, self.set_stage)
+        self.stage_bar.grid(row=1, column=0, sticky="ew", pady=(8, 0))
+
+        # amber explainer strip: shown when the SELECTED stage needs attention
+        self.banner_var = tk.StringVar(value="")
+        self.banner = ttk.Label(self, textvariable=self.banner_var,
+                                background="#ffe9c8", foreground="#7a4a00",
+                                padding=(8, 3))
+
+        # panel host sizes to the tallest visible panel (nothing clips)
+        self._panel_host = ttk.Frame(self)
+        self._panel_host.grid(row=3, column=0, sticky="ew", pady=(4, 0))
+        self._panel_host.columnconfigure(0, weight=1)
+        self._panel_host.rowconfigure(0, weight=1)
+        self._panels = {
+            "measure": self._panel_measure(self._panel_host),
+            "identify": self._panel_identify(self._panel_host),
+            "align": self._panel_align(self._panel_host),
+            "resolve": self._panel_resolve(self._panel_host),
+            "emit": self._panel_emit(self._panel_host),
+            "finalize": self._panel_finalize(self._panel_host),
+        }
+
+        self._build_chapters_tab()
+        self._build_transcripts_tab()
+        self.notebook.grid(row=4, column=0, columnspan=2, sticky="nsew")
+        self.set_stage("measure")
+
+    # ---------------------------------------------------------- stage panels
+    @staticmethod
+    def _result_line(parent, row, colspan=1):
+        var = tk.StringVar(value="")
+        ttk.Label(parent, textvariable=var, foreground="#444444").grid(
+            row=row, column=0, columnspan=colspan, sticky="w", pady=(4, 0))
+        return var
+
+    def _panel_measure(self, host):
+        p = ttk.Frame(host)
+        p.columnconfigure(0, weight=1)
+        row = ttk.Frame(p)
+        row.grid(row=0, column=0, sticky="ew")
+        self.measure_btn = self._primary(row, 0, 0, "Run measure",
+                                         self.cmd_measure)
+        ttk.Label(row, text="analyzes the audio: loudness envelope, timeline "
+                            "check, noise calibration, gaps").grid(
+            row=0, column=1, sticky="w", padx=8)
+        self.measure_result = self._result_line(p, row=1, colspan=1)
+        tips.tooltip(self.measure_btn, "decode the whole file once: envelope, "
+                     "timeline check, calibration, and the gap list")
+
+        # gap strip: pinned chapters + the gaps most similar to them
+        controls = ttk.Frame(p)
+        controls.grid(row=2, column=0, sticky="ew", pady=(4, 0))
+        ttk.Label(controls, text="similar gaps by:").pack(side="left")
+        self.gap_mode_var = tk.StringVar(value="cadence")
+        for text, mode in (("chapter cadence", "cadence"),
+                           ("silence length", "duration")):
+            ttk.Radiobutton(controls, text=text, value=mode,
+                            variable=self.gap_mode_var,
+                            command=self._draw_gap_graph).pack(
+                side="left", padx=(6, 0))
+        tips.tooltip(controls.winfo_children()[1],
+                     "silences nearest where the pin spacing predicts the "
+                     "unpinned chapters should fall")
+        tips.tooltip(controls.winfo_children()[2],
+                     "silences whose duration matches the ones your pins "
+                     "sit on")
+        self.gap_canvas = tk.Canvas(p, height=64, highlightthickness=0)
+        self.gap_canvas.grid(row=3, column=0, sticky="ew", pady=(4, 0))
+        self.gap_canvas.bind("<Configure>",
+                             lambda e: self._draw_gap_graph())
+        self.gap_legend = tk.StringVar(value="")
+        ttk.Label(p, textvariable=self.gap_legend, foreground="#666666").grid(
+            row=4, column=0, sticky="w")
+        return p
+
+    def _draw_gap_graph(self):
+        """Bar strip: pinned chapters (purple) + the gaps most similar to
+        them (blue) - by cadence (default) or by silence length."""
+        c = self.gap_canvas
+        c.delete("all")
+        gaps = (self.analysis.get("gaps") or {}).get("gaps") or []
+        dur = (self.analysis.get("envelope") or {}).get("duration") or 0.0
+        pins = {int(k): v for k, v in (self.analysis.get("pins") or {})
+                .items()}
+        chapters = (self.analysis.get("identification") or {}) \
+            .get("chapters") or []
+        if not gaps or not dur:
+            self.gap_legend.set("")
+            return
+        if not pins:
+            self.gap_legend.set("pin chapters to focus the strip")
+            return
+
+        # placed chapters still claim gaps for hover context
+        claimed = {}
+        for r in (self.analysis.get("alignment") or {}).get("results", []):
+            t = r.get("time")
+            if t is None:
+                continue
+            for g in gaps:
+                if abs(g["mid"] - t) <= 0.06:
+                    claimed[round(g["mid"], 3)] = r
+
+        mode = self.gap_mode_var.get()
+        similar = similar_gaps(gaps, pins, chapters, mode)
+
+        # the silences the pins sit on define pin-bar heights
+        def on_gap(t):
+            return min(gaps, key=lambda g: abs(g["mid"] - t)) \
+                if min((abs(g["mid"] - t) for g in gaps), default=1e9) \
+                <= 0.06 else None
+
+        pin_draws = []
+        for idx in sorted(pins):
+            g = on_gap(pins[idx])
+            title = chapters[idx]["title"] if idx < len(chapters) else "?"
+            pin_draws.append({"x": pins[idx], "gap": g,
+                              "title": title, "n": idx + 1})
+
+        durs = [d["gap"]["dur"] for d in pin_draws if d["gap"]] \
+            + [s["gap"]["dur"] for s in similar]
+        maxdur = max(durs) if durs else 1.0
+        width = max(c.winfo_width(), 400)
+        height = int(c["height"])
+        mid_y = height - 14
+        PURPLE, BLUE = "#7b2fa8", "#1f7fd1"
+
+        def bar(x_seconds, d, color, tip):
+            x = 4 + (x_seconds / dur) * (width - 8)
+            h = 6 + (d / maxdur) * (mid_y - 10) if d else 8
+            tag = f"g{round(x_seconds, 3)}"
+            c.create_rectangle(x - 2, mid_y - h, x + 2, mid_y,
+                               fill=color, width=0, tags=(tag,))
+            if tip:
+                c.tag_bind(tag, "<Enter>",
+                           lambda e, t=tip: self._gap_tip(t))
+                c.tag_bind(tag, "<Leave>", lambda e: self._gap_tip(None))
+
+        for d in pin_draws:
+            g = d["gap"]
+            tip = (f"{hms(d['x'])} · {d['title']} (#{d['n']}) · pinned"
+                   + (f" · on a {g['dur']:.2f} s silence" if g
+                      else " · off-gap"))
+            bar(d["x"], g["dur"] if g else None, PURPLE, tip)
+
+        for s in similar:
+            g = s["gap"]
+            r = claimed.get(round(g["mid"], 3))
+            note = ""
+            if r is not None:
+                note = f" · claimed by {r['title']} (#{r['index'] + 1})"
+            if mode == "cadence" and s.get("pred") is not None:
+                note += (f" · near {s['chapter_title']}"
+                         f" (predicted {hms(s['pred'])})")
+            elif mode == "duration" and s.get("ref") is not None:
+                note = f" · pins' silences run ~{s['ref']:.2f} s"
+            bar(g["mid"], g["dur"], BLUE,
+                f"{hms(g['mid'])} · {g['dur']:.2f} s{note or ' · unclaimed'}")
+
+        c.create_line(0, mid_y, width, mid_y, fill="#999999")
+        for frac, anchor in ((0, "w"), (0.5, "center"), (1, "e")):
+            c.create_text(4 + frac * (width - 8), height - 6,
+                          text=hms(dur * frac), anchor=anchor,
+                          font=("TkDefaultFont", 8), fill="#888888")
+        by = "cadence" if mode == "cadence" else "silence length"
+        self.gap_legend.set(
+            f"{len(pin_draws)} pinned chapters (purple) · "
+            f"{len(similar)} similar gaps by {by} (blue) · hover for detail")
+
+    _gap_tipwin = None
+
+    def _gap_tip(self, text):
+        if self._gap_tipwin is not None:
+            self._gap_tipwin.destroy()
+            self._gap_tipwin = None
+        if text:
+            c = self.gap_canvas
+            self._gap_tipwin = tw = tk.Toplevel(self)
+            tw.wm_overrideredirect(True)
+            tw.wm_geometry(f"+{c.winfo_pointerx()}+{c.winfo_rooty() - 24}")
+            tk.Label(tw, text=text, background="#ffffe0", relief="solid",
+                     borderwidth=1, padx=4, pady=1).pack()
+
+    def _is_withheld(self, r) -> bool:
+        al = self.analysis.get("alignment") or {}
+        results = al.get("results") or []
+        return r["index"] + 1 in _withheld(results, self.min_conf.get())
+
+    def _panel_identify(self, host):
+        p = ttk.Frame(host)
+        p.columnconfigure(1, weight=1)
+        ttk.Label(p, text="source:").grid(row=0, column=0, sticky="w")
+        self.identify_mode = tk.StringVar(value="asin")
+        self.identify_value = tk.StringVar()
+        modes = [("ASIN", "asin"), ("JSON file", "json"), ("Embedded", "emb")]
+        for n, (text, mode) in enumerate(modes):
+            ttk.Radiobutton(p, text=text, value=mode,
+                            variable=self.identify_mode,
+                            command=self._identify_mode_changed).grid(
+                row=0, column=1 + n, sticky="w", padx=(0, 6))
+        self.identify_entry = ttk.Entry(p, textvariable=self.identify_value)
+        self.identify_entry.grid(row=1, column=1, sticky="ew", padx=(0, 4))
+        self.identify_browse = ttk.Button(p, text="Browse…",
+                                          command=self._identify_browse)
+        self.identify_browse.grid(row=1, column=2, sticky="w")
+        self.identify_btn = self._primary(p, 1, 3, "Identify",
+                                          self.cmd_identify_primary)
+        ttk.Label(p, text="chooses and verifies the chapter list against "
+                          "the audio").grid(row=1, column=4, sticky="w",
+                                            padx=8)
+        self.identify_result = self._result_line(p, row=2, colspan=5)
+        tips.tooltip(self.identify_btn, "check the chosen chapter list "
+                     "against the real silences before aligning")
+        self._identify_mode_changed()
+        return p
+
+    def _panel_align(self, host):
+        p = ttk.Frame(host)
+        p.columnconfigure(3, weight=1)
+        ttk.Label(p, text="min conf:").grid(row=0, column=0, sticky="w")
+        self.min_conf = tk.DoubleVar(value=0.5)
+        self.min_conf.trace_add("write", lambda *_: self._refresh())
+        ttk.Spinbox(p, from_=0.0, to=1.0, increment=0.05, width=5,
+                    textvariable=self.min_conf).grid(row=0, column=1,
+                                                     sticky="w")
+        ttk.Label(p, text="near CH=TIME:").grid(row=0, column=2, sticky="e",
+                                                padx=(10, 2))
+        self.near_var = tk.StringVar()
+        ttk.Entry(p, textvariable=self.near_var, width=12).grid(
+            row=0, column=3, sticky="w")
+        self.align_btn = self._primary(p, 0, 4, "Align", self.cmd_align)
+        ttk.Label(p, text="places every published chapter on a real gap").grid(
+            row=1, column=0, columnspan=5, sticky="w")
+        self.align_result = self._result_line(p, row=2, colspan=5)
+        tips.tooltip(self.align_btn, "place every published chapter on a "
+                     "real gap, keeping local reading rate consistent")
+        return p
+
+    def _panel_resolve(self, host):
+        p = ttk.Frame(host, padding=(4, 2))
+        p.columnconfigure(0, weight=3)
+        p.columnconfigure(1, weight=2)
+
+        # summary line: unresolved chapters + recommended next action
+        summary = ttk.Frame(p)
+        summary.grid(row=0, column=0, columnspan=2, sticky="ew")
+        self.unresolved_var = tk.StringVar(value="")
+        self.unresolved_frame = summary
+        ttk.Label(summary, textvariable=self.unresolved_var).pack(side="left")
+        self.next_var = tk.StringVar(value="")
+        ttk.Label(summary, textvariable=self.next_var,
+                  foreground="#2e7d32").pack(side="right")
+
+        # left: automatic escalation, uniform button column
+        left = ttk.LabelFrame(p, text="Automatic", padding=4)
+        left.grid(row=1, column=0, sticky="nsew")
+        for c in range(5):
+            left.columnconfigure(c, weight=1 if c == 4 else 0)
+        left.columnconfigure(0, weight=1)
+
+        BTN_W = 12
+        ttk.Label(left, text="position hint:").grid(row=0, column=0,
+                                                    sticky="e", padx=(0, 4))
+        self.hint_var = tk.StringVar()
+        ttk.Entry(left, textvariable=self.hint_var, width=12).grid(
+            row=0, column=1, sticky="ew")
+        self.hint_btn = ttk.Button(left, text="Apply hint", width=BTN_W,
+                                   command=self._resolve_hint)
+        self.hint_btn.grid(row=0, column=2, sticky="ew", padx=4)
+        ttk.Label(left, text="free").grid(row=0, column=3, sticky="w")
+        self.hint_status = tk.StringVar(value="")
+        ttk.Label(left, textvariable=self.hint_status).grid(
+            row=0, column=4, sticky="w", padx=(6, 0))
+        tips.tooltip(self.hint_btn, "aims the next Align at roughly this "
+                     "position (CH=TIME); free - it is not a pin")
+
+        ttk.Label(left, text="listen:").grid(row=1, column=0, sticky="e",
+                                             padx=(0, 4))
+        self.listen_btn = ttk.Button(left, text="Listen", width=BTN_W,
+                                     command=self.cmd_listen)
+        self.listen_btn.grid(row=1, column=2, sticky="ew", padx=4)
+        ttk.Label(left, text="~4 min").grid(row=1, column=3, sticky="w")
+        self.listen_status = tk.StringVar(value="not run")
+        ttk.Label(left, textvariable=self.listen_status).grid(
+            row=1, column=4, sticky="w", padx=(6, 0))
+        tips.tooltip(self.listen_btn, "transcribes ~13 s after candidate "
+                     "gaps and pins the chapter announcements it hears")
+
+        ttk.Label(left, text="sweep range:").grid(row=2, column=0, sticky="e",
+                                                  padx=(0, 4))
+        rng = ttk.Frame(left)
+        rng.grid(row=2, column=1, sticky="ew")
+        self.sweep_start = tk.StringVar()
+        self.sweep_end = tk.StringVar()
+        ttk.Entry(rng, textvariable=self.sweep_start, width=9).pack(
+            side="left")
+        ttk.Label(rng, text="–").pack(side="left")
+        ttk.Entry(rng, textvariable=self.sweep_end, width=9).pack(
+            side="left")
+        self.range_btn = ttk.Button(left, text="Sweep range", width=BTN_W,
+                                    command=self._sweep_range)
+        self.range_btn.grid(row=2, column=2, sticky="ew", padx=4)
+        self.range_cost = tk.StringVar(value="")
+        ttk.Label(left, textvariable=self.range_cost).grid(row=2, column=3,
+                                                           sticky="w")
+        self.range_status = tk.StringVar(value="")
+        ttk.Label(left, textvariable=self.range_status).grid(
+            row=2, column=4, sticky="w", padx=(6, 0))
+        tips.tooltip(self.range_btn, "reads this span continuously and pins "
+                     "announced chapters - the targeted fix for one "
+                     "stubborn chapter")
+
+        ttk.Label(left, text="sweep probe:").grid(row=3, column=0, sticky="e",
+                                                  padx=(0, 4))
+        self.probe_btn = ttk.Button(left, text="Probe 10 min", width=BTN_W,
+                                    command=self._sweep_probe)
+        self.probe_btn.grid(row=3, column=2, sticky="ew", padx=4)
+        ttk.Label(left, text="10 min").grid(row=3, column=3, sticky="w")
+        self.probe_status = tk.StringVar(value="not run")
+        ttk.Label(left, textvariable=self.probe_status).grid(
+            row=3, column=4, sticky="w", padx=(6, 0))
+        tips.tooltip(self.probe_btn, "sweeps 10 minutes from the quarter "
+                     "point to learn whether chapters are announced at all")
+
+        ttk.Label(left, text="full sweep:").grid(row=4, column=0, sticky="e",
+                                                 padx=(0, 4))
+        self.full_btn = ttk.Button(left, text="Full sweep", width=BTN_W,
+                                   command=self._sweep_full)
+        self.full_btn.grid(row=4, column=2, sticky="ew", padx=4)
+        self.full_cost = tk.StringVar(value="")
+        ttk.Label(left, textvariable=self.full_cost).grid(row=4, column=3,
+                                                          sticky="w")
+        self.swept_status = tk.StringVar(value="not run")
+        ttk.Label(left, textvariable=self.swept_status).grid(
+            row=4, column=4, sticky="w", padx=(6, 0))
+        tips.tooltip(self.full_btn, "sweeps the whole book; already-swept "
+                     "spans are cached and cost nothing to redo")
+
+        # right: pin by ear
+        right = ttk.LabelFrame(p, text="Pin by ear", padding=4)
+        right.grid(row=1, column=1, sticky="nsew", padx=(8, 0))
+        for c in range(6):
+            right.columnconfigure(c, weight=1)
+        self.byear_title = tk.StringVar(value="Select a chapter in the table")
+        ttk.Label(right, textvariable=self.byear_title,
+                  font=fonts.derived(self, weight="bold")).grid(
+            row=0, column=0, columnspan=6, sticky="w")
+        self.byear_info = tk.StringVar(value="")
+        ttk.Label(right, textvariable=self.byear_info).grid(
+            row=1, column=0, columnspan=6, sticky="w")
+
+        ttk.Label(right, text="playback:").grid(row=2, column=0, sticky="e")
+        self.seek_btns = []
+        for col, delta in ((1, -10), (2, -5)):
+            b = ttk.Button(right, text=f"{delta:+d}s", width=4,
+                           command=lambda d=delta: self._key_seek(d),
+                           state=["disabled"])
+            b.grid(row=2, column=col, sticky="ew", padx=1)
+            self.seek_btns.append(b)
+            tips.tooltip(b, f"skip {'back' if delta < 0 else 'forward'} "
+                         f"{abs(delta)} s")
+        self.play_btn = ttk.Button(right, text="▶ Play", width=7,
+                                   command=self._key_playpause,
+                                   state=["disabled"])
+        self.play_btn.grid(row=2, column=3, sticky="ew", padx=1)
+        tips.tooltip(self.play_btn, "play from the selected chapter "
+                     "(double-click a row does the same); pauses/resumes "
+                     "while playing")
+        for col, delta in ((4, 5), (5, 10)):
+            b = ttk.Button(right, text=f"{delta:+d}s", width=4,
+                           command=lambda d=delta: self._key_seek(d),
+                           state=["disabled"])
+            b.grid(row=2, column=col, sticky="ew", padx=1)
+            self.seek_btns.append(b)
+            tips.tooltip(b, f"skip {'back' if delta < 0 else 'forward'} "
+                         f"{abs(delta)} s")
+        self.stop_btn = ttk.Button(right, text="■ Stop", width=6,
+                                   command=self.app.stop_audio,
+                                   state=["disabled"])
+        self.stop_btn.grid(row=2, column=6, sticky="ew", padx=(1, 0))
+        tips.tooltip(self.stop_btn, "stop playback")
+        self.playback_var = tk.StringVar(value="0:00:00.000")
+        ttk.Label(right, textvariable=self.playback_var,
+                  font=tkfont.nametofont("TkFixedFont")).grid(
+            row=3, column=0, columnspan=3, sticky="w")
+
+        ttk.Label(right, text="time:").grid(row=4, column=0, sticky="e")
+        self.pin_time = tk.StringVar(value="0:00:00.000")
+        pin_time_entry = ttk.Entry(right, textvariable=self.pin_time,
+                                   width=12)
+        pin_time_entry.grid(row=4, column=1, sticky="ew", padx=(2, 6))
+        pin_time_entry.bind("<Return>",
+                            lambda e: self.play_from_time() or "break")
+        tips.tooltip(pin_time_entry, "the time Pin will mark and Play from "
+                     "time will start at (H:MM:SS); Enter plays from it")
+        self._set_btn = ttk.Button(right, text="Set from playback",
+                                   command=self.set_from_playback,
+                                   state=["disabled"])
+        self._set_btn.grid(row=4, column=2, columnspan=3, sticky="ew")
+        tips.tooltip(self._set_btn, "copy the current (frozen) playback "
+                     "clock into the time field")
+        self.playfrom_btn = ttk.Button(right, text="▶ Play from time",
+                                       command=self.play_from_time,
+                                       state=["disabled"])
+        self.playfrom_btn.grid(row=4, column=5, columnspan=2, sticky="ew")
+        tips.tooltip(self.playfrom_btn, "start playback (no time limit) at "
+                     "the time in the field")
+        self.pin_ch = tk.StringVar()
+        self._pin_autofilled = False
+
+        self.pin_btn = ttk.Button(right, text="Pin", width=8,
+                                  command=self.cmd_pin)
+        self.pin_btn.grid(row=5, column=0, columnspan=2, sticky="ew",
+                          pady=(4, 0))
+        tips.tooltip(self.pin_btn, "fix the selected chapter at the time in "
+                     "the field, then re-align")
+        self.unpin_btn = ttk.Button(right, text="Remove pin", width=10,
+                                    command=self.cmd_unpin)
+        self.unpin_btn.grid(row=5, column=2, columnspan=2, sticky="ew",
+                            pady=(4, 0))
+        tips.tooltip(self.unpin_btn, "drop this chapter's pin and re-align")
+        return p
+
+    def _panel_emit(self, host):
+        p = ttk.Frame(host)
+        info = ttk.LabelFrame(p, text="Book info (written to ID3 on emit)",
+                              padding=6)
+        info.pack(side="left", fill="both", expand=True)
+        for c in range(6):
+            info.columnconfigure(c, weight=1)
+        self.meta_vars = {}
+        for n, key in enumerate(("title", "author", "album", "year",
+                                 "genre", "comment")):
+            row, col = divmod(n, 3)
+            ttk.Label(info, text=f"{key}:").grid(row=row * 2, column=col * 2,
+                                                 sticky="e", padx=(8, 2))
+            var = tk.StringVar()
+            self.meta_vars[key] = var
+            ttk.Entry(info, textvariable=var).grid(
+                row=row * 2, column=col * 2 + 1, sticky="ew", padx=(0, 8))
+        self.reread_btn = ttk.Button(info, text="re-read",
+                                     command=self._reharvest)
+        self.reread_btn.grid(row=1, column=6, sticky="w")
+        tips.tooltip(self.reread_btn, "re-read tags and chapters from the "
+                     "folder (after emit changed the file)")
+        side = ttk.Frame(p)
+        side.pack(side="left", fill="y", padx=(12, 0))
+        self.embed_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(side, text="embed", variable=self.embed_var).grid(
+            row=0, column=0, sticky="w")
+        self.emit_btn = ttk.Button(side, text="Emit", command=self.cmd_emit)
+        self.emit_btn.grid(row=1, column=0, sticky="ew", pady=4)
+        tips.tooltip(self.emit_btn, "write the supported chapters into a "
+                     "chaptered copy of the file (and the ID3 tags above)")
+        self.emit_result = self._result_line(side, row=2)
+        return p
+
+    def _panel_finalize(self, host):
+        p = ttk.Frame(host)
+        p.columnconfigure(1, weight=1)
+        self.finalize_btn = self._primary(p, 0, 0, "Dry run",
+                                          self.cmd_finalize_dry)
+        self.apply_btn = ttk.Button(p, text="Apply", state=["disabled"],
+                                    command=self.cmd_finalize_apply)
+        self.apply_btn.grid(row=0, column=1, sticky="w", padx=(8, 0))
+        tips.tooltip(self.finalize_btn, "preview everything finalize "
+                     "would do - nothing is changed")
+        self.allow_delete_var = tk.BooleanVar(value=False)
+        allow_delete_cb = ttk.Checkbutton(
+            p, text="allow delete-and-re-add (clears listening progress)",
+            variable=self.allow_delete_var)
+        allow_delete_cb.grid(row=1, column=0, columnspan=2, sticky="w")
+        tips.tooltip(allow_delete_cb, "last resort: delete the ABS database "
+                     "entry and let the library scan re-add it; clears "
+                     "listening progress")
+        self.finalize_result = self._result_line(p, row=2, colspan=2)
+        tips.tooltip(self.apply_btn, "stage the original away, rename the "
+                     "chaptered file into place, write album.nfo, and "
+                     "reload Audiobookshelf")
+        return p
+
+    def _primary(self, parent, row, col, text, cmd):
+        b = ttk.Button(parent, text=text, command=cmd)
+        b.grid(row=row, column=col, sticky="w", padx=2)
+        return b
+
+    def _btn(self, parent, col, row, text, cmd):
+        b = ttk.Button(parent, text=text, command=cmd)
+        b.grid(row=row, column=col, sticky="ew", padx=2)
+        return b
+
+    # ------------------------------------------------------------- tabs --
+    def _build_chapters_tab(self):
+        tab = ttk.Frame(self.notebook)
+        tab.columnconfigure(0, weight=1)
+        tab.rowconfigure(0, weight=1)
+        cols = ("index", "title", "published", "time", "confidence", "pinned")
+        base = int(tkfont.nametofont("TkDefaultFont").cget("size"))
+        style = ttk.Style(self)
+        style.configure("Chapter.Treeview",
+                        font=fonts.derived(self, size=base + 2),
+                        rowheight=base + 2 + 14)
+        self.tree = ttk.Treeview(tab, columns=cols, show="headings",
+                                 style="Chapter.Treeview")
+        widths = (52, 420, 100, 100, 100, 60)
+        for col, width in zip(cols, widths, strict=True):
+            self.tree.heading(col, text=col.capitalize())
+            if col == "title":
+                self.tree.column(col, width=width, anchor="w", stretch=True)
+            else:
+                self.tree.column(col, width=width, anchor="w", stretch=False)
+        self.tree.tag_configure("unplaced", background="#b0b0b0")
+        self.tree.tag_configure("lowconf", background="#e8c680")
+        self.tree.tag_configure("conflict", background="#c05050")
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        sb = ttk.Scrollbar(tab, orient="vertical", command=self.tree.yview)
+        sb.grid(row=0, column=1, sticky="ns")
+        self.tree.configure(yscrollcommand=sb.set)
+        self.tree.bind("<Double-1>", lambda e: self.preview_row())
+        self.tree.bind("<<TreeviewSelect>>", self._fill_from_selection)
+        for seq, fn in (("space", self._key_playpause),
+                        ("Left", lambda e: self._key_seek(-5)),
+                        ("Right", lambda e: self._key_seek(5)),
+                        ("Shift-Left", lambda e: self._key_seek(-10)),
+                        ("Shift-Right", lambda e: self._key_seek(10)),
+                        ("Return", lambda e: self.cmd_pin()),
+                        ("KP_Enter", lambda e: self.cmd_pin()),
+                        ("Delete", lambda e: self.cmd_unpin())):
+            self.tree.bind(seq, fn)
+        self.chapters_legend = tk.StringVar(
+            value="grey = unplaced · amber = below min conf (withheld) · "
+                  "red = conflicting pin · ?N = not written to the file")
+        ttk.Label(tab, textvariable=self.chapters_legend).grid(
+            row=1, column=0, sticky="w")
+        self.notebook.add(tab, text="Chapters")
+        self._chapters_tab = tab
+
+    def _build_transcripts_tab(self):
+        tab = ttk.Frame(self.notebook)
+        tab.columnconfigure(1, weight=1)
+        tab.rowconfigure(1, weight=1)
+        ttk.Label(tab, text="grep:").grid(row=0, column=0, sticky="w")
+        self.grep_var = tk.StringVar()
+        e = ttk.Entry(tab, textvariable=self.grep_var)
+        e.grid(row=0, column=1, sticky="ew", padx=4)
+        e.bind("<Return>", lambda e: self.cmd_transcripts())
+        ttk.Button(tab, text="Transcripts", command=self.cmd_transcripts).grid(
+            row=0, column=2, sticky="w")
+        self.transcripts_text = tk.Text(
+            tab, height=10, wrap="none",
+            font=tkfont.nametofont("TkFixedFont"))
+        self.transcripts_text.grid(row=1, column=0, columnspan=3,
+                                   sticky="nsew")
+        self.notebook.add(tab, text="Transcripts")
+
+    # -------------------------------------------------------------- state --
+    def set_stage(self, key: str):
+        if key not in STAGE_KEYS:
+            return
+        self._stage = key
+        states = self._compute_states()
+        self.stage_bar.update(states, key)
+        self._update_banner(states)
+        for k, panel in self._panels.items():
+            if k == key:
+                panel.grid(row=0, column=0, sticky="nsew")
+            else:
+                panel.grid_remove()
+
+    def _update_banner(self, states: dict | None = None):
+        """Amber strip: why the stage we're ON needs attention."""
+        states = states or self._compute_states()
+        st = states.get(self._stage) or {}
+        REMEDY = {
+            "measure": "rewrite the Xing header before trusting timestamps",
+            "identify": "pick a different edition and identify again",
+            "align": "use Resolve to place them: Listen, Sweep, or pin by ear",
+            "resolve": "use Listen, Sweep, or pin by ear to place them",
+            "emit": "run Emit to write the supported chapters",
+            "finalize": "run the dry run first",
+        }
+        if st.get("state") == ATTENTION:
+            detail = st.get("detail") or "needs attention"
+            self.banner_var.set(f"{STAGE_LABELS[self._stage]}: {detail} — "
+                                f"{REMEDY.get(self._stage, '')}")
+            self.banner.grid(row=2, column=0, sticky="ew")
+        else:
+            self.banner_var.set("")
+            self.banner.grid_remove()
+
+    def _disk_facts(self) -> DiskFacts:
+        """Folder facts from disk (raw listing, never the GUI scan)."""
+        d = DiskFacts()
+        if not self.audio:
+            return d
+        folder = os.path.dirname(self.audio)
+        exts = (".mp3", ".m4a", ".m4b", ".flac", ".ogg", ".wav")
+        files = [f for f in os.listdir(folder)
+                 if os.path.splitext(f)[1].lower() in exts]
+        d.audio_files = files
+        if len(files) == 1:
+            probe = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_chapters", "-of", "json",
+                 os.path.join(folder, files[0])],
+                capture_output=True, text=True)
+            try:
+                chs = json.loads(probe.stdout).get("chapters", [])
+            except ValueError:
+                chs = []
+            d.embedded_chapters = len(chs)
+            if chs:
+                d.embedded_last_start = float(chs[-1].get("start_time", 0) or 0)
+        emitted = (self.analysis or {}).get("emitted") or {}
+        if emitted.get("count"):
+            ch_file = os.path.splitext(self.audio)[0] + ".chapters" \
+                + os.path.splitext(self.audio)[1]
+            if os.path.isfile(ch_file):
+                probe = subprocess.run(
+                    ["ffprobe", "-v", "error", "-show_chapters", "-of", "json",
+                     ch_file], capture_output=True, text=True)
+                try:
+                    chs = json.loads(probe.stdout).get("chapters", [])
+                except ValueError:
+                    chs = []
+                d.chapters_file_match = (
+                    len(chs) == emitted.get("count")
+                    and chs and abs(float(chs[-1].get("start_time", 0) or 0)
+                                    - emitted.get("last", -1)) < 0.1)
+        return d
+
+    def _compute_states(self) -> dict:
+        states = stage_states(self.analysis,
+                              self.min_conf.get() if hasattr(self, "min_conf")
+                              else 0.5,
+                              self._disk or DiskFacts(),
+                              emit_stale=self._emit_stale)
+        return states
+
+    def set_book(self, audio: str):
+        if self._cf is None:
+            messagebox.showerror(
+                "chapterfit", "Cannot find chapterfit.py or an installed "
+                "'chapterfit' command.")
+            return
+        self.audio = os.path.abspath(audio)
+        self.work_dir = work_dir_for(self.audio)
+        self.book_var.set(self.audio)
+        self._emit_stale = False
+        self._finalize_dry_ok = False
+        self._reharvest()
+        self._disk = self._disk_facts()
+        self._refresh()
+        self._prefill_identify()
+        self.set_stage(first_pending(self._compute_states()))
+
+    def _prefill_identify(self):
+        """Show which source the last identify used - without clobbering
+        anything the user is typing."""
+        label = (self.analysis.get("identification") or {}).get("label") \
+            or ""
+        current = self.identify_value.get().strip()
+        if current and not getattr(self, "_identify_autofilled", False):
+            return
+        if label.startswith("Audnexus "):
+            self.identify_mode.set("asin")
+            self.identify_value.set(label.split(" ", 1)[1].strip())
+            self._identify_autofilled = True
+        elif label:
+            if os.path.basename(label) == "chapters.embedded.json":
+                self.identify_mode.set("emb")
+            elif os.path.isfile(label):
+                self.identify_mode.set("json")
+            else:
+                return
+            self.identify_value.set(label)
+            self._identify_autofilled = True
+        else:
+            return
+        self._identify_mode_changed()
+
+    def _reharvest(self):
+        """Read what the folder has and prefill the Book info fields."""
+        if not self.audio:
+            return
+        self.harvest = harvest_book(self.audio)
+        self.found_var.set(found_summary(self.harvest))
+        for key, var in self.meta_vars.items():
+            var.set(self.harvest["suggested"].get(key, ""))
+        self._update_header()
+
+    def _update_header(self):
+        """One line: Title — Author · duration · ASIN · elided file name."""
+        s = self.harvest.get("suggested") or {}
+        title = s.get("title") or "(nothing selected)"
+        author = s.get("author") or ""
+        dur = ((self.analysis.get("envelope") or {}).get("duration"))
+        ident = self.analysis.get("identification") or {}
+        asin = ident.get("label") or ident.get("candidate") or ""
+        name = os.path.basename(self.audio) if self.audio else ""
+        bits = [f"{title} — {author}" if author else title]
+        if dur:
+            bits.append(hms(dur))
+        if asin and asin.lower() != "none":
+            bits.append(asin)
+        self.book_var.set("  ·  ".join([*bits, name]))
+
+    def _show_path_tip(self, _event=None):
+        self._hide_tip()
+        if not self.audio:
+            return
+        x = self.winfo_rootx() + 8
+        y = self.winfo_rooty() + self.winfo_height() + 2
+        self.head_tooltip = tk.Toplevel(self)
+        self.head_tooltip.wm_overrideredirect(True)
+        self.head_tooltip.wm_geometry(f"+{x}+{y}")
+        tk.Label(self.head_tooltip, text=self.audio, background="#ffffe0",
+                 relief="solid", borderwidth=1, padx=4, pady=1).pack()
+
+    def _hide_tip(self, _event=None):
+        if getattr(self, "head_tooltip", None) is not None:
+            self.head_tooltip.destroy()
+            self.head_tooltip = None
+
+    def _meta_overrides(self) -> dict:
+        """Book info fields -> emit flag values (empty = keep original)."""
+        return {"title": self.meta_vars["title"].get().strip(),
+                "artist": self.meta_vars["author"].get().strip(),
+                "album": self.meta_vars["album"].get().strip(),
+                "date": self.meta_vars["year"].get().strip(),
+                "genre": self.meta_vars["genre"].get().strip(),
+                "comment": self.meta_vars["comment"].get().strip()}
+
+    def _refresh(self):
+        """Read the analysis artifact and update every view."""
+        self.analysis = {}
+        if self.audio:
+            self.analysis = load_analysis(self.audio, self.work_dir)
+
+        sel = self.tree.selection()
+        scroll = self.tree.yview()
+        for i in self.tree.get_children():
+            self.tree.delete(i)
+        alignment = self.analysis.get("alignment") or {}
+        results = list(alignment.get("results", []))
+        if not results:
+            # before Align: show the identified list, honoring any pins
+            # (sweep/listen pins drop alignment until the next align runs)
+            pins_now = self.analysis.get("pins") or {}
+            results = [
+                {"index": i, "title": c.get("title", ""),
+                 "published": c.get("start"),
+                 "time": pins_now.get(str(i)),
+                 "confidence": 1.0 if str(i) in pins_now else None,
+                 "pinned": str(i) in pins_now}
+                for i, c in enumerate(
+                    (self.analysis.get("identification") or {})
+                    .get("chapters") or [])]
+        conflicts = set(alignment.get("conflicts") or [])
+        aligned = bool(self.analysis.get("alignment"))
+        withheld = _withheld(results, self.min_conf.get()) if aligned else set()
+        self._row_data = {}
+        for r in results:
+            n = r["index"] + 1
+            mark = f"?{n}" if aligned and n in withheld else n
+            tags = []
+            if aligned and r.get("pinned") and (r["index"] in conflicts
+                                                or (r.get("spread") is None
+                                                    and not conflicts)):
+                tags.append("conflict")
+            elif r.get("time") is None:
+                tags.append("unplaced")
+            elif aligned and n in withheld:
+                tags.append("lowconf")
+            iid = self.tree.insert("", "end", tags=tuple(tags), values=(
+                mark, r.get("title", ""), hms(r.get("published")),
+                _t(r.get("time")),
+                "" if r.get("confidence") is None
+                else f"{r['confidence']:.2f}",
+                "pin" if r.get("pinned") else "",
+            ))
+            self._row_data[iid] = r
+        if sel and self.tree.exists(sel[0]):
+            self.tree.selection_set(sel[0])
+        self.tree.yview_moveto(scroll[0] if scroll else 0)
+
+        total = len(results)
+        weak = sum(1 for r in results if r.get("time") is None
+                   or (r.get("confidence") or 0) < self.min_conf.get())
+        conf = total - weak
+        self.notebook.tab(self._chapters_tab,
+                          text=f"Chapters {conf}/{total}")
+
+        self._disk = self._disk_facts()
+        states = self._compute_states()
+        self.stage_bar.update(states, self._stage)
+        self._update_banner(states)
+        self._update_panel_results(states)
+        self._update_resolve()
+        self._update_header()
+        self.gap_canvas.after_idle(self._draw_gap_graph)
+
+        working = self.app.runner.busy
+        for b in self._stage_buttons():
+            b.state(["disabled" if working else "!disabled"])
+        if not self.audio:
+            for b in self._stage_buttons():
+                b.state(["disabled"])
+        if not self.audio or whisper_python() is None:
+            for b in (self.listen_btn, self.range_btn, self.probe_btn,
+                      self.full_btn):
+                b.state(["disabled"])
+        if not self._finalize_dry_ok or working:
+            self.apply_btn.state(["disabled"])
+
+    def _stage_buttons(self):
+        return [self.measure_btn, self.identify_btn, self.align_btn,
+                self.emit_btn, self.finalize_btn, self.apply_btn,
+                self.hint_btn, self.listen_btn, self.range_btn,
+                self.probe_btn, self.full_btn, self.playfrom_btn]
+
+    def _update_panel_results(self, states: dict):
+        self.measure_result.set(states["measure"]["detail"])
+        ident = self.analysis.get("identification") or {}
+        score = ((ident.get("best_trial") or {}).get("score")) if ident else None
+        if ident:
+            self.identify_result.set(
+                f"{len(ident.get('chapters') or [])} chapters from "
+                f"{ident.get('label') or '?'}"
+                + (f" - fit score {score:.1f}" if score is not None else ""))
+        else:
+            self.identify_result.set("")
+        al = self.analysis.get("alignment") or {}
+        if al:
+            rate = al.get("rate")
+            drift = f"{(rate - 1) * 3600:+.1f}s/h" if rate else "?"
+            self.align_result.set(
+                f"placed {sum(1 for r in al['results'] if r['time'] is not None)}"
+                f"/{len(al['results'])} - rate {rate} ({drift})")
+        emitted = self.analysis.get("emitted") or {}
+        if emitted:
+            total = len((self.analysis.get("alignment") or {}).get("results",
+                                                                   []))
+            self.emit_result.set(
+                f"{emitted.get('count')} embedded, "
+                f"{total - emitted.get('count', 0)} withheld")
+
+    def _update_resolve(self):
+        """Summary line, per-option statuses, and the recommendation."""
+        alignment = self.analysis.get("alignment") or {}
+        results = alignment.get("results") or []
+        thr = self.min_conf.get()
+        dur = (self.analysis.get("envelope") or {}).get("duration") or 0.0
+        pins = [r["time"] for r in results
+                if r.get("pinned") and r.get("time") is not None]
+
+        def listening_value(r):
+            # mirrors suggest_measurements: uncertainty x sqrt(leverage)
+            if r.get("time") is None:
+                lev = dur / 2
+            else:
+                lev = min((abs(r["time"] - p) for p in pins), default=dur / 2)
+            unc = (1 - (r.get("confidence") or 0)) + (r.get("spread")
+                                                      or 0) / 60.0
+            return unc * math.sqrt(max(lev, 0.0))
+
+        weak = sorted((r for r in results if r["index"] != 0
+                       and not r.get("pinned")
+                       and (r.get("time") is None
+                            or (r.get("confidence") or 0) < thr)),
+                      key=listening_value, reverse=True)
+
+        # summary line with clickable chapter numbers
+        for w in self.unresolved_frame.winfo_children():
+            w.destroy()
+        if weak:
+            ttk.Label(self.unresolved_frame,
+                      text=f"{len(weak)} chapters unresolved:").pack(
+                side="left")
+            for r in weak:
+                n = r["index"] + 1
+                lbl = tk.Label(self.unresolved_frame, text=str(n),
+                               fg="#1a5fb4", cursor="hand2")
+                lbl.pack(side="left", padx=2)
+                lbl.bind("<Button-1>",
+                         lambda e, r=r: self._select_unresolved(r))
+        else:
+            ttk.Label(self.unresolved_frame,
+                      text="nothing unresolved - spot-check by ear").pack(
+                side="left")
+        self.next_var.set(f"next: {self._recommend(weak)}")
+
+        # statuses from the artifact
+        heard = self.analysis.get("heard") or {}
+        positions = [p for p in (heard.get("positions") or [])
+                     if p.get("heading") and p.get("source") != "sweep"]
+        listened = bool(heard.get("positions"))
+        self.listen_status.set(
+            f"heard {len(positions)}" if positions
+            else "heard nothing" if listened else "not run")
+        clips = heard.get("clips") or {}
+        swept_min = sum(float(k.split("|")[1]) for k in clips
+                        if "sweep" in k) / 60.0
+        self.swept_status.set(f"{swept_min:.0f} min swept" if swept_min
+                              else "not run")
+        self.probe_status.set("run" if any("sweep" in k for k in clips)
+                              else "not run")
+        self.hint_status.set(f"hint: {self.near_var.get()}"
+                             if self.near_var.get() else "")
+
+        try:
+            s = parse_time(self.sweep_start.get())
+            e = parse_time(self.sweep_end.get())
+            self.range_cost.set(f"~{(e - s) / 60:.0f} min" if e > s else "")
+        except ValueError:
+            self.range_cost.set("")
+        self.full_cost.set(f"~{dur / 600:.0f} min" if dur else "")
+
+        # exactly one accent button
+        chosen = {"Listen": self.listen_btn, "Sweep probe": self.probe_btn,
+                  "Sweep range": self.range_btn, "By ear": self.pin_btn}
+        accent = self._recommend(weak)
+        for name, btn in chosen.items():
+            btn.configure(style="Accent.TButton" if name == accent else "TButton")
+
+    def _recommend(self, weak) -> str:
+        if not weak:
+            return "By ear"
+        heard = self.analysis.get("heard") or {}
+        positions = [p for p in (heard.get("positions") or [])
+                     if p.get("heading") and p.get("source") != "sweep"]
+        if not (heard.get("positions")):
+            return "Listen"
+        if not positions:
+            return "Sweep probe"
+        return "Sweep range"
+
+    def _select_unresolved(self, r):
+        for iid, data in self._row_data.items():
+            if data.get("index") == r["index"]:
+                self.tree.see(iid)
+                self.tree.selection_set(iid)
+                self.tree.focus(iid)
+                break
+
+    # ------------------------------------------------------- command plumbing
+    def _argv(self, *extra: str, prefix: list[str] | None = None) -> list[str]:
+        assert self._cf is not None and self.audio is not None
+        base = self._cf if prefix is None else prefix
+        return [*base, "--work-dir", self.work_dir, *extra, self.audio]
+
+    def _run(self, name: str, argv: list[str], then=None, stage: str | None = None,
+             on_line=None):
+        assert self._cf is not None
+        self.app.log(f"$ {' '.join(argv)}")
+        self.app.runner.run(Job(
+            name, argv, on_line=on_line,
+            on_done=lambda j, code: self._on_done(code, then=then,
+                                                  stage=stage)))
+
+    def _on_done(self, code, then=None, stage: str | None = None):
+        self.app.log(f"exit {'' if code is None else code}")
+        self._refresh()
+        if code not in (0, None):
+            messagebox.showwarning("chapterfit", "the last step failed - "
+                                   "see the log for details")
+            return
+        if code == 0 and then:
+            then()
+            return
+        if code == 0 and stage:
+            states = self._compute_states()
+            if stage == "align":
+                self._emit_stale = True
+            if stage == "emit":
+                self._emit_stale = False
+            if states.get(stage, {}).get("state") == DONE:
+                self.set_stage(first_pending(states))
+        if code == 0 and stage == "finalize-dry":
+            self._finalize_dry_ok = True
+            self.apply_btn.state(["!disabled"])
+
+    # ------------------------------------------------------------- actions --
+    def cmd_measure(self):
+        self._run("measure", self._argv("measure"), stage="measure")
+
+    # identify ----------------------------------------------------------
+    def _identify_mode_changed(self):
+        mode = self.identify_mode.get()
+        self.identify_entry.configure(
+            state="normal" if mode != "emb" else "disabled")
+        self.identify_browse.configure(
+            state="normal" if mode == "json" else "disabled")
+        if mode == "json" and not self.identify_value.get():
+            self.identify_value.set(os.path.join(
+                os.path.dirname(self.audio or ".") or ".", "chapters.json"))
+
+    def _identify_browse(self):
+        path = filedialog.askopenfilename(
+            parent=self, title="Chapters JSON",
+            filetypes=[("JSON", "*.json"), ("All files", "*")])
+        if path:
+            self.identify_value.set(path)
+
+    def cmd_identify_primary(self):
+        mode = self.identify_mode.get()
+        if mode == "asin":
+            asin = self.identify_value.get().strip()
+            if asin:
+                self.cmd_identify_asin(asin)
+        elif mode == "json":
+            path = self.identify_value.get().strip()
+            if path and os.path.isfile(path):
+                self.cmd_identify_json(path)
+            else:
+                messagebox.showinfo("Identify", "choose an existing JSON file",
+                                    parent=self)
+        else:
+            self.cmd_identify_embedded()
+
+    def cmd_identify_asin(self, asin=None):
+        asin = asin or simpledialog.askstring("Identify", "Audible ASIN:",
+                                              parent=self)
+        if asin:
+            self._run("identify", [*self._argv("identify"), "--asin",
+                                   asin.strip()], stage="identify")
+
+    def cmd_identify_json(self, path=None):
+        path = path or filedialog.askopenfilename(
+            parent=self, title="Chapters JSON",
+            filetypes=[("JSON", "*.json"), ("All files", "*")])
+        if path:
+            self._run("identify", [*self._argv("identify"),
+                                   "--chapters-json", path],
+                      stage="identify")
+
+    def cmd_identify_embedded(self):
+        """Use the chapters already embedded in the file as the source."""
+        chapters = self.harvest.get("embedded_chapters") or []
+        if len(chapters) < 2:
+            messagebox.showinfo("Identify (embedded)",
+                                "the file has fewer than 2 embedded chapters",
+                                parent=self)
+            return
+        assert self.work_dir is not None
+        dump = os.path.join(self.work_dir, "chapters.embedded.json")
+        os.makedirs(self.work_dir, exist_ok=True)
+        with open(dump, "w") as f:
+            json.dump({"chapters": [
+                {"startOffsetMs": int(round(c["start"] * 1000)),
+                 "title": c["title"]} for c in chapters]}, f, indent=1)
+        self.app.log(f"  dumped {len(chapters)} embedded chapters -> {dump}")
+        self._run("identify", [*self._argv("identify"), "--chapters-json",
+                               dump], stage="identify")
+
+    # align -------------------------------------------------------------
+    def _near_spec(self, raw: str) -> str | None:
+        """Normalize the position hint: `CH=TIME` passes through (time
+        normalized); a bare TIME maps to the chapter whose placed time
+        (or published, pre-align) is nearest."""
+        raw = raw.strip()
+        if not raw:
+            return None
+        if "=" in raw:
+            ch, _, t = raw.partition("=")
+            try:
+                n = int(ch)
+                seconds = parse_time(t)
+            except ValueError:
+                raise ValueError(
+                    f"hint wants CH=TIME (e.g. 3=43:47) or just a time, "
+                    f"got {raw!r}") from None
+            return f"{n}={clock(seconds)}"
+        seconds = parse_time(raw)  # raises ValueError for garbage
+        rows = list((self.analysis.get("alignment") or {}).get("results")
+                    or [])
+        by_placed = [r for r in rows if r.get("time") is not None]
+        if by_placed:
+            best = min(by_placed, key=lambda r: abs(r["time"] - seconds))
+            return f"{best['index'] + 1}={clock(seconds)}"
+        ident = (self.analysis.get("identification") or {}).get("chapters") \
+            or []
+        if not ident:
+            raise ValueError("run Identify first - no chapter list to map "
+                             "the time to")
+        best = min(ident, key=lambda c: abs(c["start"] - seconds))
+        idx = ident.index(best) if ident else 0
+        return f"{idx + 1}={clock(seconds)}"
+
+    def cmd_align(self):
+        argv = self._argv("align", "--min-confidence",
+                          str(self.min_conf.get()))
+        near = self.near_var.get().strip()
+        if near:
+            try:
+                spec = self._near_spec(near)
+            except ValueError as e:
+                messagebox.showerror("Align", str(e), parent=self)
+                return
+            if spec:
+                argv += ["--near", spec]
+                self.hint_status.set(f"hint: {spec}")
+        self._run("align", argv, stage="align")
+
+    # resolve -----------------------------------------------------------
+    def _resolve_hint(self):
+        near = self.hint_var.get().strip()
+        if not near:
+            near = simpledialog.askstring(
+                "Position hint",
+                "roughly where a chapter starts: CH=TIME, or just a time",
+                parent=self)
+        if not near:
+            return
+        try:
+            spec = self._near_spec(near)
+        except ValueError as e:
+            messagebox.showerror("Position hint", str(e), parent=self)
+            return
+        if spec:
+            self.near_var.set(spec)
+            self.cmd_align()
+
+    def _sweep_probe(self):
+        dur = ((self.analysis.get("envelope") or {}).get("duration"))
+        if not dur:
+            messagebox.showinfo("Sweep", "run Measure first", parent=self)
+            return
+        start = dur * 0.25
+        self.cmd_sweep(start=start, end=start + 600)
+
+    def _sweep_range(self):
+        try:
+            s = parse_time(self.sweep_start.get().strip() or "0")
+            e = parse_time(self.sweep_end.get().strip() or "0")
+        except ValueError:
+            messagebox.showinfo("Sweep range",
+                                "range needs S–E times like 0:44:54",
+                                parent=self)
+            return
+        if e <= s:
+            messagebox.showinfo("Sweep range", "end must be after start",
+                                parent=self)
+            return
+        self.cmd_sweep(start=s, end=e)
+
+    def _sweep_full(self):
+        self.cmd_sweep()
+
+    def cmd_sweep(self, start=None, end=None):
+        wpy = whisper_python()
+        if wpy is None:
+            messagebox.showinfo("Sweep", "no whisper venv found", parent=self)
+            return
+        script = self._whisper_script()
+        if script is None:
+            return
+        argv = [*self._argv("sweep", prefix=[wpy, "-u", script]),
+                "--model", os.environ.get("WHISPER_MODEL", "base"),
+                "--pin", "-y"]
+        if start is not None:
+            argv += ["--start", clock(start)]
+        if end is not None:
+            argv += ["--end", clock(end)]
+        self._run("sweep", argv, stage="resolve", then=self.cmd_align)
+
+    def cmd_listen(self):
+        wpy = whisper_python()
+        if wpy is None:
+            return
+        script = self._whisper_script()
+        if script is None:
+            return
+        self._run("listen", [*self._argv("listen", prefix=[wpy, "-u", script]),
+                             "--model", os.environ.get("WHISPER_MODEL", "base"),
+                             "--pin", "-y"], stage="resolve",
+                  then=self.cmd_align)
+
+    def _whisper_script(self):
+        # the venv python must run the chapterfit *script* directly
+        # (chapterbook.sh: WCF=("$WPY" "$CHAPTERFIT"))
+        script = next((a for a in (self._cf or [])[1:] if a.endswith(".py")),
+                      None)
+        if script is None:
+            messagebox.showerror(
+                "whisper", "whisper actions need the chapterfit.py script "
+                "(an installed console script cannot be re-run under the "
+                "whisper venv)", parent=self)
+        return script
+
+    def cmd_transcripts(self):
+        argv = self._argv("transcripts")
+        grep = self.grep_var.get().strip()
+        if grep:
+            argv += ["--grep", grep]
+        self.transcripts_text.delete("1.0", "end")
+        self._run("transcripts", argv, on_line=self._transcript_line)
+
+    def _transcript_line(self, line: str):
+        self.transcripts_text.insert("end", line + "\n")
+        self.transcripts_text.see("end")
+
+    # pin by ear ----------------------------------------------------------
+    def _selected_row(self):
+        sel = self.tree.selection()
+        if not sel:
+            return None
+        r = self._row_data.get(sel[0])
+        if r is not None:
+            return dict(r, _iid=sel[0])
+        vals = self.tree.item(sel[0], "values")
+        return {"index": int(str(vals[0]).lstrip("?")) - 1, "title": vals[1],
+                "published": vals[2], "time": vals[3],
+                "confidence": vals[4], "pinned": vals[5], "_iid": None}
+
+    def preview_row(self):
+        row = self._selected_row()
+        if not row or not self.audio:
+            return
+        start = None
+        for key in ("time", "published"):
+            v = row.get(key)
+            if v is not None and str(v) not in ("", "-"):
+                start = max(0.0, parse_time(str(v)) - 3.0)
+                break
+        self.app.play(self.audio, start=start, length=0)  # never self-stops
+
+    def play_from_time(self):
+        """Start uncapped playback at the time in the field."""
+        if not self.audio:
+            return
+        try:
+            seconds = parse_time(self.pin_time.get().strip())
+        except ValueError:
+            messagebox.showerror("Play from time",
+                                 f"cannot read time: {self.pin_time.get()}",
+                                 parent=self)
+            return
+        self.app.play(self.audio, start=max(0.0, seconds), length=0)
+        self._sync_play_btn()
+
+    def _key_playpause(self, _event=None):
+        if self.app.player.alive:
+            self.toggle_pause()
+        else:
+            self.preview_row()
+        self._sync_play_btn()
+        return "break"
+
+    def _key_seek(self, delta):
+        if self.app.player.alive:
+            self.app.player.seek(delta)
+        return "break"
+
+    def _sync_play_btn(self):
+        self.play_btn.configure(
+            text="⏸ Pause" if self.app.player.alive
+            and not self.app.player.paused else "▶ Play")
+
+    def _fill_from_selection(self, _event=None):
+        """Selecting a row fills chapter/time/sweep fields; manual edits in
+        the chapter and time fields are never clobbered."""
+        row = self._selected_row()
+        if not row:
+            return
+        self._update_byear(row)
+        if not self.pin_ch.get().strip() or self._pin_autofilled:
+            self.pin_ch.set(str(row["index"] + 1))
+            self.pin_time.set(_t(row.get("time") or row.get("published")))
+            self._pin_autofilled = True
+            for b in (self.pin_btn, self.unpin_btn, self.play_btn):
+                b.state(["!disabled"])
+        self._prefill_sweep(row)
+
+    def _update_byear(self, row):
+        name = row.get("title") or f"chapter {row['index'] + 1}"
+        self.byear_title.set(f"{name}  (#{row['index'] + 1})")
+        conf = row.get("confidence")
+        conf_s = f"{conf:.2f}" if isinstance(conf, (int, float)) \
+            else (conf or "–")
+        self.byear_info.set(f"placed {_t(row.get('time'))}   "
+                            f"conf {conf_s}")
+
+    def _prefill_sweep(self, row):
+        """Estimate listening spots: ±5 min around the chapter's time."""
+        v = row.get("time") or row.get("published")
+        if v is None or str(v) in ("", "-"):
+            return
+        try:
+            seconds = parse_time(str(v))
+        except ValueError:
+            return
+        dur = (self.analysis.get("envelope") or {}).get("duration") or 0.0
+        self.sweep_start.set(clock(max(0.0, seconds - 300)))
+        self.sweep_end.set(clock(min(dur, seconds + 300) or seconds + 300))
+        span = (min(dur, seconds + 300) if dur else seconds + 300) \
+            - max(0.0, seconds - 300)
+        self.range_cost.set(f"~{span / 60:.0f} min")
+
+    def toggle_pause(self):
+        self.app.player.toggle_pause()
+        self._sync_play_btn()
+
+    def set_from_playback(self):
+        t = self.app.current_playback()
+        if t is None:
+            return
+        self.pin_time.set(_live(t))
+        if not self.pin_ch.get().strip():
+            row = self._selected_row()
+            if row:
+                self.pin_ch.set(str(row["index"] + 1))
+            self._pin_autofilled = True
+
+    def update_playback(self, t):
+        """Called ~10x/s from the app pump with the live playback time."""
+        self.playback_var.set(_t(t) if t is not None else "0:00:00.000")
+        active = t is not None
+        for b in (*self.seek_btns, self._set_btn, self.stop_btn):
+            b.state(["!disabled" if active else "disabled"])
+        self._sync_play_btn()
+
+    # pin/unpin -------------------------------------------------------------
+    def cmd_pin(self):
+        ch = self.pin_ch.get().strip()
+        t = self.pin_time.get().strip()
+        if not ch or not t:
+            messagebox.showinfo("Pin", "enter a chapter and a time", parent=self)
+            return
+        try:
+            seconds = parse_time(t)
+        except ValueError:
+            messagebox.showerror("Pin", f"cannot read time: {t}", parent=self)
+            return
+        self._run("pin", [*self._argv("pin"),
+                          "--at", f"{ch}={clock(seconds)}"],
+                  then=self.cmd_align, stage="resolve")
+
+    def cmd_unpin(self):
+        ch = self.pin_ch.get().strip()
+        if not ch:
+            row = self._selected_row()
+            ch = str(row["index"] + 1) if row else ""
+        if not ch:
+            messagebox.showinfo(
+                "Remove pin", "select a chapter (or type its number) first",
+                parent=self)
+            return
+        try:
+            idx = int(ch) - 1
+        except ValueError:
+            messagebox.showerror("Remove pin",
+                                 f"{ch!r} is not a chapter number",
+                                 parent=self)
+            return
+        if self.audio and str(idx) not in (self.analysis.get("pins") or {}):
+            messagebox.showinfo("Remove pin",
+                                f"chapter {ch} has no pin", parent=self)
+            return
+        self._run("pin", [*self._argv("pin"), "--remove", str(idx + 1)],
+                  then=self.cmd_align, stage="resolve")
+
+    # emit / finalize -----------------------------------------------------
+    def cmd_emit(self):
+        assert self.work_dir is not None
+        argv = self._argv("emit",
+                          "--min-confidence", str(self.min_conf.get()),
+                          "--chapters-txt", os.path.join(self.work_dir, "chapters.txt"),
+                          "--abs-json", os.path.join(self.work_dir, "chapters.json"))
+        flags = {"--title": "title", "--author": "artist", "--album": "album",
+                 "--year": "date", "--genre": "genre", "--comment": "comment"}
+        for flag, key in flags.items():
+            v = self._meta_overrides().get(key)
+            if v:
+                argv += [flag, v]
+        if self.embed_var.get():
+            argv.append("--embed")
+        self._run("emit", argv, stage="emit")
+
+    def cmd_finalize_dry(self):
+        self._run("finalize", self._argv("finalize"), stage="finalize-dry")
+
+    def cmd_finalize_apply(self):
+        if not messagebox.askyesno(
+                "Finalize", "Move the original aside and reload the book in "
+                "Audiobookshelf?", parent=self):
+            return
+        argv = self._argv("finalize", "--apply", "-y")
+        if self.allow_delete_var.get():
+            argv.append("--allow-delete")
+        self._run("finalize", argv, stage="finalize")
