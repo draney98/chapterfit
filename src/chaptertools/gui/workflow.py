@@ -22,7 +22,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from chaptertools.envelope.emit import select_chapters
 from chaptertools.util import clock, hms, parse_time
 
-from . import fonts, tips
+from . import fonts, palette, tips
 from .harvest import found_summary, harvest_book
 from .library import analysis_path, load_analysis, work_dir_for
 from .runner import Job
@@ -68,6 +68,21 @@ def _live(t: float) -> str:
     return f"{int(h)}:{int(m):02d}:{s:05.2f}"
 
 
+def _elide(text: str, font, room: int) -> str:
+    """Drop characters from the middle until `text` fits in `room` px."""
+    if font.measure(text) <= room:
+        return text
+    lo, hi = 0, len(text)
+    while lo < hi:  # most characters kept that still fit
+        mid = (lo + hi + 1) // 2
+        cand = text[:(mid + 1) // 2] + "…" + text[len(text) - mid // 2:]
+        if font.measure(cand) <= room:
+            lo = mid
+        else:
+            hi = mid - 1
+    return text[:(lo + 1) // 2] + "…" + text[len(text) - lo // 2:]
+
+
 def _t(v) -> str:
     """No empty time cells: a zero clock instead of '-' or blank."""
     if v is None or v == "" or v == "-":
@@ -76,6 +91,21 @@ def _t(v) -> str:
 
 
 CADENCE_WINDOW = 300.0  # a predicted position only claims silences this near
+
+# (column id, heading, widest value it can hold, anchor); Title stretches
+CHAPTER_COLUMNS = (
+    ("index", "#", "?999", "e"),
+    ("title", "Title", None, "w"),
+    ("published", "Published", "12:34:56.789", "e"),
+    ("time", "Placed", "12:34:56.789", "e"),
+    ("gap", "Gap", "12.34 s", "e"),
+    ("confidence", "Conf", "0.00", "e"),
+    ("pinned", "Pin", "! pin", "center"),
+)
+CELL_PAD = 24  # treeview cell padding + heading separator, both sides
+SHORTCUTS = ("Space play/pause · ←/→ ±5 s · Shift+←/→ ±10 s · "
+             "Enter pin · Delete remove pin")
+TITLE_MIN = "An Average Chapter Title"
 
 
 def similar_gaps(gaps: list[dict], pins: dict[int, float],
@@ -173,7 +203,7 @@ class WorkflowPanel(ttk.Frame):
     """The main area: header, stage bar, stage panels, notebook tabs."""
 
     def __init__(self, master, app):
-        super().__init__(master, padding=8)
+        super().__init__(master, padding=(8, 4))
         self.app = app
         self.notebook = ttk.Notebook(self)
         self.audio: str | None = None
@@ -211,22 +241,24 @@ class WorkflowPanel(ttk.Frame):
         head.columnconfigure(0, weight=1)
         self.book_var = tk.StringVar(value="(nothing selected)")
         book_lbl = ttk.Label(head, textvariable=self.book_var,
-                             font=tkfont.nametofont("TkHeadingFont"))
-        book_lbl.pack(side="left")
+                             font=tkfont.nametofont("TkHeadingFont", root=self))
+        book_lbl.grid(row=0, column=0, sticky="w")
+        self._book_label = book_lbl
+        self._header_text = "(nothing selected)"
+        head.bind("<Configure>", lambda e: self._fit_header(e.width))
         self.head_tooltip = None
         book_lbl.bind("<Enter>", self._show_path_tip)
         book_lbl.bind("<Leave>", self._hide_tip)
         self.found_var = tk.StringVar(value="")
-        ttk.Label(head, textvariable=self.found_var).pack(
-            side="top", anchor="w")
 
         self.stage_bar = StageBar(self, self.set_stage)
-        self.stage_bar.grid(row=1, column=0, sticky="ew", pady=(8, 0))
+        self.stage_bar.grid(row=1, column=0, sticky="ew", pady=(4, 0))
 
         # amber explainer strip: shown when the SELECTED stage needs attention
         self.banner_var = tk.StringVar(value="")
         self.banner = ttk.Label(self, textvariable=self.banner_var,
-                                background="#ffe9c8", foreground="#7a4a00",
+                                background=palette.BANNER,
+                                foreground=palette.WARN,
                                 padding=(8, 3))
 
         # panel host sizes to the tallest visible panel (nothing clips)
@@ -234,6 +266,8 @@ class WorkflowPanel(ttk.Frame):
         self._panel_host.grid(row=3, column=0, sticky="ew", pady=(4, 0))
         self._panel_host.columnconfigure(0, weight=1)
         self._panel_host.rowconfigure(0, weight=1)
+        self._wrap_labels = [self.banner]
+        self._panel_host.bind("<Configure>", self._on_host_resize)
         self._panels = {
             "measure": self._panel_measure(self._panel_host),
             "identify": self._panel_identify(self._panel_host),
@@ -244,16 +278,66 @@ class WorkflowPanel(ttk.Frame):
         }
 
         self._build_chapters_tab()
+        self._build_gaps_tab()
         self._build_transcripts_tab()
         self.notebook.grid(row=4, column=0, columnspan=2, sticky="nsew")
         self.set_stage("measure")
 
+    TABLE_MIN_ROWS = 4
+
+    def _panel_need(self, key) -> tuple[int, int]:
+        """(width, height) a stage panel needs; Resolve counted stacked."""
+        if key != "resolve":
+            p = self._panels[key]
+            return p.winfo_reqwidth(), p.winfo_reqheight()
+        left, right = self._resolve_left, self._resolve_right
+        summary = self._panels["resolve"].grid_slaves(row=0)[0]
+        w = max(left.winfo_reqwidth(), right.winfo_reqwidth(),
+                summary.winfo_reqwidth()) + 8
+        h = (summary.winfo_reqheight() + left.winfo_reqheight()
+             + right.winfo_reqheight() + 16)
+        return w, h
+
+    def min_width(self) -> int:
+        self.update_idletasks()
+        table = sum(int(self.tree.column(c, "minwidth"))
+                    for c, *_ in CHAPTER_COLUMNS) + 24
+        return max([self._panel_need(k)[0] for k in self._panels]
+                   + [self.stage_bar.winfo_reqwidth(), table]) + 16
+
+    def min_height(self) -> int:
+        """Header, stage bar, banner, the tallest panel, and a table that
+        still shows a few rows."""
+        self.update_idletasks()
+        rowh = int(ttk.Style(self).lookup("Chapter.Treeview", "rowheight")
+                   or 24)
+        chrome = sum(w.winfo_reqheight() for w in
+                     (self.grid_slaves(row=0)[0], self.stage_bar,
+                      self.banner))
+        tab_extra = sum(w.winfo_reqheight() for w in
+                        self._chapters_tab.grid_slaves()
+                        if w is not self.tree)
+        tallest = max(self._panel_need(k)[1] for k in self._panels)
+        return (chrome + tallest + tab_extra + 40
+                + rowh * (self.TABLE_MIN_ROWS + 1) + 24)
+
+    def _on_host_resize(self, event):
+        """Long text wraps to the panel width instead of widening it."""
+        width = event.width
+        for lbl in self._wrap_labels:
+            lbl.configure(wraplength=max(width - 24, 200))
+        need = (self._resolve_left.winfo_reqwidth()
+                + self._resolve_right.winfo_reqwidth() + 16)
+        self._layout_resolve(side_by_side=need <= width)
+
     # ---------------------------------------------------------- stage panels
-    @staticmethod
-    def _result_line(parent, row, colspan=1):
+    def _result_line(self, parent, row, colspan=1):
         var = tk.StringVar(value="")
-        ttk.Label(parent, textvariable=var, foreground="#444444").grid(
-            row=row, column=0, columnspan=colspan, sticky="w", pady=(4, 0))
+        lbl = ttk.Label(parent, textvariable=var, foreground=palette.MUTED,
+                        justify="left")
+        lbl.grid(row=row, column=0, columnspan=colspan, sticky="w",
+                 pady=(4, 0))
+        self._wrap_labels.append(lbl)
         return var
 
     def _panel_measure(self, host):
@@ -269,11 +353,16 @@ class WorkflowPanel(ttk.Frame):
         self.measure_result = self._result_line(p, row=1, colspan=1)
         self._tip(self.measure_btn, "decode the whole file once: envelope, "
                      "timeline check, calibration, and the gap list")
+        return p
 
-        # gap strip: pinned chapters + the gaps most similar to them
+    def _build_gaps_tab(self):
+        """Gap strip: pinned chapters + the gaps most similar to them."""
+        p = ttk.Frame(self.notebook, padding=4)
+        p.columnconfigure(0, weight=1)
+        p.rowconfigure(1, weight=1)
         controls = ttk.Frame(p)
-        controls.grid(row=2, column=0, sticky="ew", pady=(4, 0))
-        ttk.Label(controls, text="similar gaps by:").pack(side="left")
+        controls.grid(row=0, column=0, sticky="ew")
+        ttk.Label(controls, text="Similar gaps by:").pack(side="left")
         self.gap_mode_var = tk.StringVar(value="cadence")
         for text, mode in (("chapter cadence", "cadence"),
                            ("silence length", "duration")):
@@ -287,14 +376,17 @@ class WorkflowPanel(ttk.Frame):
         self._tip(controls.winfo_children()[2],
                      "silences whose duration matches the ones your pins "
                      "sit on")
-        self.gap_canvas = tk.Canvas(p, height=64, highlightthickness=0)
-        self.gap_canvas.grid(row=3, column=0, sticky="ew", pady=(4, 0))
+        self.gap_canvas = tk.Canvas(p, height=120, highlightthickness=0,
+                                    background=palette.FIELD)
+        self.gap_canvas.grid(row=1, column=0, sticky="nsew", pady=(4, 0))
         self.gap_canvas.bind("<Configure>",
                              lambda e: self._draw_gap_graph())
         self.gap_legend = tk.StringVar(value="")
-        ttk.Label(p, textvariable=self.gap_legend, foreground="#666666").grid(
-            row=4, column=0, sticky="w")
-        return p
+        ttk.Label(p, textvariable=self.gap_legend,
+                  foreground=palette.MUTED).grid(
+            row=2, column=0, sticky="w")
+        self.notebook.add(p, text="Gaps")
+        self._gaps_tab = p
 
     def _draw_gap_graph(self):
         """Bar strip: pinned chapters (purple) + the gaps most similar to
@@ -344,9 +436,10 @@ class WorkflowPanel(ttk.Frame):
             + [s["gap"]["dur"] for s in similar]
         maxdur = max(durs) if durs else 1.0
         width = max(c.winfo_width(), 400)
-        height = int(c["height"])
-        mid_y = height - 14
-        PURPLE, BLUE = "#7b2fa8", "#1f7fd1"
+        height = max(c.winfo_height(), int(c["height"]))
+        axis_h = tkfont.nametofont("TkDefaultFont", root=self).metrics("linespace") + 4
+        mid_y = height - axis_h
+        PURPLE, BLUE = palette.PIN_BAR, palette.GAP_BAR
 
         def bar(x_seconds, d, color, tip):
             x = 4 + (x_seconds / dur) * (width - 8)
@@ -380,11 +473,11 @@ class WorkflowPanel(ttk.Frame):
             bar(g["mid"], g["dur"], BLUE,
                 f"{hms(g['mid'])} · {g['dur']:.2f} s{note or ' · unclaimed'}")
 
-        c.create_line(0, mid_y, width, mid_y, fill="#999999")
+        c.create_line(0, mid_y, width, mid_y, fill=palette.MUTED)
         for frac, anchor in ((0, "w"), (0.5, "center"), (1, "e")):
-            c.create_text(4 + frac * (width - 8), height - 6,
+            c.create_text(4 + frac * (width - 8), height - axis_h // 2,
                           text=hms(dur * frac), anchor=anchor,
-                          font=("TkDefaultFont", 8), fill="#888888")
+                          font="TkDefaultFont", fill=palette.MUTED)
         by = "cadence" if mode == "cadence" else "silence length"
         self.gap_legend.set(
             f"{len(pin_draws)} pinned chapters (purple) · "
@@ -401,34 +494,46 @@ class WorkflowPanel(ttk.Frame):
             self._gap_tipwin = tw = tk.Toplevel(self)
             tw.wm_overrideredirect(True)
             tw.wm_geometry(f"+{c.winfo_pointerx()}+{c.winfo_rooty() - 24}")
-            tk.Label(tw, text=text, background="#ffffe0", relief="solid",
-                     borderwidth=1, padx=4, pady=1).pack()
+            tk.Label(tw, text=text, background=palette.TIP,
+                     foreground=palette.TEXT, font="TkDefaultFont",
+                     relief="solid", borderwidth=1, padx=4, pady=1).pack()
 
     def _panel_identify(self, host):
         p = ttk.Frame(host)
         p.columnconfigure(1, weight=1)
-        ttk.Label(p, text="source:").grid(row=0, column=0, sticky="w")
+        ttk.Label(p, text="Source:").grid(row=0, column=0, sticky="w")
         self.identify_mode = tk.StringVar(value="asin")
         self.identify_value = tk.StringVar()
-        modes = [("ASIN", "asin"), ("JSON file", "json"), ("Embedded", "emb")]
+        radios = ttk.Frame(p)
+        radios.grid(row=0, column=1, columnspan=3, sticky="w")
+        modes = [("ASIN", "asin", "an Audible ASIN; chapters come from "
+                  "Audnexus"),
+                 ("JSON file", "json", "a chapters JSON file on disk"),
+                 ("Embedded", "emb", "the chapters already in the audio "
+                  "file")]
         self.identify_radios = []
-        for n, (text, mode) in enumerate(modes):
-            rb = ttk.Radiobutton(p, text=text, value=mode,
+        for text, mode, tip in modes:
+            rb = ttk.Radiobutton(radios, text=text, value=mode,
                                  variable=self.identify_mode,
                                  command=self._identify_mode_changed)
-            rb.grid(row=0, column=1 + n, sticky="w", padx=(0, 6))
+            rb.pack(side="left", padx=(4, 8))
             self.identify_radios.append(rb)
-        self.identify_entry = ttk.Entry(p, textvariable=self.identify_value)
-        self.identify_entry.grid(row=1, column=1, sticky="ew", padx=(0, 4))
+            self._tip(rb, tip)
+        self.identify_entry = ttk.Entry(p, textvariable=self.identify_value,
+                                        width=24)
+        self.identify_entry.grid(row=1, column=1, sticky="ew", padx=(4, 4),
+                                 pady=(4, 0))
         self.identify_browse = ttk.Button(p, text="Browse…",
                                           command=self._identify_browse)
-        self.identify_browse.grid(row=1, column=2, sticky="w")
+        self.identify_browse.grid(row=1, column=2, sticky="w", pady=(4, 0))
+        self._tip(self.identify_browse, "pick a chapters JSON file")
         self.identify_btn = self._primary(p, 1, 3, "Identify",
                                           self.cmd_identify_primary)
+        self.identify_btn.grid_configure(pady=(4, 0))
         ttk.Label(p, text="chooses and verifies the chapter list against "
-                          "the audio").grid(row=1, column=4, sticky="w",
-                                            padx=8)
-        self.identify_result = self._result_line(p, row=2, colspan=5)
+                          "the audio").grid(row=2, column=0, columnspan=4,
+                                            sticky="w", pady=(4, 0))
+        self.identify_result = self._result_line(p, row=3, colspan=4)
         self._tip(self.identify_btn, "check the chosen chapter list "
                      "against the real silences before aligning")
         self._identify_mode_changed()
@@ -437,14 +542,15 @@ class WorkflowPanel(ttk.Frame):
     def _panel_align(self, host):
         p = ttk.Frame(host)
         p.columnconfigure(3, weight=1)
-        ttk.Label(p, text="min conf:").grid(row=0, column=0, sticky="w")
+        ttk.Label(p, text="Minimum confidence:").grid(row=0, column=0,
+                                                      sticky="w")
         self.min_conf = tk.DoubleVar(value=0.5)
         self.min_conf.trace_add("write", lambda *_: self._refresh())
         self.min_conf_spin = ttk.Spinbox(p, from_=0.0, to=1.0, increment=0.05,
                                          width=5, textvariable=self.min_conf)
         self.min_conf_spin.grid(row=0, column=1, sticky="w")
-        ttk.Label(p, text="near CH=TIME:").grid(row=0, column=2, sticky="e",
-                                                padx=(10, 2))
+        ttk.Label(p, text="Near (CH=TIME):").grid(row=0, column=2, sticky="e",
+                                                  padx=(10, 2))
         self.near_var = tk.StringVar()
         self.near_entry = ttk.Entry(p, textvariable=self.near_var, width=12)
         self.near_entry.grid(row=0, column=3, sticky="w")
@@ -454,12 +560,14 @@ class WorkflowPanel(ttk.Frame):
         self.align_result = self._result_line(p, row=2, colspan=5)
         self._tip(self.align_btn, "place every published chapter on a "
                      "real gap, keeping local reading rate consistent")
+        self._tip(self.min_conf_spin, "chapters below this confidence are "
+                  "withheld from Emit (shaded amber in the table)")
+        self._tip(self.near_entry, "optional CH=TIME hint, e.g. 12=3:45:00, "
+                  "that aims the alignment near a known position")
         return p
 
     def _panel_resolve(self, host):
         p = ttk.Frame(host, padding=(4, 2))
-        p.columnconfigure(0, weight=3)
-        p.columnconfigure(1, weight=2)
 
         # summary line: unresolved chapters + recommended next action
         summary = ttk.Frame(p)
@@ -469,46 +577,46 @@ class WorkflowPanel(ttk.Frame):
         self.unresolved_frame.pack(side="left")
         self.next_var = tk.StringVar(value="")
         self.next_label = ttk.Label(summary, textvariable=self.next_var,
-                                    foreground="#2e7d32")
+                                    foreground=palette.OK,
+                                    font=fonts.derived(self, weight="bold"))
         self.next_label.pack(side="right")
 
-        # left: automatic escalation, uniform button column
+        # left: automatic escalation - label, input, button, cost, status
         left = ttk.LabelFrame(p, text="Automatic", padding=4)
-        left.grid(row=1, column=0, sticky="nsew")
-        for c in range(5):
-            left.columnconfigure(c, weight=1 if c == 4 else 0)
-        left.columnconfigure(0, weight=1)
+        self._resolve_left = left
+        left.columnconfigure(4, weight=1)
 
-        BTN_W = 12
-        ttk.Label(left, text="position hint:").grid(row=0, column=0,
-                                                    sticky="e", padx=(0, 4))
+        def option(row, label, button, cmd, cost_var, status_var, tip):
+            ttk.Label(left, text=label).grid(row=row, column=0, sticky="e",
+                                             padx=(0, 4))
+            b = ttk.Button(left, text=button, command=cmd)
+            b.grid(row=row, column=2, sticky="ew", padx=4)
+            ttk.Label(left, textvariable=cost_var).grid(row=row, column=3,
+                                                        sticky="w")
+            ttk.Label(left, textvariable=status_var).grid(
+                row=row, column=4, sticky="w", padx=(6, 0))
+            self._tip(b, tip)
+            return b
+
         self.hint_var = tk.StringVar()
         self.hint_entry = ttk.Entry(left, textvariable=self.hint_var, width=12)
         self.hint_entry.grid(row=0, column=1, sticky="ew")
-        self.hint_btn = ttk.Button(left, text="Apply hint", width=BTN_W,
-                                   command=self._resolve_hint)
-        self.hint_btn.grid(row=0, column=2, sticky="ew", padx=4)
-        ttk.Label(left, text="free").grid(row=0, column=3, sticky="w")
+        self._tip(self.hint_entry, "CH=TIME, e.g. 12=3:45:00")
         self.hint_status = tk.StringVar(value="")
-        ttk.Label(left, textvariable=self.hint_status).grid(
-            row=0, column=4, sticky="w", padx=(6, 0))
-        self._tip(self.hint_btn, "aims the next Align at roughly this "
-                     "position (CH=TIME); free - it is not a pin")
+        self.hint_btn = option(
+            0, "Position hint:", "Align with hint", self._resolve_hint,
+            tk.StringVar(value="free"), self.hint_status,
+            "re-runs Align aimed at roughly this position (CH=TIME); "
+            "free - it is not a pin")
 
-        ttk.Label(left, text="listen:").grid(row=1, column=0, sticky="e",
-                                             padx=(0, 4))
-        self.listen_btn = ttk.Button(left, text="Listen", width=BTN_W,
-                                     command=self.cmd_listen)
-        self.listen_btn.grid(row=1, column=2, sticky="ew", padx=4)
-        ttk.Label(left, text="~4 min").grid(row=1, column=3, sticky="w")
         self.listen_status = tk.StringVar(value="not run")
-        ttk.Label(left, textvariable=self.listen_status).grid(
-            row=1, column=4, sticky="w", padx=(6, 0))
-        self._tip(self.listen_btn, "transcribes ~13 s after candidate "
-                     "gaps and pins the chapter announcements it hears")
+        self.listen_btn = option(
+            1, "Listen:", "Listen", self.cmd_listen,
+            tk.StringVar(value="~4 min"), self.listen_status,
+            "transcribes ~13 s after each candidate gap (about 4 minutes "
+            "for a typical book) and pins the chapter announcements it "
+            "hears")
 
-        ttk.Label(left, text="sweep range:").grid(row=2, column=0, sticky="e",
-                                                  padx=(0, 4))
         rng = ttk.Frame(left)
         rng.grid(row=2, column=1, sticky="ew")
         self.sweep_start = tk.StringVar()
@@ -523,129 +631,147 @@ class WorkflowPanel(ttk.Frame):
         for e in (self.sweep_start_entry, self.sweep_end_entry):
             # a typed range belongs to the user: row selection stops filling it
             e.bind("<Key>", self._sweep_edited, add="+")
-        self.range_btn = ttk.Button(left, text="Sweep range", width=BTN_W,
-                                    command=self._sweep_range)
-        self.range_btn.grid(row=2, column=2, sticky="ew", padx=4)
+            self._tip(e, "start and end of the span to sweep (H:MM:SS); "
+                         "selecting a chapter fills them until you type")
         self.range_cost = tk.StringVar(value="")
-        ttk.Label(left, textvariable=self.range_cost).grid(row=2, column=3,
-                                                           sticky="w")
         self.range_status = tk.StringVar(value="")
-        ttk.Label(left, textvariable=self.range_status).grid(
-            row=2, column=4, sticky="w", padx=(6, 0))
-        self._tip(self.range_btn, "reads this span continuously and pins "
-                     "announced chapters - the targeted fix for one "
-                     "stubborn chapter")
+        self.range_btn = option(
+            2, "Sweep range:", "Sweep range", self._sweep_range,
+            self.range_cost, self.range_status,
+            "reads this span continuously and pins announced chapters - "
+            "the targeted fix for one stubborn chapter")
 
-        ttk.Label(left, text="sweep probe:").grid(row=3, column=0, sticky="e",
-                                                  padx=(0, 4))
-        self.probe_btn = ttk.Button(left, text="Probe 10 min", width=BTN_W,
-                                    command=self._sweep_probe)
-        self.probe_btn.grid(row=3, column=2, sticky="ew", padx=4)
-        ttk.Label(left, text="10 min").grid(row=3, column=3, sticky="w")
         self.probe_status = tk.StringVar(value="not run")
-        ttk.Label(left, textvariable=self.probe_status).grid(
-            row=3, column=4, sticky="w", padx=(6, 0))
-        self._tip(self.probe_btn, "sweeps 10 minutes from the quarter "
-                     "point to learn whether chapters are announced at all")
+        self.probe_btn = option(
+            3, "Sweep probe:", "Probe 10 min", self._sweep_probe,
+            tk.StringVar(value="10 min"), self.probe_status,
+            "sweeps 10 minutes from the quarter point to learn whether "
+            "chapters are announced at all")
 
-        ttk.Label(left, text="full sweep:").grid(row=4, column=0, sticky="e",
-                                                 padx=(0, 4))
-        self.full_btn = ttk.Button(left, text="Full sweep", width=BTN_W,
-                                   command=self._sweep_full)
-        self.full_btn.grid(row=4, column=2, sticky="ew", padx=4)
         self.full_cost = tk.StringVar(value="")
-        ttk.Label(left, textvariable=self.full_cost).grid(row=4, column=3,
-                                                          sticky="w")
         self.swept_status = tk.StringVar(value="not run")
-        ttk.Label(left, textvariable=self.swept_status).grid(
-            row=4, column=4, sticky="w", padx=(6, 0))
-        self._tip(self.full_btn, "sweeps the whole book; already-swept "
-                     "spans are cached and cost nothing to redo")
+        self.full_btn = option(
+            4, "Full sweep:", "Full sweep", self._sweep_full,
+            self.full_cost, self.swept_status,
+            "sweeps the whole book; already-swept spans are cached and "
+            "cost nothing to redo")
 
-        # right: pin by ear
+        # right: pin by ear - one row per step, top to bottom
         right = ttk.LabelFrame(p, text="Pin by ear", padding=4)
-        right.grid(row=1, column=1, sticky="nsew", padx=(8, 0))
-        for c in range(6):
-            right.columnconfigure(c, weight=1)
+        self._resolve_right = right
+        right.columnconfigure(0, weight=1)
+        what = ttk.Frame(right)
+        what.grid(row=0, column=0, sticky="w")
         self.byear_title = tk.StringVar(value="Select a chapter in the table")
-        ttk.Label(right, textvariable=self.byear_title,
-                  font=fonts.derived(self, weight="bold")).grid(
-            row=0, column=0, columnspan=6, sticky="w")
+        ttk.Label(what, textvariable=self.byear_title,
+                  font=fonts.derived(self, weight="bold")).pack(side="left")
         self.byear_info = tk.StringVar(value="")
-        ttk.Label(right, textvariable=self.byear_info).grid(
-            row=1, column=0, columnspan=6, sticky="w")
+        ttk.Label(what, textvariable=self.byear_info).pack(
+            side="left", padx=(8, 0))
 
-        ttk.Label(right, text="playback:").grid(row=2, column=0, sticky="e")
+        transport = ttk.Frame(right)
+        transport.grid(row=1, column=0, sticky="w", pady=(4, 0))
         self.seek_btns = []
-        for col, delta in ((1, -10), (2, -5)):
-            b = ttk.Button(right, text=f"{delta:+d}s", width=4,
+
+        # clam gives buttons an 11-character minimum; transport keys are short
+        ttk.Style(self).configure("Transport.TButton", width=0)
+
+        def seek(delta):
+            b = ttk.Button(transport, text=f"{delta:+d} s",
+                           style="Transport.TButton",
                            command=lambda d=delta: self._key_seek(d),
                            state=["disabled"])
-            b.grid(row=2, column=col, sticky="ew", padx=1)
+            b.pack(side="left", padx=1)
             self.seek_btns.append(b)
             self._tip(b, f"skip {'back' if delta < 0 else 'forward'} "
-                         f"{abs(delta)} s")
-        self.play_btn = ttk.Button(right, text="▶ Play", width=7,
+                         f"{abs(delta)} s ({'Shift+' if abs(delta) == 10 else ''}"
+                         f"{'←' if delta < 0 else '→'} in the table)")
+
+        seek(-10)
+        seek(-5)
+        self.play_btn = ttk.Button(transport, text="▶ Play",
                                    command=self._key_playpause,
                                    state=["disabled"])
-        self.play_btn.grid(row=2, column=3, sticky="ew", padx=1)
+        self.play_btn.pack(side="left", padx=1)
         self._tip(self.play_btn, "play from the selected chapter "
-                     "(double-click a row does the same); pauses/resumes "
-                     "while playing")
-        for col, delta in ((4, 5), (5, 10)):
-            b = ttk.Button(right, text=f"{delta:+d}s", width=4,
-                           command=lambda d=delta: self._key_seek(d),
-                           state=["disabled"])
-            b.grid(row=2, column=col, sticky="ew", padx=1)
-            self.seek_btns.append(b)
-            self._tip(b, f"skip {'back' if delta < 0 else 'forward'} "
-                         f"{abs(delta)} s")
-        self.stop_btn = ttk.Button(right, text="■ Stop", width=6,
+                     "(double-click a row or Space does the same); "
+                     "pauses/resumes while playing")
+        seek(5)
+        seek(10)
+        self.stop_btn = ttk.Button(transport, text="■ Stop playback",
                                    command=self.app.stop_audio,
                                    state=["disabled"])
-        self.stop_btn.grid(row=2, column=6, sticky="ew", padx=(1, 0))
+        self.stop_btn.pack(side="left", padx=(6, 0))
         self._tip(self.stop_btn, "stop playback")
-        self.playback_var = tk.StringVar(value="0:00:00.000")
-        ttk.Label(right, textvariable=self.playback_var,
-                  font=tkfont.nametofont("TkFixedFont")).grid(
-            row=3, column=0, columnspan=3, sticky="w")
 
-        ttk.Label(right, text="time:").grid(row=4, column=0, sticky="e")
+        ttk.Label(transport, text="Playback:").pack(side="left",
+                                                    padx=(12, 0))
+        self.playback_var = tk.StringVar(value="0:00:00.000")
+        ttk.Label(transport, textvariable=self.playback_var,
+                  font=tkfont.nametofont("TkFixedFont", root=self)).pack(
+            side="left", padx=(4, 0))
+
+        time_row = ttk.Frame(right)
+        time_row.grid(row=2, column=0, sticky="w", pady=(4, 0))
+        ttk.Label(time_row, text="Time (H:MM:SS):").pack(side="left")
         self.pin_time = tk.StringVar(value="0:00:00.000")
-        pin_time_entry = ttk.Entry(right, textvariable=self.pin_time,
+        pin_time_entry = ttk.Entry(time_row, textvariable=self.pin_time,
                                    width=12)
-        pin_time_entry.grid(row=4, column=1, sticky="ew", padx=(2, 6))
+        pin_time_entry.pack(side="left", padx=(4, 6))
         pin_time_entry.bind("<Return>",
                             lambda e: self.play_from_time() or "break")
         self._tip(pin_time_entry, "the time Pin will mark and Play from "
                      "time will start at (H:MM:SS); Enter plays from it")
-        self._set_btn = ttk.Button(right, text="Set from playback",
+        self._set_btn = ttk.Button(time_row, text="Set from playback",
                                    command=self.set_from_playback,
                                    state=["disabled"])
-        self._set_btn.grid(row=4, column=2, columnspan=3, sticky="ew")
+        self._set_btn.pack(side="left", padx=(0, 4))
         self._tip(self._set_btn, "copy the current (frozen) playback "
                      "clock into the time field")
-        self.playfrom_btn = ttk.Button(right, text="▶ Play from time",
+        self.playfrom_btn = ttk.Button(time_row, text="▶ Play from time",
                                        command=self.play_from_time,
                                        state=["disabled"])
-        self.playfrom_btn.grid(row=4, column=5, columnspan=2, sticky="ew")
+        self.playfrom_btn.pack(side="left")
         self._tip(self.playfrom_btn, "start playback (no time limit) at "
                      "the time in the field")
         self.pin_ch = tk.StringVar()
         self._pin_autofilled = False
 
-        self.pin_btn = ttk.Button(right, text="Pin", width=8,
-                                  command=self.cmd_pin)
-        self.pin_btn.grid(row=5, column=0, columnspan=2, sticky="ew",
-                          pady=(4, 0))
+        pin_row = ttk.Frame(right)
+        pin_row.grid(row=3, column=0, sticky="w", pady=(4, 0))
+        self.pin_btn = ttk.Button(pin_row, text="Pin", command=self.cmd_pin)
+        self.pin_btn.pack(side="left", padx=(0, 4))
         self._tip(self.pin_btn, "fix the selected chapter at the time in "
-                     "the field, then re-align")
-        self.unpin_btn = ttk.Button(right, text="Remove pin", width=10,
+                     "the field, then re-align (Enter in the table)")
+        self.unpin_btn = ttk.Button(pin_row, text="Remove pin",
                                     command=self.cmd_unpin)
-        self.unpin_btn.grid(row=5, column=2, columnspan=2, sticky="ew",
-                            pady=(4, 0))
-        self._tip(self.unpin_btn, "drop this chapter's pin and re-align")
+        self.unpin_btn.pack(side="left")
+        self._tip(self.unpin_btn, "drop this chapter's pin and re-align "
+                     "(Delete in the table)")
+        self._resolve_stacked = None
+        self._layout_resolve(side_by_side=True)
         return p
+
+    def _layout_resolve(self, side_by_side: bool):
+        """Automatic and By ear sit side by side when the window is wide
+        enough, and stack when it is not - neither ever clips."""
+        if self._resolve_stacked is (not side_by_side):
+            return
+        self._resolve_stacked = not side_by_side
+        left, right = self._resolve_left, self._resolve_right
+        p = left.master
+        if side_by_side:
+            p.columnconfigure(0, weight=3)
+            p.columnconfigure(1, weight=2)
+            left.grid(row=1, column=0, columnspan=1, sticky="nsew")
+            right.grid(row=1, column=1, columnspan=1, sticky="nsew",
+                       padx=(8, 0), pady=0)
+        else:
+            p.columnconfigure(0, weight=1)
+            p.columnconfigure(1, weight=0)
+            left.grid(row=1, column=0, columnspan=2, sticky="nsew")
+            right.grid(row=2, column=0, columnspan=2, sticky="nsew",
+                       padx=0, pady=(6, 0))
 
     def _panel_emit(self, host):
         p = ttk.Frame(host)
@@ -662,18 +788,27 @@ class WorkflowPanel(ttk.Frame):
                                                  sticky="e", padx=(8, 2))
             var = tk.StringVar()
             self.meta_vars[key] = var
-            ttk.Entry(info, textvariable=var).grid(
-                row=row * 2, column=col * 2 + 1, sticky="ew", padx=(0, 8))
-        self.reread_btn = ttk.Button(info, text="re-read",
+            ttk.Entry(info, textvariable=var, width=14).grid(
+                row=row * 2, column=col * 2 + 1, sticky="ew", padx=(0, 8),
+                pady=1)
+        self.reread_btn = ttk.Button(info, text="Re-read",
                                      command=self._reharvest)
-        self.reread_btn.grid(row=1, column=6, sticky="w")
+        self.reread_btn.grid(row=2, column=6, sticky="w")
         self._tip(self.reread_btn, "re-read tags and chapters from the "
                      "folder (after emit changed the file)")
+        found = ttk.Label(info, textvariable=self.found_var,
+                          foreground=palette.MUTED, justify="left")
+        found.grid(row=4, column=0, columnspan=7, sticky="w", pady=(4, 0))
+        self._wrap_labels.append(found)
         side = ttk.Frame(p)
         side.pack(side="left", fill="y", padx=(12, 0))
         self.embed_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(side, text="embed", variable=self.embed_var).grid(
-            row=0, column=0, sticky="w")
+        embed_cb = ttk.Checkbutton(side, text="Embed chapters",
+                                   variable=self.embed_var)
+        embed_cb.grid(row=0, column=0, sticky="w")
+        self._tip(embed_cb, "also write a chaptered copy of the audio "
+                  "(<name>.chapters.<ext>) for Finalize to put in place; "
+                  "off writes only chapters.txt and chapters.json")
         self.emit_btn = ttk.Button(side, text="Emit", command=self.cmd_emit)
         self.emit_btn.grid(row=1, column=0, sticky="ew", pady=4)
         self._tip(self.emit_btn, "write the supported chapters into a "
@@ -716,28 +851,35 @@ class WorkflowPanel(ttk.Frame):
         return b
 
     # ------------------------------------------------------------- tabs --
+    def size_table(self):
+        """Table font is the UI base + 2 pt (owner directive). Each column
+        is as wide as its heading or its widest possible value; re-run
+        after a font size change."""
+        row_font = fonts.derived(self, grow=2)
+        head_font = tkfont.nametofont("TkHeadingFont", root=self)
+        ttk.Style(self).configure(
+            "Chapter.Treeview", font=row_font,
+            rowheight=row_font.metrics("linespace") + 2)
+        self.table_font = row_font
+        for col, heading, sample, _anchor in CHAPTER_COLUMNS:
+            need = max(head_font.measure(heading),
+                       row_font.measure(sample or TITLE_MIN)) + CELL_PAD
+            self.tree.column(col, minwidth=need, width=need)
+
     def _build_chapters_tab(self):
         tab = ttk.Frame(self.notebook)
         tab.columnconfigure(0, weight=1)
         tab.rowconfigure(0, weight=1)
-        cols = ("index", "title", "published", "time", "confidence", "pinned")
-        base = int(tkfont.nametofont("TkDefaultFont").cget("size"))
-        style = ttk.Style(self)
-        style.configure("Chapter.Treeview",
-                        font=fonts.derived(self, size=base + 2),
-                        rowheight=base + 2 + 14)
+        cols = [c[0] for c in CHAPTER_COLUMNS]
         self.tree = ttk.Treeview(tab, columns=cols, show="headings",
                                  style="Chapter.Treeview")
-        widths = (52, 420, 100, 100, 100, 60)
-        for col, width in zip(cols, widths, strict=True):
-            self.tree.heading(col, text=col.capitalize())
-            if col == "title":
-                self.tree.column(col, width=width, anchor="w", stretch=True)
-            else:
-                self.tree.column(col, width=width, anchor="w", stretch=False)
-        self.tree.tag_configure("unplaced", background="#b0b0b0")
-        self.tree.tag_configure("lowconf", background="#e8c680")
-        self.tree.tag_configure("conflict", background="#c05050")
+        for col, heading, _sample, anchor in CHAPTER_COLUMNS:
+            self.tree.heading(col, text=heading, anchor=anchor)
+            self.tree.column(col, anchor=anchor, stretch=col == "title")
+        self.size_table()
+        self.tree.tag_configure("unplaced", background=palette.ROW_UNPLACED)
+        self.tree.tag_configure("lowconf", background=palette.ROW_LOWCONF)
+        self.tree.tag_configure("conflict", background=palette.ROW_CONFLICT)
         self.tree.grid(row=0, column=0, sticky="nsew")
         sb = ttk.Scrollbar(tab, orient="vertical", command=self.tree.yview)
         sb.grid(row=0, column=1, sticky="ns")
@@ -753,16 +895,45 @@ class WorkflowPanel(ttk.Frame):
                         ("KP_Enter", lambda e: self.cmd_pin()),
                         ("Delete", lambda e: self.cmd_unpin())):
             self.tree.bind(seq, fn)
-        self.chapters_legend = tk.StringVar(
-            value="grey = unplaced · amber = below min conf (withheld) · "
-                  "red = conflicting pin · ?N = not written to the file")
-        ttk.Label(tab, textvariable=self.chapters_legend).grid(
-            row=1, column=0, sticky="w")
+        foot = ttk.Frame(tab)
+        foot.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(2, 0))
+        legend = ttk.Frame(foot)
+        for color, text in ((palette.ROW_UNPLACED, "unplaced"),
+                            (palette.ROW_LOWCONF,
+                             "below minimum confidence (withheld)"),
+                            (palette.ROW_CONFLICT,
+                             "conflicting pin (! in Pin)")):
+            tk.Label(legend, text="   ", background=color, relief="solid",
+                     borderwidth=1).pack(side="left", padx=(0, 4))
+            ttk.Label(legend, text=text).pack(side="left", padx=(0, 12))
+        ttk.Label(legend, text="?N = not written to the file").pack(
+            side="left")
+        self.shortcut_label = ttk.Label(foot, text=SHORTCUTS,
+                                        foreground=palette.MUTED)
+        self._table_legend = legend
+        self._foot_split = None
+        foot.bind("<Configure>", self._layout_foot)
+        self._layout_foot()
         self.conflict_note = tk.StringVar(value="")
-        ttk.Label(tab, textvariable=self.conflict_note,
-                  foreground="#7a4a00").grid(row=2, column=0, sticky="w")
+        self.conflict_label = ttk.Label(tab, textvariable=self.conflict_note,
+                                        foreground=palette.WARN)
         self.notebook.add(tab, text="Chapters")
         self._chapters_tab = tab
+
+    def _layout_foot(self, event=None):
+        """Legend and shortcuts share a line when they fit, else stack."""
+        legend, keys = self._table_legend, self.shortcut_label
+        width = event.width if event else 10 ** 6
+        split = legend.winfo_reqwidth() + keys.winfo_reqwidth() + 24 > width
+        if split == self._foot_split:
+            return
+        self._foot_split = split
+        legend.grid(row=0, column=0, sticky="w")
+        if split:
+            keys.grid(row=1, column=0, sticky="w", padx=0)
+        else:
+            keys.grid(row=0, column=1, sticky="e", padx=(24, 0))
+            legend.master.columnconfigure(1, weight=1)
 
     def _build_transcripts_tab(self):
         tab = ttk.Frame(self.notebook)
@@ -777,7 +948,7 @@ class WorkflowPanel(ttk.Frame):
             row=0, column=2, sticky="w")
         self.transcripts_text = tk.Text(
             tab, height=10, wrap="none",
-            font=tkfont.nametofont("TkFixedFont"))
+            font=tkfont.nametofont("TkFixedFont", root=self))
         self.transcripts_text.grid(row=1, column=0, columnspan=3,
                                    sticky="nsew")
         self.notebook.add(tab, text="Transcripts")
@@ -808,7 +979,8 @@ class WorkflowPanel(ttk.Frame):
             "emit": "run Emit to write the supported chapters",
             "finalize": "run the dry run first",
         }
-        if st.get("state") == ATTENTION:
+        # Resolve's own summary line already says what is unresolved
+        if st.get("state") == ATTENTION and self._stage != "resolve":
             detail = st.get("detail") or "needs attention"
             self.banner_var.set(f"{STAGE_LABELS[self._stage]}: {detail} — "
                                 f"{REMEDY.get(self._stage, '')}")
@@ -949,7 +1121,27 @@ class WorkflowPanel(ttk.Frame):
             bits.append(hms(dur))
         if asin and asin.lower() != "none":
             bits.append(asin)
-        self.book_var.set("  ·  ".join([*bits, name]))
+        self._header_bits = (bits, name)
+        self._fit_header(self._book_label.master.winfo_width())
+
+    def _fit_header(self, width: int):
+        """The header stays one line: the file name is elided from the
+        middle first, then the title (the full path is in the tooltip)."""
+        bits, name = getattr(self, "_header_bits", (["(nothing selected)"],
+                                                    ""))
+        font = tkfont.nametofont("TkHeadingFont", root=self)
+        room = max(width - 8, 200) if width > 1 else 10 ** 6
+
+        def text(bits, name):
+            return "  ·  ".join([*bits, name] if name else bits)
+
+        if font.measure(text(bits, name)) > room and name:
+            rest = font.measure(text(bits, "")) + font.measure("  ·  ")
+            name = _elide(name, font, max(room - rest, font.measure("ab…yz")))
+        if font.measure(text(bits, name)) > room:
+            rest = font.measure(text(["", *bits[1:]], name))
+            bits = [_elide(bits[0], font, max(room - rest, 80)), *bits[1:]]
+        self.book_var.set(text(bits, name))
 
     def _show_path_tip(self, _event=None):
         self._hide_tip()
@@ -960,7 +1152,8 @@ class WorkflowPanel(ttk.Frame):
         self.head_tooltip = tk.Toplevel(self)
         self.head_tooltip.wm_overrideredirect(True)
         self.head_tooltip.wm_geometry(f"+{x}+{y}")
-        tk.Label(self.head_tooltip, text=self.audio, background="#ffffe0",
+        tk.Label(self.head_tooltip, text=self.audio, background=palette.TIP,
+                 foreground=palette.TEXT, font="TkDefaultFont",
                  relief="solid", borderwidth=1, padx=4, pady=1).pack()
 
     def _hide_tip(self, _event=None):
@@ -1012,22 +1205,31 @@ class WorkflowPanel(ttk.Frame):
         self._conflicts_unknown = aligned and "conflicts" not in alignment \
             and any(r.get("pinned") for r in results)
         self._row_data = {}
+        gap_at = {round(g["mid"], 3): g for g in
+                  (self.analysis.get("gaps") or {}).get("gaps") or []
+                  if g.get("mid") is not None}
         for r in results:
             n = r["index"] + 1
             mark = f"?{n}" if aligned and n in withheld else n
             tags = []
+            pin = "pin" if r.get("pinned") else ""
             if aligned and r.get("pinned") and r["index"] in conflicts:
                 tags.append("conflict")
+                pin = "! pin"
             elif r.get("time") is None:
                 tags.append("unplaced")
             elif aligned and n in withheld:
                 tags.append("lowconf")
+            g = gap_at.get(round(r["time"], 3)) \
+                if r.get("time") is not None else None
             iid = self.tree.insert("", "end", tags=tuple(tags), values=(
                 mark, r.get("title", ""), hms(r.get("published")),
                 _t(r.get("time")),
+                f"{g['dur']:.2f} s" if g and g.get("dur") is not None
+                else "",
                 "" if r.get("confidence") is None
                 else f"{r['confidence']:.2f}",
-                "pin" if r.get("pinned") else "",
+                pin,
             ))
             self._row_data[iid] = r
         if sel and self.tree.exists(sel[0]):
@@ -1037,6 +1239,11 @@ class WorkflowPanel(ttk.Frame):
         self.conflict_note.set(
             "pins from an older Align: re-run Align to detect conflicting "
             "pins" if self._conflicts_unknown else "")
+        if self._conflicts_unknown:
+            self.conflict_label.grid(row=2, column=0, columnspan=2,
+                                     sticky="w")
+        else:
+            self.conflict_label.grid_remove()
         total = len(results)
         weak = sum(1 for r in results if r.get("time") is None
                    or (r.get("confidence") or 0) < self.min_conf.get())
@@ -1179,7 +1386,8 @@ class WorkflowPanel(ttk.Frame):
             for r in weak:
                 n = r["index"] + 1
                 lbl = tk.Label(self.unresolved_frame, text=str(n),
-                               fg="#1a5fb4", cursor="hand2")
+                               fg=palette.LINK, cursor="hand2",
+                               font=fonts.derived(self, underline=True))
                 lbl.pack(side="left", padx=2)
                 lbl.bind("<Button-1>",
                          lambda e, r=r: self._select_unresolved(r))
@@ -1507,7 +1715,7 @@ class WorkflowPanel(ttk.Frame):
         vals = self.tree.item(sel[0], "values")
         return {"index": int(str(vals[0]).lstrip("?")) - 1, "title": vals[1],
                 "published": vals[2], "time": vals[3],
-                "confidence": vals[4], "pinned": vals[5], "_iid": None}
+                "confidence": vals[5], "pinned": vals[6], "_iid": None}
 
     def preview_row(self):
         row = self._selected_row()

@@ -44,7 +44,7 @@ def test_search_filters_library(tmp_path):
         assert len(authors) == 1
         leaves = [app.lib_tree.item(i, "text")
                   for i in app.lib_tree.get_children(authors[0])]
-        assert leaves == ["Book.mp3"]
+        assert leaves == ["Book"]  # the book folder's title
 
         app.search_var.set("bear")  # matches author -> all their books
         authors = app.lib_tree.get_children("")
@@ -155,10 +155,11 @@ def _make_app(tmp_path):
     book = root / "Author" / "Book"
     book.mkdir(parents=True)
     (book / "Book.mp3").touch()
+    mp = pytest.MonkeyPatch()
+    mp.setenv("CHAPTERFIT_WORK", str(tmp_path / "work"))
     app = App(library_root=str(root))
     app.dialogs = []
 
-    mp = pytest.MonkeyPatch()
     for name in ("showinfo", "showerror", "showwarning"):
         def recorder(title=None, message=None, _n=name, **kw):
             app.dialogs.append((_n, message))
@@ -217,7 +218,7 @@ def test_workflow_refresh_renders_alignment(tmp_path):
                 for i in app.workflow.tree.get_children()]
         assert len(rows) == 2
         assert rows[0][1] == "Chapter 1"
-        assert rows[0][4] == "0.90"
+        assert rows[0][5] == "0.90"
         assert rows[1][3] == "0:00:00.000"
 
         # Remove pin with an empty field falls back to the selected row,
@@ -349,7 +350,7 @@ def test_table_shows_identified_chapters_before_align(tmp_path):
         assert rows[1][1] == "Published Two"
         assert rows[1][2] == "0:01:30.000"
         assert rows[1][3] == "0:00:00.000"  # nothing placed yet
-        assert rows[1][4] == ""
+        assert rows[1][5] == ""
         assert all(set(app.workflow.tree.item(i, "tags") or ()) == {"unplaced"}
                    for i in app.workflow.tree.get_children())
 
@@ -427,16 +428,16 @@ def test_table_shows_pins_before_align(tmp_path):
         assert len(rows) == 4
         # pins are 0-based: "1"=94.875 pins chapter 2, "3"=2071.4 chapter 4
         assert rows[1][3] == "0:01:34.875"
-        assert rows[1][5] == "pin"
+        assert rows[1][6] == "pin"
         assert set(app.workflow.tree.item(
             app.workflow.tree.get_children()[1], "tags") or ()) == set()
         # unpinned rows: grey unplaced, zero-clock placeholder
         assert rows[0][3] == "0:00:00.000"
-        assert rows[0][5] == ""
+        assert rows[0][6] == ""
         assert set(app.workflow.tree.item(
             app.workflow.tree.get_children()[0], "tags") or ()) == {"unplaced"}
         assert rows[3][3] == "0:34:31.400"
-        assert rows[3][5] == "pin"
+        assert rows[3][6] == "pin"
         # tab label counts pins as placed
         assert app.notebook.tab(app.workflow._chapters_tab, "text") == \
             "Chapters 2/4"
@@ -699,7 +700,7 @@ def test_table_tint_and_font_pins(tmp_path):
             == "#b0b0b0"
         # chapter table font is +2 over the UI default (resolved from the
         # named font the style stores)
-        base = int(tkfont.nametofont("TkDefaultFont").cget("size"))
+        base = int(tkfont.nametofont("TkDefaultFont", root=app).cget("size"))
         style = ttk.Style(wf)
         got = style.configure("Chapter.Treeview", "font")
         named = tkfont.nametofont(str(got), root=app)

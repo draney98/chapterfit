@@ -10,11 +10,14 @@ from tkinter import filedialog, messagebox, ttk
 
 from chaptertools.util import clock
 
+from . import tips
 from .library import library_root as resolve_library_root
 from .library import scan_library
 from .mpv import Player
 from .runner import Runner
 from .workflow import WorkflowPanel
+
+LIBRARY_WIDTH = 300
 
 
 class App(tk.Tk):
@@ -22,7 +25,6 @@ class App(tk.Tk):
         super().__init__()
         self.title("chaptertools")
         self.geometry("1600x960")
-        self.minsize(1280, 800)
         self.library_root = resolve_library_root(library_root)
         self.runner = Runner()
         self.player = Player()
@@ -34,20 +36,33 @@ class App(tk.Tk):
         self._build_menu()
         self._build_ui()
         self._fill_library()
+        self.fit_minsize()
+        self.after_idle(lambda: self._pane.sashpos(0, LIBRARY_WIDTH))
         self.after(100, self._pump)
         self.protocol("WM_DELETE_WINDOW", self._quit)
+
+    def fit_minsize(self):
+        """Smallest window in which no panel clips: the widest panel's
+        need (Resolve counted stacked, as it stacks when narrow) plus
+        the library pane."""
+        self.update_idletasks()
+        need_w = self.workflow.min_width() + LIBRARY_WIDTH + 16
+        need_h = self.workflow.min_height() + 60  # menu + status bar
+        self.minsize(max(need_w, 1024), max(need_h, 600))
 
     def _setup_fonts(self):
         base = int(os.environ.get("CHAPTERGUI_FONT", "11"))
         for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont",
                      "TkHeadingFont", "TkFixedFont"):
             try:
-                f = tkfont.nametofont(name)
+                f = tkfont.nametofont(name, root=self)
             except tk.TclError:
                 continue
             f.configure(size=base + (2 if name == "TkFixedFont" else 0))
-        ttk.Style(self).theme_use("clam")
-        ttk.Style(self).configure("Treeview", rowheight=base + 14)
+        style = ttk.Style(self)
+        style.theme_use("clam")
+        style.configure("Treeview", rowheight=base + 14)
+        style.configure("TButton", padding=(8, 1))
 
     def _build_menu(self):
         menu = tk.Menu(self)
@@ -73,12 +88,32 @@ class App(tk.Tk):
         search_entry = ttk.Entry(searchbar, textvariable=self.search_var)
         search_entry.pack(side="left", fill="x", expand=True, padx=(4, 0))
         search_entry.bind("<Escape>", lambda e: self.search_var.set(""))
-        self.lib_tree = ttk.Treeview(lib, show="tree")
-        self.lib_tree.pack(side="left", fill="both", expand=True)
-        sb = ttk.Scrollbar(lib, orient="vertical", command=self.lib_tree.yview)
-        sb.pack(side="right", fill="y")
-        self.lib_tree.configure(yscrollcommand=sb.set)
+        tree_box = ttk.Frame(lib)
+        tree_box.pack(side="top", fill="both", expand=True)
+        tree_box.columnconfigure(0, weight=1)
+        tree_box.rowconfigure(0, weight=1)
+        self.lib_tree = ttk.Treeview(tree_box, show="tree")
+        self.lib_tree.grid(row=0, column=0, sticky="nsew")
+        sb = ttk.Scrollbar(tree_box, orient="vertical",
+                           command=self.lib_tree.yview)
+        sb.grid(row=0, column=1, sticky="ns")
+        xsb = ttk.Scrollbar(tree_box, orient="horizontal",
+                            command=self.lib_tree.xview)
+        xsb.grid(row=1, column=0, sticky="ew")
+        self.lib_tree.configure(yscrollcommand=sb.set,
+                                xscrollcommand=xsb.set)
         self.lib_tree.bind("<<TreeviewSelect>>", self._on_select)
+        self._pane = pane
+
+        # ---- status bar (packed before the pane so it never gets squeezed)
+        status = ttk.Frame(self, padding=(8, 1))
+        status.pack(side="bottom", fill="x", before=pane)
+        self.busy_var = tk.StringVar(value="")
+        ttk.Label(status, textvariable=self.busy_var).pack(side="right")
+        cancel = ttk.Button(status, text="Cancel job", command=self._cancel,
+                            padding=(8, 0))
+        cancel.pack(side="right", padx=(0, 6))
+        tips.tooltip(cancel, "stop the running job and any playback")
 
         # ---- main area: workflow (owns the notebook) ----------------------
         main = ttk.Frame(pane)
@@ -87,14 +122,6 @@ class App(tk.Tk):
         self.workflow.pack(fill="both", expand=True)
         self.notebook = self.workflow.notebook
         self._build_log_tab()
-
-        # ---- status bar ----------------------------------------------------
-        status = ttk.Frame(self, padding=(8, 2))
-        status.pack(side="bottom", fill="x")
-        self.busy_var = tk.StringVar(value="")
-        ttk.Label(status, textvariable=self.busy_var, width=8).pack(side="right")
-        ttk.Button(status, text="Cancel", command=self._cancel,
-                   padding=2).pack(side="right")
         self.status_var = tk.StringVar(value="")
         ttk.Label(status, textvariable=self.status_var,
                   anchor="w").pack(side="left", fill="x", expand=True)
@@ -108,7 +135,7 @@ class App(tk.Tk):
         ttk.Button(bar, text="Save log…", command=self.save_log).pack(
             side="right", padx=(0, 8))
         self.log_text = tk.Text(tab, height=8, wrap="none",
-                                font=tkfont.nametofont("TkFixedFont"))
+                                font=tkfont.nametofont("TkFixedFont", root=self))
         self.log_text.pack(side="top", fill="both", expand=True)
         lsb = ttk.Scrollbar(tab, orient="vertical",
                             command=self.log_text.yview)
@@ -185,6 +212,8 @@ class App(tk.Tk):
         self.lib_tree.delete(*self.lib_tree.get_children())
         selected = self.lib_tree.selection()
 
+        font = tkfont.nametofont("TkDefaultFont", root=self)
+        widest = 0
         for author in sorted(self._library):
             author_hit = active and query in author.lower()
             paths = [p for p in self._library[author]
@@ -193,9 +222,14 @@ class App(tk.Tk):
                 continue
             author_id = self.lib_tree.insert("", "end",
                                              text=author, open=active)
+            widest = max(widest, font.measure(author))
             for path in paths:
+                label = _book_label(path, self._library[author])
                 self.lib_tree.insert(author_id, "end", iid=str(path),
-                                     text=os.path.basename(path))
+                                     text=label)
+                widest = max(widest, font.measure(label) + 20)
+        # wider than the pane -> the horizontal scrollbar reaches the rest
+        self.lib_tree.column("#0", minwidth=widest + 40, stretch=True)
 
         if selected and self.lib_tree.exists(selected[0]):
             self.lib_tree.selection_set(selected[0])
@@ -274,6 +308,18 @@ class App(tk.Tk):
         self.runner.cancel()
         self.player.stop()
         self.destroy()
+
+
+def _book_label(path: str, siblings: list[str]) -> str:
+    """The book folder's name; the file name too when a folder holds
+    several audio files."""
+    folder = os.path.dirname(path)
+    book = os.path.basename(folder)
+    shared = sum(1 for p in siblings if os.path.dirname(p) == folder)
+    if shared > 1 or not book:
+        name = os.path.splitext(os.path.basename(path))[0]
+        return f"{book} — {name}" if book else name
+    return book
 
 
 def _title_of(path: str) -> str:

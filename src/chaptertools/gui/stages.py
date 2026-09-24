@@ -12,6 +12,8 @@ from tkinter import ttk
 
 from chaptertools.envelope.emit import alignment_fingerprint
 
+from . import palette
+
 DONE, CURRENT, ATTENTION, PENDING, BLOCKED = \
     "done", "current", "attention", "pending", "blocked"
 
@@ -249,18 +251,16 @@ class StageBar(ttk.Frame):
     def update(self, states: dict[str, dict], selected: str):
         self._states = states
         self._selected = selected
-        bold = _font(self, weight="bold")
+        chosen = _font(self, weight="bold", underline=True)
         normal = _font(self)
         for key in STAGE_KEYS:
             st = states[key]["state"]
             lbl = self._labels[key]
             glyph = GLYPH.get(st, "○")
-            text = f"● {STAGE_LABELS[key]}" if key == selected \
-                else f"{glyph} {STAGE_LABELS[key]}"
-            lbl.configure(text=text,
-                          font=bold if key == selected else normal)
-            lbl.configure(fg={DONE: "#2e7d32", ATTENTION: "#b26a00",
-                              BLOCKED: "#9e9e9e"}.get(st, "#1a1a1a"))
+            lbl.configure(text=f"{glyph} {STAGE_LABELS[key]}",
+                          font=chosen if key == selected else normal,
+                          fg={DONE: palette.OK, ATTENTION: palette.WARN,
+                              BLOCKED: palette.BLOCKED}.get(st, palette.TEXT))
 
     # tooltips for blocked stages
     def _show_tip(self, key):
@@ -274,7 +274,8 @@ class StageBar(ttk.Frame):
         self._tip.wm_overrideredirect(True)
         self._tip.wm_geometry(f"+{x}+{y}")
         tk.Label(self._tip, text=st.get("why") or "click to open",
-                 background="#ffffe0", relief="solid", borderwidth=1,
+                 background=palette.TIP, foreground=palette.TEXT,
+                 font="TkDefaultFont", relief="solid", borderwidth=1,
                  padx=4, pady=1).pack()
 
     def _hide_tip(self):

@@ -1,0 +1,167 @@
+"""Nothing clips, every column holds its content, text has contrast.
+
+Geometry runs at the three window sizes the GUI is designed for, with a
+worst-case book loaded (40 chapters, 12 h, long titles), on every stage
+panel and notebook tab. Skips without a display.
+"""
+from __future__ import annotations
+
+import json
+import os
+
+import pytest
+
+from chaptertools.gui import palette
+
+SIZES = [(1280, 800), (1600, 960), (1920, 1080)]
+CHECKED = {"TButton", "Button", "TLabel", "Label", "TCheckbutton",
+           "Checkbutton", "TRadiobutton", "Radiobutton"}
+
+
+@pytest.mark.parametrize("pair", sorted(palette.TEXT_PAIRS))
+def test_text_colours_meet_aa_contrast(pair):
+    fg, bg = palette.TEXT_PAIRS[pair]
+    assert palette.contrast(fg, bg) >= 4.5, pair
+
+
+def _artifact(n=40, dur=12 * 3600.0 + 34 * 60):
+    step = dur / n
+    chapters = [{"title": f"Chapter {i + 1}: The Rather Long Title of a "
+                          f"Chapter Number {i + 1}",
+                 "start": i * step} for i in range(n)]
+    results = []
+    for i, c in enumerate(chapters):
+        results.append({
+            "index": i, "title": c["title"], "published": c["start"],
+            "time": None if i % 7 == 3 and i % 9 != 4
+            else c["start"] + 1.234,
+            "confidence": 0.12 if i % 5 == 2 else 0.97,
+            "pinned": i % 9 == 4, "spread": 3.0})
+    gaps = [{"mid": r["time"], "dur": 12.34} for r in results
+            if r["time"] is not None]
+    return {
+        "schema": 3,
+        "envelope": {"duration": dur}, "calibration": {"x": 1},
+        "gaps": {"gaps": gaps}, "fingerprint": {"x": 1},
+        "source": {"timeline_trustworthy": True},
+        "identification": {"best_trial": {"score": 6.0},
+                           "label": "Audnexus B0041M5MRE",
+                           "chapters": chapters},
+        "alignment": {"rate": 1.0003, "conflicts": [4], "results": results},
+        "pins": {str(r["index"]): r["time"] for r in results
+                 if r["pinned"]},
+    }
+
+
+@pytest.fixture
+def app(tmp_path, monkeypatch):
+    tkinter = pytest.importorskip("tkinter")
+    try:
+        tkinter.Tk().destroy()
+    except tkinter.TclError:
+        pytest.skip("no display available")
+    from chaptertools.gui.app import App
+    monkeypatch.setenv("CHAPTERFIT_WORK", str(tmp_path / "work"))
+    book = tmp_path / "library" / "An Author With a Long Name" \
+        / "A Book Whose Folder Name Goes On for Quite a While"
+    book.mkdir(parents=True)
+    audio = book / "A Book Whose Folder Name Goes On for Quite a While.mp3"
+    audio.touch()
+    a = App(library_root=str(tmp_path / "library"))
+    a.overrideredirect(True)  # the window manager must not resize it
+    wf = a.workflow
+    wf.set_book(str(audio))
+    os.makedirs(wf.work_dir, exist_ok=True)
+    with open(os.path.join(wf.work_dir, audio.name + ".analysis.json"),
+              "w") as f:
+        json.dump(_artifact(), f)
+    wf.set_book(str(audio))
+    yield a
+    a.destroy()
+
+
+def _walk(w):
+    yield w
+    for c in w.winfo_children():
+        yield from _walk(c)
+
+
+def _clipped(app):
+    """Mapped text widgets smaller than they ask for, or outside the
+    window."""
+    bad = []
+    right = app.winfo_rootx() + app.winfo_width()
+    bottom = app.winfo_rooty() + app.winfo_height()
+    for w in _walk(app):
+        if w.winfo_class() not in CHECKED or not w.winfo_viewable():
+            continue
+        text = w.cget("text")
+        if w.winfo_width() < w.winfo_reqwidth() \
+                or w.winfo_height() < w.winfo_reqheight():
+            bad.append(f"{w.winfo_class()} {text!r} "
+                       f"{w.winfo_width()}x{w.winfo_height()} < "
+                       f"{w.winfo_reqwidth()}x{w.winfo_reqheight()}")
+        elif w.winfo_rootx() + w.winfo_width() > right \
+                or w.winfo_rooty() + w.winfo_height() > bottom:
+            bad.append(f"{w.winfo_class()} {text!r} outside the window")
+    return bad
+
+
+def _settle(app, geometry):
+    app.geometry(geometry)
+    for _ in range(3):
+        app.update()
+
+
+@pytest.mark.parametrize("size", SIZES, ids=lambda s: f"{s[0]}x{s[1]}")
+def test_nothing_clips(app, size):
+    w, h = size
+    min_w, min_h = app.minsize()
+    assert min_w <= w and min_h <= h, "minimum size exceeds the target"
+    _settle(app, f"{w}x{h}+0+0")
+    wf = app.workflow
+    problems = []
+    for tab in app.notebook.tabs():
+        app.notebook.select(tab)
+        for stage in wf._panels:
+            wf.set_stage(stage)
+            app.update()
+            problems += [f"{stage}/{app.notebook.tab(tab, 'text')}: {p}"
+                         for p in _clipped(app)]
+    assert not problems, "\n".join(problems)
+
+
+@pytest.mark.parametrize("size", SIZES, ids=lambda s: f"{s[0]}x{s[1]}")
+def test_table_columns_hold_their_content(app, size):
+    from chaptertools.gui.workflow import CHAPTER_COLUMNS
+    _settle(app, f"{size[0]}x{size[1]}+0+0")
+    wf = app.workflow
+    tree = wf.tree
+    import tkinter.font as tkfont
+    head = tkfont.nametofont("TkHeadingFont")
+    for n, (col, heading, _sample, _a) in enumerate(CHAPTER_COLUMNS):
+        width = int(tree.column(col, "width"))
+        assert head.measure(heading) + 8 <= width, col
+        if col == "title":
+            continue
+        for iid in tree.get_children():
+            value = str(tree.item(iid, "values")[n])
+            assert wf.table_font.measure(value) + 8 <= width, (col, value)
+    # every column is on screen: none pushed past the right edge
+    total = sum(int(tree.column(c, "width")) for c, *_ in CHAPTER_COLUMNS)
+    assert total <= tree.winfo_width() + 1
+
+
+def test_table_shows_25_rows_at_1080p(app):
+    _settle(app, "1920x1080+0+0")
+    wf = app.workflow
+    app.notebook.select(wf._chapters_tab)
+    for stage in wf._panels:
+        wf.set_stage(stage)
+        app.update()
+        full = 0
+        for iid in wf.tree.get_children():
+            box = wf.tree.bbox(iid)
+            if box and box[1] + box[3] <= wf.tree.winfo_height():
+                full += 1
+        assert full >= 25, (stage, full)
