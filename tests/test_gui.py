@@ -126,6 +126,23 @@ def test_runner_reports_missing_binary():
     assert done[0] is None
 
 
+def test_runner_cancel_marks_job_and_frees_runner(tmp_path):
+    runner = Runner()
+    job = Job("sleep", [sys.executable, "-c", "import time; time.sleep(30)"])
+    runner.run(job)
+    assert runner.busy
+    deadline = time.time() + 5
+    while runner._proc is None and time.time() < deadline:
+        time.sleep(0.02)
+    runner.cancel()
+    while True:
+        kind, _job, payload = runner.events.get(timeout=10)
+        if kind == "done":
+            break
+    assert job.cancelled and payload != 0
+    assert not runner.busy
+
+
 def _make_app(tmp_path):
     tkinter = pytest.importorskip("tkinter")
     try:
@@ -232,7 +249,10 @@ def test_workflow_refresh_renders_alignment(tmp_path):
 
 
 def test_withheld_shading_matches_emit(tmp_path):
-    from chaptertools.gui.workflow import _withheld
+    from chaptertools.envelope.emit import select_chapters
+
+    def _withheld(results, thr):
+        return select_chapters(results, thr)[1]
 
     app = _make_app(tmp_path)
     try:
@@ -283,11 +303,15 @@ def test_withheld_shading_matches_emit(tmp_path):
         app.workflow._refresh()
         assert tags_and_label(iids()[4]) == ({"conflict"}, "5")
 
-        # old-artifact fallback: pinned with spread None reads as conflict
+        # old artifact (no stored conflicts): no guessing, a note instead
         results[4]["spread"] = None
         dump()
         app.workflow._refresh()
-        assert tags_and_label(iids()[4]) == ({"conflict"}, "5")
+        assert tags_and_label(iids()[4]) == (set(), "5")
+        assert "re-run Align" in app.workflow.conflict_note.get()
+        dump(conflicts=[])
+        app.workflow._refresh()
+        assert app.workflow.conflict_note.get() == ""
         results[4]["spread"] = 0.0
 
         # raising the spinner threshold re-shades immediately (rows rebuilt)
@@ -440,6 +464,130 @@ def test_listen_and_sweep_chain_into_align(tmp_path, monkeypatch):
         app.workflow.cmd_sweep(start=100.0, end=700.0)
 
         assert ran == [app.workflow.cmd_align, app.workflow.cmd_align]
+    finally:
+        app.destroy()
+
+
+def _book(tmp_path):
+    return str(tmp_path / "library" / "Author" / "Book" / "Book.mp3")
+
+
+def _write_artifact(wf, art):
+    os.makedirs(wf.work_dir, exist_ok=True)
+    with open(os.path.join(wf.work_dir, "Book.mp3.analysis.json"), "w") as f:
+        json.dump({"schema": 3, **art}, f)
+
+
+WEAK_ART = {
+    "envelope": {"duration": 3600.0}, "calibration": {"x": 1},
+    "gaps": {"gaps": [{"mid": 600.0, "dur": 2.0}]}, "fingerprint": {"x": 1},
+    "identification": {"best_trial": {"score": 6.0}, "chapters": [
+        {"title": "One", "start": 0.0}, {"title": "Two", "start": 600.0},
+        {"title": "Three", "start": 1200.0}]},
+    "alignment": {"rate": 1.0, "conflicts": [], "results": [
+        {"index": 0, "title": "One", "published": 0.0, "time": 0.0,
+         "confidence": 1.0, "pinned": False, "spread": 0.0},
+        {"index": 1, "title": "Two", "published": 600.0, "time": 600.0,
+         "confidence": 0.9, "pinned": False, "spread": 0.0},
+        {"index": 2, "title": "Three", "published": 1200.0, "time": 1210.0,
+         "confidence": 0.1, "pinned": False, "spread": 30.0}]},
+}
+
+
+def test_resolve_summary_keeps_next_label(tmp_path):
+    app = _make_app(tmp_path)
+    try:
+        wf = app.workflow
+        wf.set_book(_book(tmp_path))
+        _write_artifact(wf, WEAK_ART)
+        wf.set_book(_book(tmp_path))
+        assert wf._stage == "resolve"  # weak chapters open Resolve
+        wf._refresh()
+        wf._refresh()
+        assert wf.next_label.winfo_exists()
+        assert wf.next_var.get() == "next: Listen"
+        links = [w.cget("text") for w in wf.unresolved_frame.winfo_children()]
+        assert "3" in links
+        assert str(wf.listen_btn.cget("style")) == "Accent.TButton"
+    finally:
+        app.destroy()
+
+
+def test_spawn_failure_is_reported(tmp_path):
+    app = _make_app(tmp_path)
+    try:
+        wf = app.workflow
+        wf.set_book(_book(tmp_path))
+        wf._on_done(None, name="measure")
+        assert any("measure could not start" in (m or "")
+                   for _, m in app.dialogs)
+        app.dialogs.clear()
+        wf._on_done(-15, name="sweep", cancelled=True)
+        assert app.dialogs == []  # a cancel is not an error dialog
+    finally:
+        app.destroy()
+
+
+def test_busy_locks_job_controls(tmp_path):
+    app = _make_app(tmp_path)
+    try:
+        wf = app.workflow
+        wf.set_book(_book(tmp_path))
+        _write_artifact(wf, WEAK_ART)
+        wf._refresh()
+        wf.tree.selection_set(wf.tree.get_children()[2])
+        wf._fill_from_selection()
+        assert "disabled" not in wf.pin_btn.state()
+        wf.set_busy(True)
+        for w in (wf.pin_btn, wf.unpin_btn, wf.measure_btn, wf.hint_entry,
+                  wf.sweep_start_entry, wf.reread_btn):
+            assert "disabled" in w.state()
+        assert "job is running" in wf._tips[wf.pin_btn].reason
+        wf.set_busy(False)
+        assert "disabled" not in wf.pin_btn.state()
+    finally:
+        app.destroy()
+
+
+def test_sweep_range_keeps_manual_edits(tmp_path):
+    app = _make_app(tmp_path)
+    try:
+        wf = app.workflow
+        wf.set_book(_book(tmp_path))
+        _write_artifact(wf, WEAK_ART)
+        wf._refresh()
+        rows = wf.tree.get_children()
+        wf.tree.selection_set(rows[2])
+        wf._fill_from_selection()
+        assert wf.sweep_start.get() == "0:15:10"
+        wf.sweep_start.set("0:20:00")
+        wf._sweep_autofilled = False  # what typing in the field does
+        wf.tree.selection_set(rows[1])
+        wf._fill_from_selection()
+        assert wf.sweep_start.get() == "0:20:00"
+        wf.set_book(_book(tmp_path))  # a new book fills again
+        wf.tree.selection_set(wf.tree.get_children()[1])
+        wf._fill_from_selection()
+        assert wf.sweep_start.get() == "0:05:00"
+    finally:
+        app.destroy()
+
+
+def test_finalize_gate_survives_reselect(tmp_path):
+    app = _make_app(tmp_path)
+    try:
+        wf = app.workflow
+        wf.set_book(_book(tmp_path))
+        _write_artifact(wf, WEAK_ART)
+        wf._on_done(0, stage="finalize-dry", name="finalize")
+        assert wf._finalize_dry_ok
+        wf.set_book(_book(tmp_path))
+        assert wf._finalize_dry_ok
+        time.sleep(0.01)
+        _write_artifact(wf, {**WEAK_ART, "pins": {"2": 1200.0}})
+        os.utime(os.path.join(wf.work_dir, "Book.mp3.analysis.json"),
+                 (time.time() + 5, time.time() + 5))
+        assert not wf._finalize_dry_ok  # artifact changed: dry run again
     finally:
         app.destroy()
 

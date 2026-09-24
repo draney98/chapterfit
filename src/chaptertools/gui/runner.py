@@ -21,6 +21,7 @@ class Job:
         self.argv = list(argv)
         self.on_done = on_done
         self.on_line = on_line
+        self.cancelled = False
 
 
 class Runner:
@@ -29,26 +30,33 @@ class Runner:
     def __init__(self):
         self.events: queue.Queue = queue.Queue()
         self._proc: subprocess.Popen | None = None
+        self._job: Job | None = None
         self._lock = threading.Lock()
 
     @property
     def busy(self) -> bool:
+        """True from run() until the job's done event is queued."""
         with self._lock:
-            return self._proc is not None and self._proc.poll() is None
+            return self._job is not None
 
     def run(self, job: Job):
-        if self.busy:
-            self.events.put(("refused", job, "a job is already running"))
-            return
+        with self._lock:
+            if self._job is not None:
+                self.events.put(("refused", job, "a job is already running"))
+                return
+            self._job = job
         threading.Thread(target=self._work, args=(job,), daemon=True).start()
 
     def cancel(self):
         with self._lock:
-            proc = self._proc
+            proc, job = self._proc, self._job
+        if job is not None:
+            job.cancelled = True
         if proc is not None and proc.poll() is None:
             proc.terminate()
 
     def _work(self, job: Job):
+        code = None
         try:
             with self._lock:
                 self._proc = subprocess.Popen(
@@ -63,10 +71,11 @@ class Runner:
             for line in proc.stdout:
                 self.events.put(("line", job, line.rstrip("\n")))
             code = proc.wait()
-            self.events.put(("done", job, code))
         except OSError as e:
             self.events.put(("line", job, str(e)))
-            self.events.put(("done", job, None))
         finally:
             with self._lock:
                 self._proc = None
+                self._job = None
+            # queued last, so a done handler may start the next job at once
+            self.events.put(("done", job, code))

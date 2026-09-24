@@ -19,20 +19,23 @@ import tkinter.font as tkfont
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
+from chaptertools.envelope.emit import select_chapters
 from chaptertools.util import clock, hms, parse_time
 
 from . import fonts, tips
 from .harvest import found_summary, harvest_book
-from .library import load_analysis, work_dir_for
+from .library import analysis_path, load_analysis, work_dir_for
 from .runner import Job
 from .stages import (
     ATTENTION,
-    DONE,
+    BLOCKED,
     STAGE_KEYS,
     STAGE_LABELS,
     DiskFacts,
     StageBar,
-    first_pending,
+    next_stage,
+    recommend,
+    resolve_evidence,
     stage_states,
 )
 
@@ -70,32 +73,6 @@ def _t(v) -> str:
     if v is None or v == "" or v == "-":
         return "0:00:00.000"
     return str(v) if isinstance(v, str) and ":" in v else hms(v)
-
-
-def _withheld(results: list[dict], thr: float) -> set[int]:
-    """Chapter numbers that emit would NOT write.
-
-    Mirrors cmd_emit's keep-rule (chapterfit.py): keep placed chapters at
-    confidence >= thr, plus pins and chapter 1 regardless of confidence;
-    then drop any kept mark that lands within 2s of the previous kept one.
-    Everything not kept is withheld.
-    """
-    keep = []
-    for r in results:
-        if r.get("time") is None:
-            continue
-        if r.get("pinned") or r["index"] == 0 \
-                or (r.get("confidence") or 0) >= thr:
-            keep.append(r)
-    keep.sort(key=lambda r: r["time"])
-    kept: set[int] = set()
-    last: float | None = None
-    for r in keep:
-        if last is not None and r["time"] - last < 2.0:
-            continue
-        kept.add(r["index"] + 1)
-        last = r["time"]
-    return {r["index"] + 1 for r in results} - kept
 
 
 CADENCE_WINDOW = 300.0  # a predicted position only claims silences this near
@@ -207,15 +184,22 @@ class WorkflowPanel(ttk.Frame):
         self._cf = resolve_chapterfit()
         self._stage: str = "measure"
         self._disk: DiskFacts | None = None
-        self._emit_stale = False
-        self._finalize_dry_ok = False
+        # audio path -> artifact mtime when its finalize dry run succeeded
+        self._dry_ok: dict[str, float | None] = {}
         self._pin_autofilled = False
+        self._sweep_autofilled = False
+        self._busy = False
+        self._tips: dict = {}
 
         self._build()
         style = ttk.Style(self)
         style.configure("Accent.TButton",
                         font=fonts.derived(self, weight="bold"))
         self._refresh()
+
+    def _tip(self, widget, text: str):
+        self._tips[widget] = tip = tips.tooltip(widget, text)
+        return tip
 
     # ------------------------------------------------------------ widgets --
     def _build(self):
@@ -283,7 +267,7 @@ class WorkflowPanel(ttk.Frame):
                             "check, noise calibration, gaps").grid(
             row=0, column=1, sticky="w", padx=8)
         self.measure_result = self._result_line(p, row=1, colspan=1)
-        tips.tooltip(self.measure_btn, "decode the whole file once: envelope, "
+        self._tip(self.measure_btn, "decode the whole file once: envelope, "
                      "timeline check, calibration, and the gap list")
 
         # gap strip: pinned chapters + the gaps most similar to them
@@ -297,10 +281,10 @@ class WorkflowPanel(ttk.Frame):
                             variable=self.gap_mode_var,
                             command=self._draw_gap_graph).pack(
                 side="left", padx=(6, 0))
-        tips.tooltip(controls.winfo_children()[1],
+        self._tip(controls.winfo_children()[1],
                      "silences nearest where the pin spacing predicts the "
                      "unpinned chapters should fall")
-        tips.tooltip(controls.winfo_children()[2],
+        self._tip(controls.winfo_children()[2],
                      "silences whose duration matches the ones your pins "
                      "sit on")
         self.gap_canvas = tk.Canvas(p, height=64, highlightthickness=0)
@@ -420,11 +404,6 @@ class WorkflowPanel(ttk.Frame):
             tk.Label(tw, text=text, background="#ffffe0", relief="solid",
                      borderwidth=1, padx=4, pady=1).pack()
 
-    def _is_withheld(self, r) -> bool:
-        al = self.analysis.get("alignment") or {}
-        results = al.get("results") or []
-        return r["index"] + 1 in _withheld(results, self.min_conf.get())
-
     def _panel_identify(self, host):
         p = ttk.Frame(host)
         p.columnconfigure(1, weight=1)
@@ -432,11 +411,13 @@ class WorkflowPanel(ttk.Frame):
         self.identify_mode = tk.StringVar(value="asin")
         self.identify_value = tk.StringVar()
         modes = [("ASIN", "asin"), ("JSON file", "json"), ("Embedded", "emb")]
+        self.identify_radios = []
         for n, (text, mode) in enumerate(modes):
-            ttk.Radiobutton(p, text=text, value=mode,
-                            variable=self.identify_mode,
-                            command=self._identify_mode_changed).grid(
-                row=0, column=1 + n, sticky="w", padx=(0, 6))
+            rb = ttk.Radiobutton(p, text=text, value=mode,
+                                 variable=self.identify_mode,
+                                 command=self._identify_mode_changed)
+            rb.grid(row=0, column=1 + n, sticky="w", padx=(0, 6))
+            self.identify_radios.append(rb)
         self.identify_entry = ttk.Entry(p, textvariable=self.identify_value)
         self.identify_entry.grid(row=1, column=1, sticky="ew", padx=(0, 4))
         self.identify_browse = ttk.Button(p, text="Browse…",
@@ -448,7 +429,7 @@ class WorkflowPanel(ttk.Frame):
                           "the audio").grid(row=1, column=4, sticky="w",
                                             padx=8)
         self.identify_result = self._result_line(p, row=2, colspan=5)
-        tips.tooltip(self.identify_btn, "check the chosen chapter list "
+        self._tip(self.identify_btn, "check the chosen chapter list "
                      "against the real silences before aligning")
         self._identify_mode_changed()
         return p
@@ -459,19 +440,19 @@ class WorkflowPanel(ttk.Frame):
         ttk.Label(p, text="min conf:").grid(row=0, column=0, sticky="w")
         self.min_conf = tk.DoubleVar(value=0.5)
         self.min_conf.trace_add("write", lambda *_: self._refresh())
-        ttk.Spinbox(p, from_=0.0, to=1.0, increment=0.05, width=5,
-                    textvariable=self.min_conf).grid(row=0, column=1,
-                                                     sticky="w")
+        self.min_conf_spin = ttk.Spinbox(p, from_=0.0, to=1.0, increment=0.05,
+                                         width=5, textvariable=self.min_conf)
+        self.min_conf_spin.grid(row=0, column=1, sticky="w")
         ttk.Label(p, text="near CH=TIME:").grid(row=0, column=2, sticky="e",
                                                 padx=(10, 2))
         self.near_var = tk.StringVar()
-        ttk.Entry(p, textvariable=self.near_var, width=12).grid(
-            row=0, column=3, sticky="w")
+        self.near_entry = ttk.Entry(p, textvariable=self.near_var, width=12)
+        self.near_entry.grid(row=0, column=3, sticky="w")
         self.align_btn = self._primary(p, 0, 4, "Align", self.cmd_align)
         ttk.Label(p, text="places every published chapter on a real gap").grid(
             row=1, column=0, columnspan=5, sticky="w")
         self.align_result = self._result_line(p, row=2, colspan=5)
-        tips.tooltip(self.align_btn, "place every published chapter on a "
+        self._tip(self.align_btn, "place every published chapter on a "
                      "real gap, keeping local reading rate consistent")
         return p
 
@@ -483,12 +464,13 @@ class WorkflowPanel(ttk.Frame):
         # summary line: unresolved chapters + recommended next action
         summary = ttk.Frame(p)
         summary.grid(row=0, column=0, columnspan=2, sticky="ew")
-        self.unresolved_var = tk.StringVar(value="")
-        self.unresolved_frame = summary
-        ttk.Label(summary, textvariable=self.unresolved_var).pack(side="left")
+        # only the chapter links are rebuilt on refresh; the next label stays
+        self.unresolved_frame = ttk.Frame(summary)
+        self.unresolved_frame.pack(side="left")
         self.next_var = tk.StringVar(value="")
-        ttk.Label(summary, textvariable=self.next_var,
-                  foreground="#2e7d32").pack(side="right")
+        self.next_label = ttk.Label(summary, textvariable=self.next_var,
+                                    foreground="#2e7d32")
+        self.next_label.pack(side="right")
 
         # left: automatic escalation, uniform button column
         left = ttk.LabelFrame(p, text="Automatic", padding=4)
@@ -501,8 +483,8 @@ class WorkflowPanel(ttk.Frame):
         ttk.Label(left, text="position hint:").grid(row=0, column=0,
                                                     sticky="e", padx=(0, 4))
         self.hint_var = tk.StringVar()
-        ttk.Entry(left, textvariable=self.hint_var, width=12).grid(
-            row=0, column=1, sticky="ew")
+        self.hint_entry = ttk.Entry(left, textvariable=self.hint_var, width=12)
+        self.hint_entry.grid(row=0, column=1, sticky="ew")
         self.hint_btn = ttk.Button(left, text="Apply hint", width=BTN_W,
                                    command=self._resolve_hint)
         self.hint_btn.grid(row=0, column=2, sticky="ew", padx=4)
@@ -510,7 +492,7 @@ class WorkflowPanel(ttk.Frame):
         self.hint_status = tk.StringVar(value="")
         ttk.Label(left, textvariable=self.hint_status).grid(
             row=0, column=4, sticky="w", padx=(6, 0))
-        tips.tooltip(self.hint_btn, "aims the next Align at roughly this "
+        self._tip(self.hint_btn, "aims the next Align at roughly this "
                      "position (CH=TIME); free - it is not a pin")
 
         ttk.Label(left, text="listen:").grid(row=1, column=0, sticky="e",
@@ -522,7 +504,7 @@ class WorkflowPanel(ttk.Frame):
         self.listen_status = tk.StringVar(value="not run")
         ttk.Label(left, textvariable=self.listen_status).grid(
             row=1, column=4, sticky="w", padx=(6, 0))
-        tips.tooltip(self.listen_btn, "transcribes ~13 s after candidate "
+        self._tip(self.listen_btn, "transcribes ~13 s after candidate "
                      "gaps and pins the chapter announcements it hears")
 
         ttk.Label(left, text="sweep range:").grid(row=2, column=0, sticky="e",
@@ -531,11 +513,16 @@ class WorkflowPanel(ttk.Frame):
         rng.grid(row=2, column=1, sticky="ew")
         self.sweep_start = tk.StringVar()
         self.sweep_end = tk.StringVar()
-        ttk.Entry(rng, textvariable=self.sweep_start, width=9).pack(
-            side="left")
+        self.sweep_start_entry = ttk.Entry(rng, textvariable=self.sweep_start,
+                                           width=9)
+        self.sweep_start_entry.pack(side="left")
         ttk.Label(rng, text="–").pack(side="left")
-        ttk.Entry(rng, textvariable=self.sweep_end, width=9).pack(
-            side="left")
+        self.sweep_end_entry = ttk.Entry(rng, textvariable=self.sweep_end,
+                                         width=9)
+        self.sweep_end_entry.pack(side="left")
+        for e in (self.sweep_start_entry, self.sweep_end_entry):
+            # a typed range belongs to the user: row selection stops filling it
+            e.bind("<Key>", self._sweep_edited, add="+")
         self.range_btn = ttk.Button(left, text="Sweep range", width=BTN_W,
                                     command=self._sweep_range)
         self.range_btn.grid(row=2, column=2, sticky="ew", padx=4)
@@ -545,7 +532,7 @@ class WorkflowPanel(ttk.Frame):
         self.range_status = tk.StringVar(value="")
         ttk.Label(left, textvariable=self.range_status).grid(
             row=2, column=4, sticky="w", padx=(6, 0))
-        tips.tooltip(self.range_btn, "reads this span continuously and pins "
+        self._tip(self.range_btn, "reads this span continuously and pins "
                      "announced chapters - the targeted fix for one "
                      "stubborn chapter")
 
@@ -558,7 +545,7 @@ class WorkflowPanel(ttk.Frame):
         self.probe_status = tk.StringVar(value="not run")
         ttk.Label(left, textvariable=self.probe_status).grid(
             row=3, column=4, sticky="w", padx=(6, 0))
-        tips.tooltip(self.probe_btn, "sweeps 10 minutes from the quarter "
+        self._tip(self.probe_btn, "sweeps 10 minutes from the quarter "
                      "point to learn whether chapters are announced at all")
 
         ttk.Label(left, text="full sweep:").grid(row=4, column=0, sticky="e",
@@ -572,7 +559,7 @@ class WorkflowPanel(ttk.Frame):
         self.swept_status = tk.StringVar(value="not run")
         ttk.Label(left, textvariable=self.swept_status).grid(
             row=4, column=4, sticky="w", padx=(6, 0))
-        tips.tooltip(self.full_btn, "sweeps the whole book; already-swept "
+        self._tip(self.full_btn, "sweeps the whole book; already-swept "
                      "spans are cached and cost nothing to redo")
 
         # right: pin by ear
@@ -596,13 +583,13 @@ class WorkflowPanel(ttk.Frame):
                            state=["disabled"])
             b.grid(row=2, column=col, sticky="ew", padx=1)
             self.seek_btns.append(b)
-            tips.tooltip(b, f"skip {'back' if delta < 0 else 'forward'} "
+            self._tip(b, f"skip {'back' if delta < 0 else 'forward'} "
                          f"{abs(delta)} s")
         self.play_btn = ttk.Button(right, text="▶ Play", width=7,
                                    command=self._key_playpause,
                                    state=["disabled"])
         self.play_btn.grid(row=2, column=3, sticky="ew", padx=1)
-        tips.tooltip(self.play_btn, "play from the selected chapter "
+        self._tip(self.play_btn, "play from the selected chapter "
                      "(double-click a row does the same); pauses/resumes "
                      "while playing")
         for col, delta in ((4, 5), (5, 10)):
@@ -611,13 +598,13 @@ class WorkflowPanel(ttk.Frame):
                            state=["disabled"])
             b.grid(row=2, column=col, sticky="ew", padx=1)
             self.seek_btns.append(b)
-            tips.tooltip(b, f"skip {'back' if delta < 0 else 'forward'} "
+            self._tip(b, f"skip {'back' if delta < 0 else 'forward'} "
                          f"{abs(delta)} s")
         self.stop_btn = ttk.Button(right, text="■ Stop", width=6,
                                    command=self.app.stop_audio,
                                    state=["disabled"])
         self.stop_btn.grid(row=2, column=6, sticky="ew", padx=(1, 0))
-        tips.tooltip(self.stop_btn, "stop playback")
+        self._tip(self.stop_btn, "stop playback")
         self.playback_var = tk.StringVar(value="0:00:00.000")
         ttk.Label(right, textvariable=self.playback_var,
                   font=tkfont.nametofont("TkFixedFont")).grid(
@@ -630,19 +617,19 @@ class WorkflowPanel(ttk.Frame):
         pin_time_entry.grid(row=4, column=1, sticky="ew", padx=(2, 6))
         pin_time_entry.bind("<Return>",
                             lambda e: self.play_from_time() or "break")
-        tips.tooltip(pin_time_entry, "the time Pin will mark and Play from "
+        self._tip(pin_time_entry, "the time Pin will mark and Play from "
                      "time will start at (H:MM:SS); Enter plays from it")
         self._set_btn = ttk.Button(right, text="Set from playback",
                                    command=self.set_from_playback,
                                    state=["disabled"])
         self._set_btn.grid(row=4, column=2, columnspan=3, sticky="ew")
-        tips.tooltip(self._set_btn, "copy the current (frozen) playback "
+        self._tip(self._set_btn, "copy the current (frozen) playback "
                      "clock into the time field")
         self.playfrom_btn = ttk.Button(right, text="▶ Play from time",
                                        command=self.play_from_time,
                                        state=["disabled"])
         self.playfrom_btn.grid(row=4, column=5, columnspan=2, sticky="ew")
-        tips.tooltip(self.playfrom_btn, "start playback (no time limit) at "
+        self._tip(self.playfrom_btn, "start playback (no time limit) at "
                      "the time in the field")
         self.pin_ch = tk.StringVar()
         self._pin_autofilled = False
@@ -651,13 +638,13 @@ class WorkflowPanel(ttk.Frame):
                                   command=self.cmd_pin)
         self.pin_btn.grid(row=5, column=0, columnspan=2, sticky="ew",
                           pady=(4, 0))
-        tips.tooltip(self.pin_btn, "fix the selected chapter at the time in "
+        self._tip(self.pin_btn, "fix the selected chapter at the time in "
                      "the field, then re-align")
         self.unpin_btn = ttk.Button(right, text="Remove pin", width=10,
                                     command=self.cmd_unpin)
         self.unpin_btn.grid(row=5, column=2, columnspan=2, sticky="ew",
                             pady=(4, 0))
-        tips.tooltip(self.unpin_btn, "drop this chapter's pin and re-align")
+        self._tip(self.unpin_btn, "drop this chapter's pin and re-align")
         return p
 
     def _panel_emit(self, host):
@@ -680,7 +667,7 @@ class WorkflowPanel(ttk.Frame):
         self.reread_btn = ttk.Button(info, text="re-read",
                                      command=self._reharvest)
         self.reread_btn.grid(row=1, column=6, sticky="w")
-        tips.tooltip(self.reread_btn, "re-read tags and chapters from the "
+        self._tip(self.reread_btn, "re-read tags and chapters from the "
                      "folder (after emit changed the file)")
         side = ttk.Frame(p)
         side.pack(side="left", fill="y", padx=(12, 0))
@@ -689,7 +676,7 @@ class WorkflowPanel(ttk.Frame):
             row=0, column=0, sticky="w")
         self.emit_btn = ttk.Button(side, text="Emit", command=self.cmd_emit)
         self.emit_btn.grid(row=1, column=0, sticky="ew", pady=4)
-        tips.tooltip(self.emit_btn, "write the supported chapters into a "
+        self._tip(self.emit_btn, "write the supported chapters into a "
                      "chaptered copy of the file (and the ID3 tags above)")
         self.emit_result = self._result_line(side, row=2)
         return p
@@ -702,18 +689,18 @@ class WorkflowPanel(ttk.Frame):
         self.apply_btn = ttk.Button(p, text="Apply", state=["disabled"],
                                     command=self.cmd_finalize_apply)
         self.apply_btn.grid(row=0, column=1, sticky="w", padx=(8, 0))
-        tips.tooltip(self.finalize_btn, "preview everything finalize "
+        self._tip(self.finalize_btn, "preview everything finalize "
                      "would do - nothing is changed")
         self.allow_delete_var = tk.BooleanVar(value=False)
         allow_delete_cb = ttk.Checkbutton(
             p, text="allow delete-and-re-add (clears listening progress)",
             variable=self.allow_delete_var)
         allow_delete_cb.grid(row=1, column=0, columnspan=2, sticky="w")
-        tips.tooltip(allow_delete_cb, "last resort: delete the ABS database "
+        self._tip(allow_delete_cb, "last resort: delete the ABS database "
                      "entry and let the library scan re-add it; clears "
                      "listening progress")
         self.finalize_result = self._result_line(p, row=2, colspan=2)
-        tips.tooltip(self.apply_btn, "stage the original away, rename the "
+        self._tip(self.apply_btn, "stage the original away, rename the "
                      "chaptered file into place, write album.nfo, and "
                      "reload Audiobookshelf")
         return p
@@ -771,6 +758,9 @@ class WorkflowPanel(ttk.Frame):
                   "red = conflicting pin · ?N = not written to the file")
         ttk.Label(tab, textvariable=self.chapters_legend).grid(
             row=1, column=0, sticky="w")
+        self.conflict_note = tk.StringVar(value="")
+        ttk.Label(tab, textvariable=self.conflict_note,
+                  foreground="#7a4a00").grid(row=2, column=0, sticky="w")
         self.notebook.add(tab, text="Chapters")
         self._chapters_tab = tab
 
@@ -871,9 +861,22 @@ class WorkflowPanel(ttk.Frame):
         states = stage_states(self.analysis,
                               self.min_conf.get() if hasattr(self, "min_conf")
                               else 0.5,
-                              self._disk or DiskFacts(),
-                              emit_stale=self._emit_stale)
+                              self._disk or DiskFacts())
         return states
+
+    def _artifact_mtime(self) -> float | None:
+        if not self.audio:
+            return None
+        try:
+            return os.path.getmtime(analysis_path(self.audio, self.work_dir))
+        except OSError:
+            return None
+
+    @property
+    def _finalize_dry_ok(self) -> bool:
+        """A dry run succeeded for this book and nothing changed since."""
+        return bool(self.audio) and self.audio in self._dry_ok \
+            and self._dry_ok[self.audio] == self._artifact_mtime()
 
     def set_book(self, audio: str):
         if self._cf is None:
@@ -884,13 +887,18 @@ class WorkflowPanel(ttk.Frame):
         self.audio = os.path.abspath(audio)
         self.work_dir = work_dir_for(self.audio)
         self.book_var.set(self.audio)
-        self._emit_stale = False
-        self._finalize_dry_ok = False
+        # per-book field provenance: the next row selection fills them again
+        self.pin_ch.set("")
+        self.pin_time.set("0:00:00.000")
+        self.sweep_start.set("")
+        self.sweep_end.set("")
+        self._pin_autofilled = False
+        self._sweep_autofilled = False
         self._reharvest()
         self._disk = self._disk_facts()
         self._refresh()
         self._prefill_identify()
-        self.set_stage(first_pending(self._compute_states()))
+        self.set_stage(next_stage(self._compute_states()))
 
     def _prefill_identify(self):
         """Show which source the last identify used - without clobbering
@@ -994,17 +1002,21 @@ class WorkflowPanel(ttk.Frame):
                 for i, c in enumerate(
                     (self.analysis.get("identification") or {})
                     .get("chapters") or [])]
+        self._conflicts_unknown = False
         conflicts = set(alignment.get("conflicts") or [])
         aligned = bool(self.analysis.get("alignment"))
-        withheld = _withheld(results, self.min_conf.get()) if aligned else set()
+        withheld = select_chapters(results, self.min_conf.get())[1] \
+            if aligned else set()
+        # artifacts from before conflicts were stored cannot say which pins
+        # conflict; say so instead of guessing from the posterior spread
+        self._conflicts_unknown = aligned and "conflicts" not in alignment \
+            and any(r.get("pinned") for r in results)
         self._row_data = {}
         for r in results:
             n = r["index"] + 1
             mark = f"?{n}" if aligned and n in withheld else n
             tags = []
-            if aligned and r.get("pinned") and (r["index"] in conflicts
-                                                or (r.get("spread") is None
-                                                    and not conflicts)):
+            if aligned and r.get("pinned") and r["index"] in conflicts:
                 tags.append("conflict")
             elif r.get("time") is None:
                 tags.append("unplaced")
@@ -1022,6 +1034,9 @@ class WorkflowPanel(ttk.Frame):
             self.tree.selection_set(sel[0])
         self.tree.yview_moveto(scroll[0] if scroll else 0)
 
+        self.conflict_note.set(
+            "pins from an older Align: re-run Align to detect conflicting "
+            "pins" if self._conflicts_unknown else "")
         total = len(results)
         weak = sum(1 for r in results if r.get("time") is None
                    or (r.get("confidence") or 0) < self.min_conf.get())
@@ -1037,25 +1052,71 @@ class WorkflowPanel(ttk.Frame):
         self._update_resolve()
         self._update_header()
         self.gap_canvas.after_idle(self._draw_gap_graph)
+        self._states = states
+        self._update_controls()
 
-        working = self.app.runner.busy
-        for b in self._stage_buttons():
-            b.state(["disabled" if working else "!disabled"])
+    def set_busy(self, working: bool):
+        """Called when a job starts or ends: lock conflicting controls."""
+        if working != self._busy:
+            self._busy = working
+            self._update_controls()
+
+    def _job_controls(self) -> list:
+        """Everything that starts a job or edits what the next job reads."""
+        return [self.measure_btn, self.identify_btn, self.identify_entry,
+                self.identify_browse, *self.identify_radios, self.align_btn,
+                self.near_entry, self.min_conf_spin, self.hint_entry,
+                self.hint_btn, self.listen_btn, self.sweep_start_entry,
+                self.sweep_end_entry, self.range_btn, self.probe_btn,
+                self.full_btn, self.pin_btn, self.unpin_btn, self.reread_btn,
+                self.emit_btn, self.finalize_btn, self.apply_btn]
+
+    def _update_controls(self):
+        """One place decides what is enabled, and tooltips say why not."""
+        states = getattr(self, "_states", None) or self._compute_states()
+        reasons: dict = {}
+
+        def off(widgets, why):
+            for w in widgets:
+                reasons.setdefault(w, why)
+
+        if self._busy:
+            off(self._job_controls(), "a job is running - wait or Cancel job")
         if not self.audio:
-            for b in self._stage_buttons():
-                b.state(["disabled"])
-        if not self.audio or whisper_python() is None:
-            for b in (self.listen_btn, self.range_btn, self.probe_btn,
-                      self.full_btn):
-                b.state(["disabled"])
-        if not self._finalize_dry_ok or working:
-            self.apply_btn.state(["disabled"])
+            off(self._job_controls() + [self.playfrom_btn],
+                "select a book in the library first")
+        stage_btns = {"align": [self.align_btn],
+                      "resolve": [self.hint_btn, self.listen_btn,
+                                  self.range_btn, self.probe_btn,
+                                  self.full_btn, self.pin_btn, self.unpin_btn],
+                      "emit": [self.emit_btn],
+                      "finalize": [self.finalize_btn, self.apply_btn]}
+        for key, btns in stage_btns.items():
+            if states[key]["state"] == BLOCKED:
+                off(btns, f"{STAGE_LABELS[key]} is blocked: "
+                          f"{states[key]['why']}")
+        if whisper_python() is None:
+            off([self.listen_btn, self.range_btn, self.probe_btn,
+                 self.full_btn], "no Whisper interpreter found "
+                                 "(set WHISPER_PYTHON)")
+        if not self._finalize_dry_ok:
+            off([self.apply_btn], "run a successful Dry run first")
+        mode = self.identify_mode.get()
+        if mode == "emb":
+            off([self.identify_entry],
+                "Embedded uses the chapters already in the file")
+        if mode != "json":
+            off([self.identify_browse], "Browse picks a chapters JSON file")
+        if not self._selected_row() and not self.pin_ch.get().strip():
+            off([self.pin_btn, self.unpin_btn],
+                "select a chapter in the table")
 
-    def _stage_buttons(self):
-        return [self.measure_btn, self.identify_btn, self.align_btn,
-                self.emit_btn, self.finalize_btn, self.apply_btn,
-                self.hint_btn, self.listen_btn, self.range_btn,
-                self.probe_btn, self.full_btn, self.playfrom_btn]
+        for w in {*self._job_controls(), self.playfrom_btn}:
+            why = reasons.get(w)
+            w.state(["disabled" if why else "!disabled"])
+            tip = self._tips.get(w)
+            if tip is not None:
+                tip.reason = why
 
     def _update_panel_results(self, states: dict):
         self.measure_result.set(states["measure"]["detail"])
@@ -1126,23 +1187,19 @@ class WorkflowPanel(ttk.Frame):
             ttk.Label(self.unresolved_frame,
                       text="nothing unresolved - spot-check by ear").pack(
                 side="left")
-        self.next_var.set(f"next: {self._recommend(weak)}")
+        accent = recommend(self.analysis, weak)
+        self.next_var.set(f"next: {accent}")
 
         # statuses from the artifact
-        heard = self.analysis.get("heard") or {}
-        positions = [p for p in (heard.get("positions") or [])
-                     if p.get("heading") and p.get("source") != "sweep"]
-        listened = bool(heard.get("positions"))
+        ev = resolve_evidence(self.analysis)
         self.listen_status.set(
-            f"heard {len(positions)}" if positions
-            else "heard nothing" if listened else "not run")
-        clips = heard.get("clips") or {}
-        swept_min = sum(float(k.split("|")[1]) for k in clips
-                        if "sweep" in k) / 60.0
-        self.swept_status.set(f"{swept_min:.0f} min swept" if swept_min
-                              else "not run")
-        self.probe_status.set("run" if any("sweep" in k for k in clips)
-                              else "not run")
+            f"heard {ev['listen_heard']}" if ev["listen_heard"]
+            else "heard nothing" if ev["listen_ran"] else "not run")
+        self.swept_status.set(
+            f"{ev['swept_minutes']:.0f} min swept"
+            + (f", heard {ev['sweep_heard']}" if ev["sweep_heard"] else "")
+            if ev["sweep_spans"] else "not run")
+        self.probe_status.set("run" if ev["sweep_spans"] else "not run")
         self.hint_status.set(f"hint: {self.near_var.get()}"
                              if self.near_var.get() else "")
 
@@ -1156,22 +1213,10 @@ class WorkflowPanel(ttk.Frame):
 
         # exactly one accent button
         chosen = {"Listen": self.listen_btn, "Sweep probe": self.probe_btn,
-                  "Sweep range": self.range_btn, "By ear": self.pin_btn}
-        accent = self._recommend(weak)
+                  "Sweep range": self.range_btn, "Full sweep": self.full_btn,
+                  "By ear": self.pin_btn}
         for name, btn in chosen.items():
             btn.configure(style="Accent.TButton" if name == accent else "TButton")
-
-    def _recommend(self, weak) -> str:
-        if not weak:
-            return "By ear"
-        heard = self.analysis.get("heard") or {}
-        positions = [p for p in (heard.get("positions") or [])
-                     if p.get("heading") and p.get("source") != "sweep"]
-        if not (heard.get("positions")):
-            return "Listen"
-        if not positions:
-            return "Sweep probe"
-        return "Sweep range"
 
     def _select_unresolved(self, r):
         for iid, data in self._row_data.items():
@@ -1190,33 +1235,45 @@ class WorkflowPanel(ttk.Frame):
     def _run(self, name: str, argv: list[str], then=None, stage: str | None = None,
              on_line=None):
         assert self._cf is not None
+        if self.app.runner.busy:
+            self.app.log(f"! {name} not started: another job is still running")
+            return
         self.app.log(f"$ {' '.join(argv)}")
+        self.set_busy(True)
         self.app.runner.run(Job(
             name, argv, on_line=on_line,
-            on_done=lambda j, code: self._on_done(code, then=then,
-                                                  stage=stage)))
+            on_done=lambda j, code: self._on_done(
+                code, then=then, stage=stage, name=j.name,
+                cancelled=getattr(j, "cancelled", False))))
 
-    def _on_done(self, code, then=None, stage: str | None = None):
-        self.app.log(f"exit {'' if code is None else code}")
+    def _on_done(self, code, then=None, stage: str | None = None,
+                 name: str = "the last step", cancelled: bool = False):
+        self.set_busy(False)
+        if code is None:
+            self.app.log(f"! {name} could not start (see the line above)")
+        else:
+            self.app.log(f"exit {code}")
         self._refresh()
-        if code not in (0, None):
-            messagebox.showwarning("chapterfit", "the last step failed - "
-                                   "see the log for details")
+        if cancelled:
+            self.app.log(f"! {name} cancelled")
             return
-        if code == 0 and then:
+        if code != 0:
+            why = "could not start" if code is None else f"exited with {code}"
+            messagebox.showwarning(
+                "chapterfit", f"{name} {why} - see the Log tab for details",
+                parent=self)
+            return
+        if then:
             then()
             return
-        if code == 0 and stage:
-            states = self._compute_states()
-            if stage == "align":
-                self._emit_stale = True
-            if stage == "emit":
-                self._emit_stale = False
-            if states.get(stage, {}).get("state") == DONE:
-                self.set_stage(first_pending(states))
-        if code == 0 and stage == "finalize-dry":
-            self._finalize_dry_ok = True
-            self.apply_btn.state(["!disabled"])
+        if stage == "finalize-dry":
+            self._dry_ok[self.audio] = self._artifact_mtime()
+            self._update_controls()
+            return
+        if stage:
+            target = next_stage(self._compute_states())
+            if target != self._stage:
+                self.set_stage(target)
 
     # ------------------------------------------------------------- actions --
     def cmd_measure(self):
@@ -1225,10 +1282,8 @@ class WorkflowPanel(ttk.Frame):
     # identify ----------------------------------------------------------
     def _identify_mode_changed(self):
         mode = self.identify_mode.get()
-        self.identify_entry.configure(
-            state="normal" if mode != "emb" else "disabled")
-        self.identify_browse.configure(
-            state="normal" if mode == "json" else "disabled")
+        if hasattr(self, "apply_btn"):  # built: enablement is decided centrally
+            self._update_controls()
         if mode == "json" and not self.identify_value.get():
             self.identify_value.set(os.path.join(
                 os.path.dirname(self.audio or ".") or ".", "chapters.json"))
@@ -1388,7 +1443,8 @@ class WorkflowPanel(ttk.Frame):
     def cmd_sweep(self, start=None, end=None):
         wpy = whisper_python()
         if wpy is None:
-            messagebox.showinfo("Sweep", "no whisper venv found", parent=self)
+            messagebox.showinfo("Sweep", "no whisper venv found (set "
+                                "WHISPER_PYTHON)", parent=self)
             return
         script = self._whisper_script()
         if script is None:
@@ -1405,6 +1461,8 @@ class WorkflowPanel(ttk.Frame):
     def cmd_listen(self):
         wpy = whisper_python()
         if wpy is None:
+            messagebox.showinfo("Listen", "no whisper venv found (set "
+                                "WHISPER_PYTHON)", parent=self)
             return
         script = self._whisper_script()
         if script is None:
@@ -1506,9 +1564,15 @@ class WorkflowPanel(ttk.Frame):
             self.pin_ch.set(str(row["index"] + 1))
             self.pin_time.set(_t(row.get("time") or row.get("published")))
             self._pin_autofilled = True
-            for b in (self.pin_btn, self.unpin_btn, self.play_btn):
-                b.state(["!disabled"])
-        self._prefill_sweep(row)
+        self.play_btn.state(["!disabled"])
+        if not self.sweep_start.get().strip() or self._sweep_autofilled:
+            self._prefill_sweep(row)
+        self._update_controls()
+
+    def _sweep_edited(self, event):
+        if event.char and event.char.isprintable() \
+                or event.keysym in ("BackSpace", "Delete"):
+            self._sweep_autofilled = False
 
     def _update_byear(self, row):
         name = row.get("title") or f"chapter {row['index'] + 1}"
@@ -1531,6 +1595,7 @@ class WorkflowPanel(ttk.Frame):
         dur = (self.analysis.get("envelope") or {}).get("duration") or 0.0
         self.sweep_start.set(clock(max(0.0, seconds - 300)))
         self.sweep_end.set(clock(min(dur, seconds + 300) or seconds + 300))
+        self._sweep_autofilled = True
         span = (min(dur, seconds + 300) if dur else seconds + 300) \
             - max(0.0, seconds - 300)
         self.range_cost.set(f"~{span / 60:.0f} min")

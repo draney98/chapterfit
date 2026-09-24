@@ -125,7 +125,7 @@ def test_finalize_requires_emit_done():
     # one chaptered file on disk, but no analysis at all
     full = DiskFacts(audio_files=["Book.mp3"], embedded_chapters=14)
     states = stage_states({}, 0.5, full)
-    assert states["finalize"]["state"] == "pending"
+    assert states["finalize"]["state"] == "blocked"
     assert states["measure"]["state"] == "pending"
 
     # chaptered file on disk + full pipeline, but emit never ran:
@@ -138,7 +138,7 @@ def test_finalize_requires_emit_done():
     analysis = base_analysis(identification=ident, alignment=al)
     states = stage_states(analysis, 0.5, full)
     assert states["emit"]["state"] == "pending"
-    assert states["finalize"]["state"] == "pending"
+    assert states["finalize"]["state"] == "blocked"
 
     # ...and once emit has run (artifact emitted + disk match), both done
     analysis["emitted"] = {"count": 2, "first": 0.0, "last": 3600.0}

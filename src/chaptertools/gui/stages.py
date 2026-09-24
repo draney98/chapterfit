@@ -10,6 +10,8 @@ import tkinter as tk
 from dataclasses import dataclass, field
 from tkinter import ttk
 
+from chaptertools.envelope.emit import alignment_fingerprint
+
 DONE, CURRENT, ATTENTION, PENDING, BLOCKED = \
     "done", "current", "attention", "pending", "blocked"
 
@@ -39,12 +41,27 @@ def _weak_count(results: list[dict], min_conf: float) -> int:
                or (r.get("confidence") or 0) < min_conf)
 
 
+def _blocked(why: str) -> dict:
+    return {"state": BLOCKED, "detail": "", "blocked": True, "why": why}
+
+
+def emit_is_stale(analysis: dict) -> bool:
+    """The alignment changed (re-align, pins) since the last emit."""
+    emitted = analysis.get("emitted") or {}
+    sig = emitted.get("alignment_sig")
+    if not sig:
+        return False  # emitted before signatures existed: cannot tell
+    return sig != alignment_fingerprint(analysis.get("alignment"))
+
+
 def stage_states(analysis: dict, min_conf: float, disk: DiskFacts,
                  emit_stale: bool = False) -> dict[str, dict]:
     """State of every stage: {key: {state, detail, blocked, why}}.
 
-    emit_stale is True when a pin/align job ran since the last successful
-    emit in this session - the artifact cannot show that by itself.
+    Dependencies: align needs identify, resolve and emit need align,
+    finalize needs emit. A stage whose dependency is not done is BLOCKED.
+    emit_stale forces Emit back to pending; the artifact's own emit
+    signature is checked as well.
     """
     out = {k: {"state": PENDING, "detail": "", "blocked": False, "why": ""}
            for k in STAGE_KEYS}
@@ -75,7 +92,9 @@ def stage_states(analysis: dict, min_conf: float, disk: DiskFacts,
     al = analysis.get("alignment") or {}
     results = al.get("results") or []
     weak = _weak_count(results, min_conf) if results else 0
-    if not ident or not al:
+    if not ident:
+        out["align"] = _blocked("identify first")
+    elif not al:
         out["align"] = {"state": PENDING, "detail": "", "blocked": False,
                         "why": ""}
     else:
@@ -89,12 +108,14 @@ def stage_states(analysis: dict, min_conf: float, disk: DiskFacts,
                         "detail": ", ".join(notes), "blocked": False,
                         "why": ""}
 
-    if ident:
+    align_ok = bool(ident) and bool(al)
+    if align_ok:
         out["resolve"] = {
-            "state": DONE if (al and weak == 0) else ATTENTION if al
-            else PENDING,
-            "detail": f"weak: {weak}" if al else "",
+            "state": DONE if weak == 0 else ATTENTION,
+            "detail": f"weak: {weak}",
             "blocked": False, "why": ""}
+    else:
+        out["resolve"] = _blocked("align first")
 
     emitted = analysis.get("emitted") or {}
     one_file = len(disk.audio_files) == 1
@@ -103,33 +124,104 @@ def stage_states(analysis: dict, min_conf: float, disk: DiskFacts,
                    and emitted.get("last") is not None
                    and disk.embedded_last_start is not None
                    and abs(disk.embedded_last_start - emitted["last"]) < 0.1)
-    emit_done = bool(emitted) and (disk.chapters_file_match or final_match)
-    # dependency rule: nothing is done while a stage it depends on is pending
-    align_ok = ident and bool(al)
-    emit_done = emit_done and align_ok
-    out["emit"] = {
-        "state": PENDING if (emit_stale or not emit_done) else DONE,
-        "detail": f"{emitted.get('count', 0)} written"
-                  if emitted and align_ok else "",
-        "blocked": not align_ok,
-        "why": "" if align_ok else "identify and align first",
-    }
+    stale = emit_stale or emit_is_stale(analysis)
+    emit_done = (align_ok and bool(emitted) and not stale
+                 and (disk.chapters_file_match or final_match))
+    if not align_ok:
+        out["emit"] = _blocked("identify and align first")
+    else:
+        out["emit"] = {
+            "state": DONE if emit_done else PENDING,
+            "detail": (f"{emitted.get('count', 0)} written"
+                       + (" - alignment changed since" if stale else ""))
+                      if emitted else "",
+            "blocked": False, "why": ""}
 
-    fin_ok = (emit_done and one_file and disk.embedded_chapters >= 2)
-    out["finalize"] = {
-        "state": DONE if fin_ok else PENDING,
-        "detail": "folder ready" if fin_ok else "",
-        "blocked": not emit_done,
-        "why": "" if emit_done else "emit first",
-    }
+    if not emit_done:
+        out["finalize"] = _blocked("emit first")
+    else:
+        fin_ok = one_file and disk.embedded_chapters >= 2
+        out["finalize"] = {
+            "state": DONE if fin_ok else PENDING,
+            "detail": "folder ready" if fin_ok else "",
+            "blocked": False, "why": ""}
     return out
 
 
-def first_pending(states: dict[str, dict]) -> str:
+def next_stage(states: dict[str, dict]) -> str:
+    """The stage to open: the first one not done. Align is passed once
+    alignment exists - its warning is shown, but the remedy (placing
+    weak chapters) lives in Resolve."""
     for k in STAGE_KEYS:
-        if states[k]["state"] != DONE:
-            return k
+        st = states[k]["state"]
+        if st == DONE:
+            continue
+        if k == "align" and states["resolve"]["state"] != BLOCKED:
+            continue
+        return k
     return "finalize"
+
+
+def _clip_spans(clips: dict, sweep: bool) -> list[tuple[float, float]]:
+    """(start, end) of cached transcription clips, sweep or listen."""
+    spans = []
+    for key in clips:
+        if ("sweep" in key) != sweep:
+            continue
+        try:
+            start, length = (float(x) for x in key.split("|")[:2])
+        except ValueError:
+            continue
+        spans.append((start, start + length))
+    return spans
+
+
+def resolve_evidence(analysis: dict) -> dict:
+    """What escalation has already been tried, from the artifact."""
+    heard = analysis.get("heard") or {}
+    positions = heard.get("positions") or []
+    clips = heard.get("clips") or {}
+    sweeps = _clip_spans(clips, sweep=True)
+    return {
+        "listen_ran": bool(_clip_spans(clips, sweep=False))
+        or any(p.get("source") != "sweep" for p in positions),
+        "listen_heard": sum(1 for p in positions
+                            if p.get("heading") and p.get("source") != "sweep"),
+        "sweep_spans": sweeps,
+        "swept_minutes": sum(e - s for s, e in sweeps) / 60.0,
+        "sweep_heard": sum(1 for p in positions if p.get("source") == "sweep"),
+    }
+
+
+def _chapter_time(r: dict) -> float | None:
+    t = r.get("time")
+    return t if t is not None else r.get("published")
+
+
+def recommend(analysis: dict, weak: list[dict]) -> str:
+    """The escalation ladder: which Resolve action to try next.
+
+    Listen first (cheap). If listen heard nothing, probe with a sweep; if
+    it heard announcements, sweep a range around a stubborn chapter. Once
+    sweeps cover every unresolved chapter - or a sweep found no
+    announcements at all - only the ear is left. A sweep that found
+    announcements but left chapters uncovered calls for the full sweep.
+    """
+    if not weak:
+        return "By ear"
+    ev = resolve_evidence(analysis)
+    if not ev["listen_ran"]:
+        return "Listen"
+    spans = ev["sweep_spans"]
+    times = [_chapter_time(r) for r in weak]
+    if spans and all(t is not None and any(s <= t <= e for s, e in spans)
+                     for t in times):
+        return "By ear"
+    if not spans:
+        return "Sweep range" if ev["listen_heard"] else "Sweep probe"
+    if not ev["sweep_heard"]:
+        return "By ear"
+    return "Full sweep"
 
 
 class StageBar(ttk.Frame):

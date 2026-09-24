@@ -64,6 +64,10 @@ from chaptertools.envelope.artifact import (  # noqa: E402
     SCHEMA,
     Artifact,
 )
+from chaptertools.envelope.emit import (  # noqa: E402
+    alignment_fingerprint,
+    select_chapters,
+)
 from chaptertools.envelope.identification import (  # noqa: E402
     candidate_sets,
     coarse_fit,
@@ -370,15 +374,7 @@ def cmd_emit(args):
     al = art.require("alignment", "chapterfit.py align FILE")
     dur = art.data["envelope"]["duration"]
     thr = args.min_confidence or al["min_confidence"]
-    keep = [r for r in al["results"]
-            if r["time"] is not None and (r["confidence"] >= thr
-                                          or r["pinned"] or r["index"] == 0)]
-    keep.sort(key=lambda r: r["time"])
-    dedup = []
-    for r in keep:
-        if dedup and r["time"] - dedup[-1]["time"] < 2.0:
-            continue
-        dedup.append(r)
+    dedup, _withheld = select_chapters(al["results"], thr)
     if dedup:
         dedup[0]["time"] = 0.0
     dropped = len(al["results"]) - len(dedup)
@@ -407,6 +403,7 @@ def cmd_emit(args):
         "last": out[-1]["start"] if out else None,
         "min_confidence": thr,
         "tags": tags,
+        "alignment_sig": alignment_fingerprint(al),
     }
     art.save()
 

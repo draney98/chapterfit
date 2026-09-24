@@ -5,31 +5,44 @@ import tkinter as tk
 
 
 class Tip:
-    """One widget's hover tooltip. Created by `tooltip()`; not directly."""
+    """One widget's hover tooltip. Created by `tooltip()`; not directly.
+
+    `reason` overrides the text while set - disabled controls use it to
+    say why they are disabled.
+    """
 
     def __init__(self, widget: tk.Widget, text: str):
         self.widget = widget
         self.text = text
+        self.reason: str | None = None
         self._tipwin: tk.Toplevel | None = None
         self._after = None
-        widget.bind("<Enter>", self._schedule)
-        widget.bind("<Leave>", self.hide)
-        widget.bind("<ButtonPress>", self.hide)
+        widget.bind("<Enter>", self._schedule, add="+")
+        widget.bind("<Leave>", self.hide, add="+")
+        widget.bind("<ButtonPress>", self.hide, add="+")
+
+    @property
+    def shown_text(self) -> str:
+        if self.reason:
+            return f"{self.reason}\n({self.text})" if self.text else self.reason
+        return self.text
 
     def _schedule(self, _event=None):
         self._after = self.widget.after(350, self._show)
 
     def _show(self):
-        if self._tipwin is not None or not self.text:
+        self._after = None
+        if self._tipwin is not None or not self.shown_text:
             return
         x = self.widget.winfo_rootx() + 8
         y = self.widget.winfo_rooty() + self.widget.winfo_height() + 2
         self._tipwin = tw = tk.Toplevel(self.widget)
         tw.wm_overrideredirect(True)
         tw.wm_geometry(f"+{x}+{y}")
-        tk.Label(tw, text=self.text, justify="left", background="#ffffe0",
-                 relief="solid", borderwidth=1, padx=4, pady=1,
-                 font=("TkDefaultFont", 9)).pack()
+        tk.Label(tw, text=self.shown_text, justify="left",
+                 background="#ffffe0", foreground="#1a1a1a",
+                 relief="solid", borderwidth=1, padx=6, pady=3,
+                 wraplength=480, font="TkDefaultFont").pack()
 
     def hide(self, _event=None):
         if self._after is not None:

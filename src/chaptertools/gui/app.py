@@ -231,18 +231,21 @@ class App(tk.Tk):
                 else:
                     self.log(payload)
             elif kind == "done":
+                if payload != 0 and not job.cancelled:
+                    self.log_errors += 1
+                    self.notebook.tab(
+                        self._log_tab, text=f"Log • {self.log_errors} "
+                        f"error{'s' if self.log_errors != 1 else ''}")
                 if job.on_done:
                     job.on_done(job, payload)
-                if payload not in (0, None):
-                    self.log_errors += 1
-                    self.notebook.tab(self._log_tab,
-                                      text=f"Log • {self.log_errors} errors")
             elif kind == "refused":
-                messagebox.showinfo("Busy", payload, parent=self)
+                self.log(f"! {job.name} not started: {payload}")
         t = self.player.poll()
         self._playback_time = t
         self.workflow.update_playback(t)
-        self.busy_var.set("busy ◌" if self.runner.busy else "")
+        busy = self.runner.busy
+        self.workflow.set_busy(busy)
+        self.busy_var.set("busy ◌" if busy else "")
         self.after(100, self._pump)
 
     def _cancel(self):

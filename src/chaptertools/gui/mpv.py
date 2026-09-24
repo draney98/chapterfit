@@ -72,8 +72,10 @@ class Player:
                 try:
                     s.connect(self.sock_path)
                 except OSError:
+                    # the socket file can appear before mpv accepts on it
                     s.close()
-                    return
+                    time.sleep(0.05)
+                    continue
                 self._sock = s
                 self._buf = ""
                 self._replies = {}
