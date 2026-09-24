@@ -152,6 +152,26 @@ def test_table_columns_hold_their_content(app, size):
     assert total <= tree.winfo_width() + 1
 
 
+def test_font_size_change_keeps_columns_and_fonts_in_step(app):
+    import tkinter.font as tkfont
+
+    from chaptertools.gui.workflow import CHAPTER_COLUMNS
+    app.set_font_size(15)
+    _settle(app, "1920x1080+0+0")
+    wf = app.workflow
+    assert int(tkfont.nametofont("TkDefaultFont", root=app).cget("size")) \
+        == 15
+    assert int(wf.table_font.cget("size")) == 17  # still base + 2
+    for n, (col, _h, _s, _a) in enumerate(CHAPTER_COLUMNS):
+        if col == "title":
+            continue
+        width = int(wf.tree.column(col, "width"))
+        for iid in wf.tree.get_children():
+            value = str(wf.tree.item(iid, "values")[n])
+            assert wf.table_font.measure(value) + 8 <= width, (col, value)
+    assert not _clipped(app)
+
+
 def test_table_shows_25_rows_at_1080p(app):
     _settle(app, "1920x1080+0+0")
     wf = app.workflow

@@ -56,6 +56,21 @@ def emit_is_stale(analysis: dict) -> bool:
     return sig != alignment_fingerprint(analysis.get("alignment"))
 
 
+def identify_verdict(ident: dict) -> str | None:
+    """The CLI's identify verdict: consistent / weak / rejected (None
+    before Identify has run)."""
+    if not ident:
+        return None
+    best = ident.get("best_trial")
+    if not best:
+        return "rejected"
+    score = best.get("score") or 0.0
+    spread = best.get("rate_spread") or 0.0
+    if score >= 5 and spread < 0.02:
+        return "consistent"
+    return "weak" if score >= 2 else "rejected"
+
+
 def stage_states(analysis: dict, min_conf: float, disk: DiskFacts,
                  emit_stale: bool = False) -> dict[str, dict]:
     """State of every stage: {key: {state, detail, blocked, why}}.

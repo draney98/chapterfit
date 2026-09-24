@@ -593,6 +593,66 @@ def test_finalize_gate_survives_reselect(tmp_path):
         app.destroy()
 
 
+def test_measure_result_shows_populations_and_header_fix(tmp_path):
+    app = _make_app(tmp_path)
+    try:
+        wf = app.workflow
+        wf.set_book(_book(tmp_path))
+        art = dict(WEAK_ART)
+        art["gaps"] = {"gaps": [{"mid": 600.0, "dur": 2.0}],
+                       "populations": [{"k": 0, "n": 900, "centre": 0.6},
+                                       {"k": 1, "n": 41, "centre": 3.2}]}
+        art["source"] = {"timeline_trustworthy": False,
+                         "declared_duration": 3500.0,
+                         "decoded_duration": 3600.0,
+                         "header_error_sec": 100.0,
+                         "header_error_ratio": 0.028}
+        _write_artifact(wf, art)
+        wf._refresh()
+        text = wf.measure_result.get()
+        assert "2 length populations" in text
+        assert "41 around 3.2 s" in text
+        assert "-write_xing 1" in text and "Book.fixed.mp3" in text
+        assert wf.copy_fix_btn.winfo_manager() == "grid"
+        art["source"]["timeline_trustworthy"] = True
+        _write_artifact(wf, art)
+        wf._refresh()
+        assert "-write_xing" not in wf.measure_result.get()
+        assert wf.copy_fix_btn.winfo_manager() == ""
+    finally:
+        app.destroy()
+
+
+def test_rejected_identify_offers_another_edition(tmp_path):
+    app = _make_app(tmp_path)
+    try:
+        wf = app.workflow
+        wf.set_book(_book(tmp_path))
+        art = dict(WEAK_ART)
+        art["identification"] = {
+            **WEAK_ART["identification"], "label": "Audnexus B000000001",
+            "duration_ratio": 0.71,
+            "blocked": ["file is 71% of the published runtime."],
+            "best_trial": {"score": 1.2, "rate_spread": 0.09}}
+        _write_artifact(wf, art)
+        wf._refresh()
+        assert wf.identify_btn.cget("text") == "Try another edition"
+        text = wf.identify_result.get()
+        assert "rate spread 9.0%" in text and "runtime ratio 0.710" in text
+        assert "rejected" in text and "71% of the published" in text
+        ran = []
+        wf._run = lambda *a, **k: ran.append(a)
+        wf.identify_mode.set("asin")
+        wf.identify_value.set("B000000001")
+        wf.cmd_identify_primary()  # same source again: ask, do not rerun
+        assert ran == []
+        wf.identify_value.set("B000000002")
+        wf.cmd_identify_primary()
+        assert ran and "B000000002" in ran[0][1]
+    finally:
+        app.destroy()
+
+
 def test_similar_gaps_cadence():
     from chaptertools.gui.workflow import similar_gaps
 

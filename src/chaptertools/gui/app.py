@@ -10,12 +10,12 @@ from tkinter import filedialog, messagebox, ttk
 
 from chaptertools.util import clock
 
-from . import tips
+from . import fonts, tips
 from .library import library_root as resolve_library_root
 from .library import scan_library
 from .mpv import Player
 from .runner import Runner
-from .workflow import WorkflowPanel
+from .workflow import SHORTCUTS, WorkflowPanel
 
 LIBRARY_WIDTH = 300
 
@@ -50,8 +50,10 @@ class App(tk.Tk):
         need_h = self.workflow.min_height() + 60  # menu + status bar
         self.minsize(max(need_w, 1024), max(need_h, 600))
 
-    def _setup_fonts(self):
-        base = int(os.environ.get("CHAPTERGUI_FONT", "11"))
+    def _setup_fonts(self, base: int | None = None):
+        if base is None:
+            base = int(os.environ.get("CHAPTERGUI_FONT", "11"))
+        self.font_base = base
         for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont",
                      "TkHeadingFont", "TkFixedFont"):
             try:
@@ -61,8 +63,19 @@ class App(tk.Tk):
             f.configure(size=base + (2 if name == "TkFixedFont" else 0))
         style = ttk.Style(self)
         style.theme_use("clam")
-        style.configure("Treeview", rowheight=base + 14)
+        style.configure("Treeview", rowheight=tkfont.nametofont(
+            "TkDefaultFont", root=self).metrics("linespace") + 6)
         style.configure("TButton", padding=(8, 1))
+
+    def set_font_size(self, base: int):
+        """View menu: every font, column width and minimum size follows."""
+        base = max(8, min(base, 24))
+        self._setup_fonts(base)
+        fonts.refresh(self)
+        self.workflow.size_table()
+        self._render_library(self.search_var.get())
+        self.fit_minsize()
+        self.log(f"text size {base} pt")
 
     def _build_menu(self):
         menu = tk.Menu(self)
@@ -71,7 +84,43 @@ class App(tk.Tk):
         file_menu.add_separator()
         file_menu.add_command(label="Quit", command=self._quit)
         menu.add_cascade(label="File", menu=file_menu)
+
+        view = tk.Menu(menu, tearoff=0)
+        view.add_command(label="Larger text", accelerator="Ctrl++",
+                         command=lambda: self.set_font_size(self.font_base + 1))
+        view.add_command(label="Smaller text", accelerator="Ctrl+-",
+                         command=lambda: self.set_font_size(self.font_base - 1))
+        view.add_command(label="Default text size", accelerator="Ctrl+0",
+                         command=lambda: self.set_font_size(11))
+        menu.add_cascade(label="View", menu=view)
+        for seq in ("<Control-plus>", "<Control-equal>", "<Control-KP_Add>"):
+            self.bind_all(seq, lambda e: self.set_font_size(self.font_base + 1))
+        for seq in ("<Control-minus>", "<Control-KP_Subtract>"):
+            self.bind_all(seq, lambda e: self.set_font_size(self.font_base - 1))
+        self.bind_all("<Control-0>", lambda e: self.set_font_size(11))
+
+        help_menu = tk.Menu(menu, tearoff=0)
+        help_menu.add_command(label="Keyboard shortcuts",
+                              command=self._show_shortcuts)
+        help_menu.add_command(label="About chaptertools",
+                              command=self._show_about)
+        menu.add_cascade(label="Help", menu=help_menu)
         self.config(menu=menu)
+
+    def _show_shortcuts(self):
+        messagebox.showinfo(
+            "Keyboard shortcuts",
+            "In the chapter table:\n\n" + SHORTCUTS.replace(" · ", "\n")
+            + "\n\nAnywhere:\n\nCtrl++ / Ctrl+- larger / smaller text\n"
+              "Ctrl+0 default text size", parent=self)
+
+    def _show_about(self):
+        from chaptertools import __version__
+        messagebox.showinfo(
+            "About chaptertools",
+            f"chaptertools {__version__}\n\nChapter placement for "
+            "audiobooks: Measure, Identify, Align, Resolve, Emit, "
+            "Finalize.", parent=self)
 
     def _build_ui(self):
         pane = ttk.Panedwindow(self, orient="horizontal")
@@ -130,10 +179,12 @@ class App(tk.Tk):
         tab = ttk.Frame(self.notebook)
         bar = ttk.Frame(tab)
         bar.pack(side="top", fill="x")
-        ttk.Button(bar, text="Copy all", command=self.copy_log).pack(
-            side="right", padx=(0, 2))
-        ttk.Button(bar, text="Save log…", command=self.save_log).pack(
-            side="right", padx=(0, 8))
+        copy = ttk.Button(bar, text="Copy all", command=self.copy_log)
+        copy.pack(side="right", padx=(0, 2))
+        tips.tooltip(copy, "copy the whole log to the clipboard")
+        save = ttk.Button(bar, text="Save log…", command=self.save_log)
+        save.pack(side="right", padx=(0, 8))
+        tips.tooltip(save, "write the log to a file")
         self.log_text = tk.Text(tab, height=8, wrap="none",
                                 font=tkfont.nametofont("TkFixedFont", root=self))
         self.log_text.pack(side="top", fill="both", expand=True)

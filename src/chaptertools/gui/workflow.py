@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import shlex
 import shutil
 import statistics
 import subprocess
@@ -29,10 +30,12 @@ from .runner import Job
 from .stages import (
     ATTENTION,
     BLOCKED,
+    PENDING,
     STAGE_KEYS,
     STAGE_LABELS,
     DiskFacts,
     StageBar,
+    identify_verdict,
     next_stage,
     recommend,
     resolve_evidence,
@@ -353,7 +356,20 @@ class WorkflowPanel(ttk.Frame):
         self.measure_result = self._result_line(p, row=1, colspan=1)
         self._tip(self.measure_btn, "decode the whole file once: envelope, "
                      "timeline check, calibration, and the gap list")
+        self.copy_fix_btn = ttk.Button(p, text="Copy fix command",
+                                       command=self._copy_header_fix)
+        self.copy_fix_btn.grid(row=2, column=0, sticky="w", pady=(4, 0))
+        self.copy_fix_btn.grid_remove()
+        self._tip(self.copy_fix_btn, "copy the ffmpeg command that rewrites "
+                  "the header; run it, then Measure the fixed file")
         return p
+
+    def _copy_header_fix(self):
+        fix = self._header_fix()
+        if fix:
+            self.clipboard_clear()
+            self.clipboard_append(fix)
+            self.app.log("copied: " + fix)
 
     def _build_gaps_tab(self):
         """Gap strip: pinned chapters + the gaps most similar to them."""
@@ -845,11 +861,6 @@ class WorkflowPanel(ttk.Frame):
         b.grid(row=row, column=col, sticky="w", padx=2)
         return b
 
-    def _btn(self, parent, col, row, text, cmd):
-        b = ttk.Button(parent, text=text, command=cmd)
-        b.grid(row=row, column=col, sticky="ew", padx=2)
-        return b
-
     # ------------------------------------------------------------- tabs --
     def size_table(self):
         """Table font is the UI base + 2 pt (owner directive). Each column
@@ -939,13 +950,18 @@ class WorkflowPanel(ttk.Frame):
         tab = ttk.Frame(self.notebook)
         tab.columnconfigure(1, weight=1)
         tab.rowconfigure(1, weight=1)
-        ttk.Label(tab, text="grep:").grid(row=0, column=0, sticky="w")
+        ttk.Label(tab, text="Filter (regex):").grid(row=0, column=0,
+                                                   sticky="w")
         self.grep_var = tk.StringVar()
         e = ttk.Entry(tab, textvariable=self.grep_var)
         e.grid(row=0, column=1, sticky="ew", padx=4)
         e.bind("<Return>", lambda e: self.cmd_transcripts())
-        ttk.Button(tab, text="Transcripts", command=self.cmd_transcripts).grid(
-            row=0, column=2, sticky="w")
+        self._tip(e, "only lines matching this regular expression, case "
+                  "insensitive; empty shows everything")
+        show = ttk.Button(tab, text="Show transcripts",
+                          command=self.cmd_transcripts)
+        show.grid(row=0, column=2, sticky="w")
+        self._tip(show, "list what Listen and Sweep heard, with times")
         self.transcripts_text = tk.Text(
             tab, height=10, wrap="none",
             font=tkfont.nametofont("TkFixedFont", root=self))
@@ -1325,17 +1341,71 @@ class WorkflowPanel(ttk.Frame):
             if tip is not None:
                 tip.reason = why
 
+    def _header_fix(self) -> str | None:
+        """The ffmpeg command that rewrites a wrong Xing header."""
+        src = self.analysis.get("source") or {}
+        if not self.audio or src.get("timeline_trustworthy", True):
+            return None
+        stem, ext = os.path.splitext(self.audio)
+        return (f"ffmpeg -i {shlex.quote(self.audio)} -c:a copy "
+                f"-write_xing 1 {shlex.quote(stem + '.fixed' + ext)}")
+
     def _update_panel_results(self, states: dict):
-        self.measure_result.set(states["measure"]["detail"])
+        gaps = self.analysis.get("gaps") or {}
+        pops = gaps.get("populations") or []
+        src = self.analysis.get("source") or {}
+        if states["measure"]["state"] == PENDING:
+            self.measure_result.set("")
+        else:
+            lines = [f"{len(gaps.get('gaps') or [])} gaps in {len(pops)} "
+                     f"length populations"
+                     + (f"; longest: {pops[-1]['n']} around "
+                        f"{pops[-1]['centre']:.1f} s" if pops else "")]
+            if src.get("declared_duration") is not None \
+                    and src.get("decoded_duration") is not None:
+                lines.append(
+                    f"header says {hms(src['declared_duration'])}, audio is "
+                    f"{hms(src['decoded_duration'])} "
+                    f"({src.get('header_error_sec', 0):+.1f} s)")
+            fix = self._header_fix()
+            if fix:
+                lines.append(
+                    f"The header is wrong by "
+                    f"{src.get('header_error_ratio', 0) * 100:.1f}% - every "
+                    f"seek lands off. Fix it, then re-run Measure:\n    {fix}")
+            self.measure_result.set("\n".join(lines))
+        if self._header_fix():
+            self.copy_fix_btn.grid()
+        else:
+            self.copy_fix_btn.grid_remove()
+
         ident = self.analysis.get("identification") or {}
-        score = ((ident.get("best_trial") or {}).get("score")) if ident else None
+        verdict = identify_verdict(ident)
+        best = ident.get("best_trial") or {}
         if ident:
-            self.identify_result.set(
-                f"{len(ident.get('chapters') or [])} chapters from "
-                f"{ident.get('label') or '?'}"
-                + (f" - fit score {score:.1f}" if score is not None else ""))
+            bits = [ident.get("label") or "?",
+                    f"{len(ident.get('chapters') or [])} chapters"]
+            if best.get("score") is not None:
+                bits.append(f"fit score {best['score']:.1f}")
+            if best.get("rate_spread") is not None:
+                bits.append(f"rate spread {best['rate_spread'] * 100:.1f}%")
+            if ident.get("duration_ratio"):
+                bits.append(f"runtime ratio {ident['duration_ratio']:.3f}")
+            text = " · ".join(bits) + {
+                "consistent": " - consistent: this edition fits the audio",
+                "weak": " - weak: positions are provisional, check a few by "
+                        "ear",
+                "rejected": " - rejected: most likely a different edition; "
+                            "try another ASIN or chapter file",
+            }[verdict]
+            for reason in ident.get("blocked") or []:
+                text += f"\n! {reason}"
+            self.identify_result.set(text)
         else:
             self.identify_result.set("")
+        self.identify_btn.configure(
+            text="Try another edition" if verdict == "rejected"
+            else "Identify")
         al = self.analysis.get("alignment") or {}
         if al:
             rate = al.get("rate")
@@ -1503,12 +1573,33 @@ class WorkflowPanel(ttk.Frame):
         if path:
             self.identify_value.set(path)
 
+    def _same_source_as_last(self) -> bool:
+        label = (self.analysis.get("identification") or {}).get("label") or ""
+        value = self.identify_value.get().strip()
+        mode = self.identify_mode.get()
+        if mode == "asin":
+            return label == f"Audnexus {value}"
+        if mode == "json":
+            return bool(value) and label == value
+        return os.path.basename(label) == "chapters.embedded.json"
+
     def cmd_identify_primary(self):
+        verdict = identify_verdict(self.analysis.get("identification") or {})
+        if verdict == "rejected" and self._same_source_as_last():
+            # the same source would be rejected again: ask for another one
+            self.identify_entry.focus_set()
+            self.identify_entry.select_range(0, "end")
+            self.app.log("enter a different ASIN or chapters JSON file, "
+                         "then Identify")
+            return
         mode = self.identify_mode.get()
         if mode == "asin":
             asin = self.identify_value.get().strip()
             if asin:
                 self.cmd_identify_asin(asin)
+            else:
+                self.identify_entry.focus_set()
+                self.app.log("enter an Audible ASIN to identify from")
         elif mode == "json":
             path = self.identify_value.get().strip()
             if path and os.path.isfile(path):
@@ -1784,12 +1875,17 @@ class WorkflowPanel(ttk.Frame):
 
     def _update_byear(self, row):
         name = row.get("title") or f"chapter {row['index'] + 1}"
+        # long titles are elided so the column never outgrows the panel
+        name = _elide(name, fonts.derived(self, weight="bold"), 360)
         self.byear_title.set(f"{name}  (#{row['index'] + 1})")
         conf = row.get("confidence")
         conf_s = f"{conf:.2f}" if isinstance(conf, (int, float)) \
             else (conf or "–")
-        self.byear_info.set(f"placed {_t(row.get('time'))}   "
-                            f"conf {conf_s}")
+        t = row.get("time")
+        if t is None or str(t) in ("", "-"):
+            self.byear_info.set("not placed yet")
+        else:
+            self.byear_info.set(f"placed {_t(t)}   confidence {conf_s}")
 
     def _prefill_sweep(self, row):
         """Estimate listening spots: ±5 min around the chapter's time."""
