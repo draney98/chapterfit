@@ -10,49 +10,51 @@ from __future__ import annotations
 import json
 import os
 import queue
-import shlex
-import statistics
 import time
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
-from chaptertools.envelope.alignment import measurement_value, pinned_times
-from chaptertools.envelope.emit import select_chapters
-from chaptertools.util import clock, hms, module_argv, package_env, parse_time
+from chaptertools.util import clock, hms, package_env, parse_time
 
 from . import fonts, palette, tips
+from .commands import (
+    META_FLAGS,
+    align_argv,
+    chapterfit_prefix,
+    emit_argv,
+    identify_argv,
+    job_argv,
+    near_spec,
+    same_source,
+    whisper_argv,
+)
 from .facts import MediaFactsLoader
 from .harvest import found_summary, placeholder_harvest
 from .library import analysis_path, load_analysis, work_dir_for
+from .panels import StagePanels
+from .projection import WorkflowProjection
 from .runner import Job
 from .stages import (
     ATTENTION,
     BLOCKED,
-    PENDING,
     STAGE_KEYS,
     STAGE_LABELS,
     DiskFacts,
     StageBar,
     identify_verdict,
     next_stage,
-    recommend,
     resolve_evidence,
     stage_states,
 )
-
-CHAPTERFIT_MODULE = "chaptertools.cli.chapterfit"
+from .table import CHAPTER_COLUMNS, TableViews
 
 
 def resolve_chapterfit(python: str | None = None) -> list[str]:
     """chapterfit as a module of the package this GUI runs from; jobs get
     package_env() so any interpreter finds it (the whisper venv included).
-
-    Runs with -u: stdout is unbuffered, so when a step dies its stderr
-    (errors, tracebacks) interleaves in true order in the log instead of
-    appearing above the flushed stdout block.
     """
-    return module_argv(CHAPTERFIT_MODULE, python=python, unbuffered=True)
+    return chapterfit_prefix(python)
 
 
 def whisper_python() -> str | None:
@@ -90,117 +92,8 @@ def _t(v) -> str:
     return str(v) if isinstance(v, str) and ":" in v else hms(v)
 
 
-CADENCE_WINDOW = 300.0  # a predicted position only claims silences this near
-
-# (column id, heading, widest value it can hold, anchor); Title stretches
-CHAPTER_COLUMNS = (
-    ("index", "#", "?999", "e"),
-    ("title", "Title", None, "w"),
-    ("published", "Published", "12:34:56.789", "e"),
-    ("time", "Placed", "12:34:56.789", "e"),
-    ("gap", "Gap", "12.34 s", "e"),
-    ("confidence", "Conf", "0.00", "e"),
-    ("pinned", "Pin", "! pin", "center"),
-)
-CELL_PAD = 24  # treeview cell padding + heading separator, both sides
-SHORTCUTS = ("Space play/pause · ←/→ ±5 s · Shift+←/→ ±10 s · "
-             "Enter pin · Delete remove pin")
-TITLE_MIN = "An Average Chapter Title"
-
-
-def similar_gaps(gaps: list[dict], pins: dict[int, float],
-                 chapters: list[dict], mode: str,
-                 limit: int = 25) -> list[dict]:
-    """The gaps most similar to the pinned chapters.
-
-    mode "cadence": the pins (published start -> pin time) anchor a local
-    reading rate; each unpinned chapter's position is predicted and the
-    silences nearest those predictions are the candidates.
-    mode "duration": the reference is the median duration of the silences
-    the pins sit on; the closest-duration silences are the candidates.
-
-    Returns [{"gap": g, "pred": s|None, "chapter_title": str,
-              "ref": s|None}] best-first, capped at `limit`.
-    """
-    if not pins or not gaps:
-        return []
-
-    def on_gap(t):
-        best, bd = None, 1e9
-        for g in gaps:
-            d = abs(g["mid"] - t)
-            if d < bd:
-                best, bd = g, d
-        return best if bd <= 0.06 else None
-
-    pin_mids = {round(g["mid"], 3) for t in pins.values()
-                if (g := on_gap(t))}
-
-    if mode == "duration":
-        ref_durs = [g["dur"] for t in pins.values() if (g := on_gap(t))]
-        if not ref_durs:
-            return []
-        ref = statistics.median(ref_durs)
-        out = []
-        for g in sorted(gaps, key=lambda g: abs(g["dur"] - ref)):
-            if round(g["mid"], 3) in pin_mids:
-                continue
-            out.append({"gap": g, "pred": None, "chapter_title": "",
-                        "ref": ref})
-            if len(out) >= limit:
-                break
-        return out
-
-    # cadence: predict each unpinned chapter from the pin anchors
-    anchors = sorted((chapters[i]["start"], t) for i, t in pins.items()
-                     if i < len(chapters))
-
-    def predict(i):
-        if not anchors:
-            return None
-        p = chapters[i]["start"]
-        if len(anchors) == 1:
-            return anchors[0][1] + (p - anchors[0][0])
-        if anchors[0][0] <= p <= anchors[-1][0]:
-            for (p1, t1), (p2, t2) in zip(anchors, anchors[1:], strict=False):
-                if p1 <= p <= p2:
-                    if p2 == p1:
-                        return t1
-                    return t1 + (t2 - t1) * (p - p1) / (p2 - p1)
-        if p < anchors[0][0]:
-            (p1, t1), (p2, t2) = anchors[0], anchors[1]
-        else:
-            (p1, t1), (p2, t2) = anchors[-2], anchors[-1]
-        rate = (t2 - t1) / (p2 - p1)
-        return t1 + rate * (p - p1)
-
-    candidates = []
-    for i, ch in enumerate(chapters):
-        if i in pins:
-            continue
-        pred = predict(i)
-        if pred is None:
-            continue
-        for g in gaps:
-            dist = abs(g["mid"] - pred)
-            if dist <= CADENCE_WINDOW and round(g["mid"], 3) not in pin_mids:
-                candidates.append((dist, g, pred, ch.get("title", "")))
-    candidates.sort(key=lambda x: x[0])
-    out, seen = [], set()
-    for _dist, g, pred, title in candidates:
-        key = round(g["mid"], 3)
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append({"gap": g, "pred": pred, "chapter_title": title,
-                    "ref": None})
-        if len(out) >= limit:
-            break
-    return out
-
-
-class WorkflowPanel(ttk.Frame):
-    """The main area: header, stage bar, stage panels, notebook tabs."""
+class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
+    """Coordinator: header, stage bar, projection refresh, command jobs."""
 
     def __init__(self, master, app):
         super().__init__(master, padding=(8, 4))
@@ -211,7 +104,7 @@ class WorkflowPanel(ttk.Frame):
         self.analysis: dict = {}
         self.harvest: dict = {}
         self._row_data: dict = {}
-        self._cf = resolve_chapterfit()
+        self._cf = chapterfit_prefix()
         self._stage: str = "measure"
         self._disk: DiskFacts | None = None
         self.facts = MediaFactsLoader()
@@ -336,36 +229,6 @@ class WorkflowPanel(ttk.Frame):
         self._layout_resolve(side_by_side=need <= width)
 
     # ---------------------------------------------------------- stage panels
-    def _result_line(self, parent, row, colspan=1):
-        var = tk.StringVar(value="")
-        lbl = ttk.Label(parent, textvariable=var, foreground=palette.MUTED,
-                        justify="left")
-        lbl.grid(row=row, column=0, columnspan=colspan, sticky="w",
-                 pady=(4, 0))
-        self._wrap_labels.append(lbl)
-        return var
-
-    def _panel_measure(self, host):
-        p = ttk.Frame(host)
-        p.columnconfigure(0, weight=1)
-        row = ttk.Frame(p)
-        row.grid(row=0, column=0, sticky="ew")
-        self.measure_btn = self._primary(row, 0, 0, "Run measure",
-                                         self.cmd_measure)
-        ttk.Label(row, text="analyzes the audio: loudness envelope, timeline "
-                            "check, noise calibration, gaps").grid(
-            row=0, column=1, sticky="w", padx=8)
-        self.measure_result = self._result_line(p, row=1, colspan=1)
-        self._tip(self.measure_btn, "decode the whole file once: envelope, "
-                     "timeline check, calibration, and the gap list")
-        self.copy_fix_btn = ttk.Button(p, text="Copy fix command",
-                                       command=self._copy_header_fix)
-        self.copy_fix_btn.grid(row=2, column=0, sticky="w", pady=(4, 0))
-        self.copy_fix_btn.grid_remove()
-        self._tip(self.copy_fix_btn, "copy the ffmpeg command that rewrites "
-                  "the header; run it, then Measure the fixed file")
-        return p
-
     def _copy_header_fix(self):
         fix = self._header_fix()
         if fix:
@@ -373,581 +236,7 @@ class WorkflowPanel(ttk.Frame):
             self.clipboard_append(fix)
             self.app.log("copied: " + fix)
 
-    def _build_gaps_tab(self):
-        """Gap strip: pinned chapters + the gaps most similar to them."""
-        p = ttk.Frame(self.notebook, padding=4)
-        p.columnconfigure(0, weight=1)
-        p.rowconfigure(1, weight=1)
-        controls = ttk.Frame(p)
-        controls.grid(row=0, column=0, sticky="ew")
-        ttk.Label(controls, text="Similar gaps by:").pack(side="left")
-        self.gap_mode_var = tk.StringVar(value="cadence")
-        for text, mode in (("chapter cadence", "cadence"),
-                           ("silence length", "duration")):
-            ttk.Radiobutton(controls, text=text, value=mode,
-                            variable=self.gap_mode_var,
-                            command=self._draw_gap_graph).pack(
-                side="left", padx=(6, 0))
-        self._tip(controls.winfo_children()[1],
-                     "silences nearest where the pin spacing predicts the "
-                     "unpinned chapters should fall")
-        self._tip(controls.winfo_children()[2],
-                     "silences whose duration matches the ones your pins "
-                     "sit on")
-        self.gap_canvas = tk.Canvas(p, height=120, highlightthickness=0,
-                                    background=palette.FIELD)
-        self.gap_canvas.grid(row=1, column=0, sticky="nsew", pady=(4, 0))
-        self.gap_canvas.bind("<Configure>",
-                             lambda e: self._draw_gap_graph())
-        self.gap_legend = tk.StringVar(value="")
-        ttk.Label(p, textvariable=self.gap_legend,
-                  foreground=palette.MUTED).grid(
-            row=2, column=0, sticky="w")
-        self.notebook.add(p, text="Gaps")
-        self._gaps_tab = p
-
-    def _draw_gap_graph(self):
-        """Bar strip: pinned chapters (purple) + the gaps most similar to
-        them (blue) - by cadence (default) or by silence length."""
-        c = self.gap_canvas
-        c.delete("all")
-        gaps = (self.analysis.get("gaps") or {}).get("gaps") or []
-        dur = (self.analysis.get("envelope") or {}).get("duration") or 0.0
-        pins = {int(k): v for k, v in (self.analysis.get("pins") or {})
-                .items()}
-        chapters = (self.analysis.get("identification") or {}) \
-            .get("chapters") or []
-        if not gaps or not dur:
-            self.gap_legend.set("")
-            return
-        if not pins:
-            self.gap_legend.set("pin chapters to focus the strip")
-            return
-
-        # placed chapters still claim gaps for hover context
-        claimed = {}
-        for r in (self.analysis.get("alignment") or {}).get("results", []):
-            t = r.get("time")
-            if t is None:
-                continue
-            for g in gaps:
-                if abs(g["mid"] - t) <= 0.06:
-                    claimed[round(g["mid"], 3)] = r
-
-        mode = self.gap_mode_var.get()
-        similar = similar_gaps(gaps, pins, chapters, mode)
-
-        # the silences the pins sit on define pin-bar heights
-        def on_gap(t):
-            return min(gaps, key=lambda g: abs(g["mid"] - t)) \
-                if min((abs(g["mid"] - t) for g in gaps), default=1e9) \
-                <= 0.06 else None
-
-        pin_draws = []
-        for idx in sorted(pins):
-            g = on_gap(pins[idx])
-            title = chapters[idx]["title"] if idx < len(chapters) else "?"
-            pin_draws.append({"x": pins[idx], "gap": g,
-                              "title": title, "n": idx + 1})
-
-        durs = [d["gap"]["dur"] for d in pin_draws if d["gap"]] \
-            + [s["gap"]["dur"] for s in similar]
-        maxdur = max(durs) if durs else 1.0
-        width = max(c.winfo_width(), 400)
-        height = max(c.winfo_height(), int(c["height"]))
-        axis_h = tkfont.nametofont("TkDefaultFont", root=self).metrics("linespace") + 4
-        mid_y = height - axis_h
-        PURPLE, BLUE = palette.PIN_BAR, palette.GAP_BAR
-
-        def bar(x_seconds, d, color, tip):
-            x = 4 + (x_seconds / dur) * (width - 8)
-            h = 6 + (d / maxdur) * (mid_y - 10) if d else 8
-            tag = f"g{round(x_seconds, 3)}"
-            c.create_rectangle(x - 2, mid_y - h, x + 2, mid_y,
-                               fill=color, width=0, tags=(tag,))
-            if tip:
-                c.tag_bind(tag, "<Enter>",
-                           lambda e, t=tip: self._gap_tip(t))
-                c.tag_bind(tag, "<Leave>", lambda e: self._gap_tip(None))
-
-        for d in pin_draws:
-            g = d["gap"]
-            tip = (f"{hms(d['x'])} · {d['title']} (#{d['n']}) · pinned"
-                   + (f" · on a {g['dur']:.2f} s silence" if g
-                      else " · off-gap"))
-            bar(d["x"], g["dur"] if g else None, PURPLE, tip)
-
-        for s in similar:
-            g = s["gap"]
-            r = claimed.get(round(g["mid"], 3))
-            note = ""
-            if r is not None:
-                note = f" · claimed by {r['title']} (#{r['index'] + 1})"
-            if mode == "cadence" and s.get("pred") is not None:
-                note += (f" · near {s['chapter_title']}"
-                         f" (predicted {hms(s['pred'])})")
-            elif mode == "duration" and s.get("ref") is not None:
-                note = f" · pins' silences run ~{s['ref']:.2f} s"
-            bar(g["mid"], g["dur"], BLUE,
-                f"{hms(g['mid'])} · {g['dur']:.2f} s{note or ' · unclaimed'}")
-
-        c.create_line(0, mid_y, width, mid_y, fill=palette.MUTED)
-        for frac, anchor in ((0, "w"), (0.5, "center"), (1, "e")):
-            c.create_text(4 + frac * (width - 8), height - axis_h // 2,
-                          text=hms(dur * frac), anchor=anchor,
-                          font="TkDefaultFont", fill=palette.MUTED)
-        by = "cadence" if mode == "cadence" else "silence length"
-        self.gap_legend.set(
-            f"{len(pin_draws)} pinned chapters (purple) · "
-            f"{len(similar)} similar gaps by {by} (blue) · hover for detail")
-
-    _gap_tipwin = None
-
-    def _gap_tip(self, text):
-        if self._gap_tipwin is not None:
-            self._gap_tipwin.destroy()
-            self._gap_tipwin = None
-        if text:
-            c = self.gap_canvas
-            self._gap_tipwin = tw = tk.Toplevel(self)
-            tw.wm_overrideredirect(True)
-            tw.wm_geometry(f"+{c.winfo_pointerx()}+{c.winfo_rooty() - 24}")
-            tk.Label(tw, text=text, background=palette.TIP,
-                     foreground=palette.TEXT, font="TkDefaultFont",
-                     relief="solid", borderwidth=1, padx=4, pady=1).pack()
-
-    def _panel_identify(self, host):
-        p = ttk.Frame(host)
-        p.columnconfigure(1, weight=1)
-        ttk.Label(p, text="Source:").grid(row=0, column=0, sticky="w")
-        self.identify_mode = tk.StringVar(value="asin")
-        self.identify_value = tk.StringVar()
-        radios = ttk.Frame(p)
-        radios.grid(row=0, column=1, columnspan=3, sticky="w")
-        modes = [("ASIN", "asin", "an Audible ASIN; chapters come from "
-                  "Audnexus"),
-                 ("JSON file", "json", "a chapters JSON file on disk"),
-                 ("Embedded", "emb", "the chapters already in the audio "
-                  "file")]
-        self.identify_radios = []
-        for text, mode, tip in modes:
-            rb = ttk.Radiobutton(radios, text=text, value=mode,
-                                 variable=self.identify_mode,
-                                 command=self._identify_mode_changed)
-            rb.pack(side="left", padx=(4, 8))
-            self.identify_radios.append(rb)
-            self._tip(rb, tip)
-        self.identify_entry = ttk.Entry(p, textvariable=self.identify_value,
-                                        width=24)
-        self.identify_entry.grid(row=1, column=1, sticky="ew", padx=(4, 4),
-                                 pady=(4, 0))
-        self.identify_browse = ttk.Button(p, text="Browse…",
-                                          command=self._identify_browse)
-        self.identify_browse.grid(row=1, column=2, sticky="w", pady=(4, 0))
-        self._tip(self.identify_browse, "pick a chapters JSON file")
-        self.identify_btn = self._primary(p, 1, 3, "Identify",
-                                          self.cmd_identify_primary)
-        self.identify_btn.grid_configure(pady=(4, 0))
-        ttk.Label(p, text="chooses and verifies the chapter list against "
-                          "the audio").grid(row=2, column=0, columnspan=4,
-                                            sticky="w", pady=(4, 0))
-        self.identify_result = self._result_line(p, row=3, colspan=4)
-        self._tip(self.identify_btn, "check the chosen chapter list "
-                     "against the real silences before aligning")
-        self._identify_mode_changed()
-        return p
-
-    def _panel_align(self, host):
-        p = ttk.Frame(host)
-        p.columnconfigure(3, weight=1)
-        ttk.Label(p, text="Minimum confidence:").grid(row=0, column=0,
-                                                      sticky="w")
-        self.min_conf = tk.DoubleVar(value=0.5)
-        self.min_conf.trace_add("write", lambda *_: self._refresh_soon())
-        self.min_conf_spin = ttk.Spinbox(p, from_=0.0, to=1.0, increment=0.05,
-                                         width=5, textvariable=self.min_conf)
-        self.min_conf_spin.grid(row=0, column=1, sticky="w")
-        ttk.Label(p, text="Near (CH=TIME):").grid(row=0, column=2, sticky="e",
-                                                  padx=(10, 2))
-        self.near_var = tk.StringVar()
-        self.near_entry = ttk.Entry(p, textvariable=self.near_var, width=12)
-        self.near_entry.grid(row=0, column=3, sticky="w")
-        self.align_btn = self._primary(p, 0, 4, "Align", self.cmd_align)
-        ttk.Label(p, text="places every published chapter on a real gap").grid(
-            row=1, column=0, columnspan=5, sticky="w")
-        self.align_result = self._result_line(p, row=2, colspan=5)
-        self._tip(self.align_btn, "place every published chapter on a "
-                     "real gap, keeping local reading rate consistent")
-        self._tip(self.min_conf_spin, "chapters below this confidence are "
-                  "withheld from Emit (shaded amber in the table)")
-        self._tip(self.near_entry, "optional CH=TIME hint, e.g. 12=3:45:00, "
-                  "that aims the alignment near a known position")
-        return p
-
-    def _panel_resolve(self, host):
-        p = ttk.Frame(host, padding=(4, 2))
-
-        # summary line: unresolved chapters + recommended next action
-        summary = ttk.Frame(p)
-        summary.grid(row=0, column=0, columnspan=2, sticky="ew")
-        # only the chapter links are rebuilt on refresh; the next label stays
-        self.unresolved_frame = ttk.Frame(summary)
-        self.unresolved_frame.pack(side="left")
-        self.next_var = tk.StringVar(value="")
-        self.next_label = ttk.Label(summary, textvariable=self.next_var,
-                                    foreground=palette.OK,
-                                    font=fonts.derived(self, weight="bold"))
-        self.next_label.pack(side="right")
-
-        # left: automatic escalation - label, input, button, cost, status
-        left = ttk.LabelFrame(p, text="Automatic", padding=4)
-        self._resolve_left = left
-        left.columnconfigure(4, weight=1)
-
-        def option(row, label, button, cmd, cost_var, status_var, tip):
-            ttk.Label(left, text=label).grid(row=row, column=0, sticky="e",
-                                             padx=(0, 4))
-            b = ttk.Button(left, text=button, command=cmd)
-            b.grid(row=row, column=2, sticky="ew", padx=4)
-            ttk.Label(left, textvariable=cost_var).grid(row=row, column=3,
-                                                        sticky="w")
-            ttk.Label(left, textvariable=status_var).grid(
-                row=row, column=4, sticky="w", padx=(6, 0))
-            self._tip(b, tip)
-            return b
-
-        self.hint_var = tk.StringVar()
-        self.hint_entry = ttk.Entry(left, textvariable=self.hint_var, width=12)
-        self.hint_entry.grid(row=0, column=1, sticky="ew")
-        self._tip(self.hint_entry, "CH=TIME, e.g. 12=3:45:00")
-        self.hint_status = tk.StringVar(value="")
-        self.hint_btn = option(
-            0, "Position hint:", "Align with hint", self._resolve_hint,
-            tk.StringVar(value="free"), self.hint_status,
-            "re-runs Align aimed at roughly this position (CH=TIME); "
-            "free - it is not a pin")
-
-        self.listen_status = tk.StringVar(value="not run")
-        self.listen_btn = option(
-            1, "Listen:", "Listen", self.cmd_listen,
-            tk.StringVar(value="~4 min"), self.listen_status,
-            "transcribes ~13 s after each candidate gap (about 4 minutes "
-            "for a typical book) and pins the chapter announcements it "
-            "hears")
-
-        rng = ttk.Frame(left)
-        rng.grid(row=2, column=1, sticky="ew")
-        self.sweep_start = tk.StringVar()
-        self.sweep_end = tk.StringVar()
-        self.sweep_start_entry = ttk.Entry(rng, textvariable=self.sweep_start,
-                                           width=9)
-        self.sweep_start_entry.pack(side="left")
-        ttk.Label(rng, text="–").pack(side="left")
-        self.sweep_end_entry = ttk.Entry(rng, textvariable=self.sweep_end,
-                                         width=9)
-        self.sweep_end_entry.pack(side="left")
-        for e in (self.sweep_start_entry, self.sweep_end_entry):
-            # a typed range belongs to the user: row selection stops filling it
-            e.bind("<Key>", self._sweep_edited, add="+")
-            self._tip(e, "start and end of the span to sweep (H:MM:SS); "
-                         "selecting a chapter fills them until you type")
-        self.range_cost = tk.StringVar(value="")
-        self.range_status = tk.StringVar(value="")
-        self.range_btn = option(
-            2, "Sweep range:", "Sweep range", self._sweep_range,
-            self.range_cost, self.range_status,
-            "reads this span continuously and pins announced chapters - "
-            "the targeted fix for one stubborn chapter")
-
-        self.probe_status = tk.StringVar(value="not run")
-        self.probe_btn = option(
-            3, "Sweep probe:", "Probe 10 min", self._sweep_probe,
-            tk.StringVar(value="10 min"), self.probe_status,
-            "sweeps 10 minutes from the quarter point to learn whether "
-            "chapters are announced at all")
-
-        self.full_cost = tk.StringVar(value="")
-        self.swept_status = tk.StringVar(value="not run")
-        self.full_btn = option(
-            4, "Full sweep:", "Full sweep", self._sweep_full,
-            self.full_cost, self.swept_status,
-            "sweeps the whole book; already-swept spans are cached and "
-            "cost nothing to redo")
-
-        # right: pin by ear - one row per step, top to bottom
-        right = ttk.LabelFrame(p, text="Pin by ear", padding=4)
-        self._resolve_right = right
-        right.columnconfigure(0, weight=1)
-        what = ttk.Frame(right)
-        what.grid(row=0, column=0, sticky="w")
-        self.byear_title = tk.StringVar(value="Select a chapter in the table")
-        ttk.Label(what, textvariable=self.byear_title,
-                  font=fonts.derived(self, weight="bold")).pack(side="left")
-        self.byear_info = tk.StringVar(value="")
-        ttk.Label(what, textvariable=self.byear_info).pack(
-            side="left", padx=(8, 0))
-
-        transport = ttk.Frame(right)
-        transport.grid(row=1, column=0, sticky="w", pady=(4, 0))
-        self.seek_btns = []
-
-        # clam gives buttons an 11-character minimum; transport keys are short
-        ttk.Style(self).configure("Transport.TButton", width=0)
-
-        def seek(delta):
-            b = ttk.Button(transport, text=f"{delta:+d} s",
-                           style="Transport.TButton",
-                           command=lambda d=delta: self._key_seek(d),
-                           state=["disabled"])
-            b.pack(side="left", padx=1)
-            self.seek_btns.append(b)
-            self._tip(b, f"skip {'back' if delta < 0 else 'forward'} "
-                         f"{abs(delta)} s ({'Shift+' if abs(delta) == 10 else ''}"
-                         f"{'←' if delta < 0 else '→'} in the table)")
-
-        seek(-10)
-        seek(-5)
-        self.play_btn = ttk.Button(transport, text="▶ Play",
-                                   command=self._key_playpause,
-                                   state=["disabled"])
-        self.play_btn.pack(side="left", padx=1)
-        self._tip(self.play_btn, "play from the selected chapter "
-                     "(double-click a row or Space does the same); "
-                     "pauses/resumes while playing")
-        seek(5)
-        seek(10)
-        self.stop_btn = ttk.Button(transport, text="■ Stop playback",
-                                   command=self.app.stop_audio,
-                                   state=["disabled"])
-        self.stop_btn.pack(side="left", padx=(6, 0))
-        self._tip(self.stop_btn, "stop playback")
-
-        ttk.Label(transport, text="Playback:").pack(side="left",
-                                                    padx=(12, 0))
-        self.playback_var = tk.StringVar(value="0:00:00.000")
-        ttk.Label(transport, textvariable=self.playback_var,
-                  font=tkfont.nametofont("TkFixedFont", root=self)).pack(
-            side="left", padx=(4, 0))
-
-        time_row = ttk.Frame(right)
-        time_row.grid(row=2, column=0, sticky="w", pady=(4, 0))
-        ttk.Label(time_row, text="Time (H:MM:SS):").pack(side="left")
-        self.pin_time = tk.StringVar(value="0:00:00.000")
-        pin_time_entry = ttk.Entry(time_row, textvariable=self.pin_time,
-                                   width=12)
-        pin_time_entry.pack(side="left", padx=(4, 6))
-        pin_time_entry.bind("<Return>",
-                            lambda e: self.play_from_time() or "break")
-        self._tip(pin_time_entry, "the time Pin will mark and Play from "
-                     "time will start at (H:MM:SS); Enter plays from it")
-        self._set_btn = ttk.Button(time_row, text="Set from playback",
-                                   command=self.set_from_playback,
-                                   state=["disabled"])
-        self._set_btn.pack(side="left", padx=(0, 4))
-        self._tip(self._set_btn, "copy the current (frozen) playback "
-                     "clock into the time field")
-        self.playfrom_btn = ttk.Button(time_row, text="▶ Play from time",
-                                       command=self.play_from_time,
-                                       state=["disabled"])
-        self.playfrom_btn.pack(side="left")
-        self._tip(self.playfrom_btn, "start playback (no time limit) at "
-                     "the time in the field")
-        self.pin_ch = tk.StringVar()
-        self._pin_autofilled = False
-
-        pin_row = ttk.Frame(right)
-        pin_row.grid(row=3, column=0, sticky="w", pady=(4, 0))
-        self.pin_btn = ttk.Button(pin_row, text="Pin", command=self.cmd_pin)
-        self.pin_btn.pack(side="left", padx=(0, 4))
-        self._tip(self.pin_btn, "fix the selected chapter at the time in "
-                     "the field, then re-align (Enter in the table)")
-        self.unpin_btn = ttk.Button(pin_row, text="Remove pin",
-                                    command=self.cmd_unpin)
-        self.unpin_btn.pack(side="left")
-        self._tip(self.unpin_btn, "drop this chapter's pin and re-align "
-                     "(Delete in the table)")
-        self._resolve_stacked = None
-        self._layout_resolve(side_by_side=True)
-        return p
-
-    def _layout_resolve(self, side_by_side: bool):
-        """Automatic and By ear sit side by side when the window is wide
-        enough, and stack when it is not - neither ever clips."""
-        if self._resolve_stacked is (not side_by_side):
-            return
-        self._resolve_stacked = not side_by_side
-        left, right = self._resolve_left, self._resolve_right
-        p = left.master
-        if side_by_side:
-            p.columnconfigure(0, weight=3)
-            p.columnconfigure(1, weight=2)
-            left.grid(row=1, column=0, columnspan=1, sticky="nsew")
-            right.grid(row=1, column=1, columnspan=1, sticky="nsew",
-                       padx=(8, 0), pady=0)
-        else:
-            p.columnconfigure(0, weight=1)
-            p.columnconfigure(1, weight=0)
-            left.grid(row=1, column=0, columnspan=2, sticky="nsew")
-            right.grid(row=2, column=0, columnspan=2, sticky="nsew",
-                       padx=0, pady=(6, 0))
-
-    def _panel_emit(self, host):
-        p = ttk.Frame(host)
-        info = ttk.LabelFrame(p, text="Book info (written to ID3 on emit)",
-                              padding=6)
-        info.pack(side="left", fill="both", expand=True)
-        for c in range(6):
-            info.columnconfigure(c, weight=1)
-        self.meta_vars = {}
-        for n, key in enumerate(("title", "author", "album", "year",
-                                 "genre", "comment")):
-            row, col = divmod(n, 3)
-            ttk.Label(info, text=f"{key}:").grid(row=row * 2, column=col * 2,
-                                                 sticky="e", padx=(8, 2))
-            var = tk.StringVar()
-            self.meta_vars[key] = var
-            ttk.Entry(info, textvariable=var, width=14).grid(
-                row=row * 2, column=col * 2 + 1, sticky="ew", padx=(0, 8),
-                pady=1)
-        self.reread_btn = ttk.Button(info, text="Re-read",
-                                     command=self._reharvest)
-        self.reread_btn.grid(row=2, column=6, sticky="w")
-        self._tip(self.reread_btn, "re-read tags and chapters from the "
-                     "folder (after emit changed the file)")
-        found = ttk.Label(info, textvariable=self.found_var,
-                          foreground=palette.MUTED, justify="left")
-        found.grid(row=4, column=0, columnspan=7, sticky="w", pady=(4, 0))
-        self._wrap_labels.append(found)
-        side = ttk.Frame(p)
-        side.pack(side="left", fill="y", padx=(12, 0))
-        self.embed_var = tk.BooleanVar(value=True)
-        embed_cb = ttk.Checkbutton(side, text="Embed chapters",
-                                   variable=self.embed_var)
-        embed_cb.grid(row=0, column=0, sticky="w")
-        self._tip(embed_cb, "also write a chaptered copy of the audio "
-                  "(<name>.chapters.<ext>) for Finalize to put in place; "
-                  "off writes only chapters.txt and chapters.json")
-        self.emit_btn = ttk.Button(side, text="Emit", command=self.cmd_emit)
-        self.emit_btn.grid(row=1, column=0, sticky="ew", pady=4)
-        self._tip(self.emit_btn, "write the supported chapters into a "
-                     "chaptered copy of the file (and the ID3 tags above)")
-        self.emit_result = self._result_line(side, row=2)
-        return p
-
-    def _panel_finalize(self, host):
-        p = ttk.Frame(host)
-        p.columnconfigure(1, weight=1)
-        self.finalize_btn = self._primary(p, 0, 0, "Dry run",
-                                          self.cmd_finalize_dry)
-        self.apply_btn = ttk.Button(p, text="Apply", state=["disabled"],
-                                    command=self.cmd_finalize_apply)
-        self.apply_btn.grid(row=0, column=1, sticky="w", padx=(8, 0))
-        self._tip(self.finalize_btn, "preview everything finalize "
-                     "would do - nothing is changed")
-        self.allow_delete_var = tk.BooleanVar(value=False)
-        allow_delete_cb = ttk.Checkbutton(
-            p, text="allow delete-and-re-add (clears listening progress)",
-            variable=self.allow_delete_var)
-        allow_delete_cb.grid(row=1, column=0, columnspan=2, sticky="w")
-        self._tip(allow_delete_cb, "last resort: delete the ABS database "
-                     "entry and let the library scan re-add it; clears "
-                     "listening progress")
-        self.finalize_result = self._result_line(p, row=2, colspan=2)
-        self._tip(self.apply_btn, "stage the original away, rename the "
-                     "chaptered file into place, write album.nfo, and "
-                     "reload Audiobookshelf")
-        return p
-
-    def _primary(self, parent, row, col, text, cmd):
-        b = ttk.Button(parent, text=text, command=cmd)
-        b.grid(row=row, column=col, sticky="w", padx=2)
-        return b
-
     # ------------------------------------------------------------- tabs --
-    def size_table(self):
-        """Table font is the UI base + 2 pt (owner directive). Each column
-        is as wide as its heading or its widest possible value; re-run
-        after a font size change."""
-        row_font = fonts.derived(self, grow=2)
-        head_font = tkfont.nametofont("TkHeadingFont", root=self)
-        ttk.Style(self).configure(
-            "Chapter.Treeview", font=row_font,
-            rowheight=row_font.metrics("linespace") + 2)
-        self.table_font = row_font
-        for col, heading, sample, _anchor in CHAPTER_COLUMNS:
-            need = max(head_font.measure(heading),
-                       row_font.measure(sample or TITLE_MIN)) + CELL_PAD
-            self.tree.column(col, minwidth=need, width=need)
-
-    def _build_chapters_tab(self):
-        tab = ttk.Frame(self.notebook)
-        tab.columnconfigure(0, weight=1)
-        tab.rowconfigure(0, weight=1)
-        cols = [c[0] for c in CHAPTER_COLUMNS]
-        self.tree = ttk.Treeview(tab, columns=cols, show="headings",
-                                 style="Chapter.Treeview")
-        for col, heading, _sample, anchor in CHAPTER_COLUMNS:
-            self.tree.heading(col, text=heading, anchor=anchor)
-            self.tree.column(col, anchor=anchor, stretch=col == "title")
-        self.size_table()
-        self.tree.tag_configure("unplaced", background=palette.ROW_UNPLACED)
-        self.tree.tag_configure("lowconf", background=palette.ROW_LOWCONF)
-        self.tree.tag_configure("conflict", background=palette.ROW_CONFLICT)
-        self.tree.grid(row=0, column=0, sticky="nsew")
-        sb = ttk.Scrollbar(tab, orient="vertical", command=self.tree.yview)
-        sb.grid(row=0, column=1, sticky="ns")
-        self.tree.configure(yscrollcommand=sb.set)
-        self.tree.bind("<Double-1>", lambda e: self.preview_row())
-        self.tree.bind("<<TreeviewSelect>>", self._fill_from_selection)
-        for seq, fn in (("space", self._key_playpause),
-                        ("Left", lambda e: self._key_seek(-5)),
-                        ("Right", lambda e: self._key_seek(5)),
-                        ("Shift-Left", lambda e: self._key_seek(-10)),
-                        ("Shift-Right", lambda e: self._key_seek(10)),
-                        ("Return", lambda e: self.cmd_pin()),
-                        ("KP_Enter", lambda e: self.cmd_pin()),
-                        ("Delete", lambda e: self.cmd_unpin())):
-            self.tree.bind(seq, fn)
-        foot = ttk.Frame(tab)
-        foot.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(2, 0))
-        legend = ttk.Frame(foot)
-        for color, text in ((palette.ROW_UNPLACED, "unplaced"),
-                            (palette.ROW_LOWCONF,
-                             "below minimum confidence (withheld)"),
-                            (palette.ROW_CONFLICT,
-                             "conflicting pin (! in Pin)")):
-            tk.Label(legend, text="   ", background=color, relief="solid",
-                     borderwidth=1).pack(side="left", padx=(0, 4))
-            ttk.Label(legend, text=text).pack(side="left", padx=(0, 12))
-        ttk.Label(legend, text="?N = not written to the file").pack(
-            side="left")
-        self.shortcut_label = ttk.Label(foot, text=SHORTCUTS,
-                                        foreground=palette.MUTED)
-        self._table_legend = legend
-        self._foot_split = None
-        foot.bind("<Configure>", self._layout_foot)
-        self._layout_foot()
-        self.conflict_note = tk.StringVar(value="")
-        self.conflict_label = ttk.Label(tab, textvariable=self.conflict_note,
-                                        foreground=palette.WARN)
-        self.notebook.add(tab, text="Chapters")
-        self._chapters_tab = tab
-
-    def _layout_foot(self, event=None):
-        """Legend and shortcuts share a line when they fit, else stack."""
-        legend, keys = self._table_legend, self.shortcut_label
-        width = event.width if event else 10 ** 6
-        split = legend.winfo_reqwidth() + keys.winfo_reqwidth() + 24 > width
-        if split == self._foot_split:
-            return
-        self._foot_split = split
-        legend.grid(row=0, column=0, sticky="w")
-        if split:
-            keys.grid(row=1, column=0, sticky="w", padx=0)
-        else:
-            keys.grid(row=0, column=1, sticky="e", padx=(24, 0))
-            legend.master.columnconfigure(1, weight=1)
-
     def _build_transcripts_tab(self):
         tab = ttk.Frame(self.notebook)
         tab.columnconfigure(1, weight=1)
@@ -1254,82 +543,41 @@ class WorkflowPanel(ttk.Frame):
         if self.audio:
             self.analysis = load_analysis(self.audio, self.work_dir)
 
+        proj = WorkflowProjection(
+            self.analysis,
+            self.min_conf.get() if hasattr(self, "min_conf") else 0.5,
+            self._disk or DiskFacts(),
+            audio=self.audio)
+        self._projection = proj
         sel = self.tree.selection()
         scroll = self.tree.yview()
         for i in self.tree.get_children():
             self.tree.delete(i)
-        alignment = self.analysis.get("alignment") or {}
-        results = list(alignment.get("results", []))
-        if not results:
-            # before Align: show the identified list, honoring any pins
-            # (sweep/listen pins drop alignment until the next align runs)
-            pins_now = self.analysis.get("pins") or {}
-            results = [
-                {"index": i, "title": c.get("title", ""),
-                 "published": c.get("start"),
-                 "time": pins_now.get(str(i)),
-                 "confidence": 1.0 if str(i) in pins_now else None,
-                 "pinned": str(i) in pins_now}
-                for i, c in enumerate(
-                    (self.analysis.get("identification") or {})
-                    .get("chapters") or [])]
-        self._conflicts_unknown = False
-        conflicts = set(alignment.get("conflicts") or [])
-        aligned = bool(self.analysis.get("alignment"))
-        withheld = select_chapters(results, self.min_conf.get())[1] \
-            if aligned else set()
-        # artifacts from before conflicts were stored cannot say which pins
-        # conflict; say so instead of guessing from the posterior spread
-        self._conflicts_unknown = aligned and "conflicts" not in alignment \
-            and any(r.get("pinned") for r in results)
+        self._conflicts_unknown = proj.conflicts_unknown
         self._row_data = {}
-        gap_at = {round(g["mid"], 3): g for g in
-                  (self.analysis.get("gaps") or {}).get("gaps") or []
-                  if g.get("mid") is not None}
-        for r in results:
-            n = r["index"] + 1
-            mark = f"?{n}" if aligned and n in withheld else n
-            tags = []
-            pin = "pin" if r.get("pinned") else ""
-            if aligned and r.get("pinned") and r["index"] in conflicts:
-                tags.append("conflict")
-                pin = "! pin"
-            elif r.get("time") is None:
-                tags.append("unplaced")
-            elif aligned and n in withheld:
-                tags.append("lowconf")
-            g = gap_at.get(round(r["time"], 3)) \
-                if r.get("time") is not None else None
-            iid = self.tree.insert("", "end", tags=tuple(tags), values=(
-                mark, r.get("title", ""), hms(r.get("published")),
-                _t(r.get("time")),
-                f"{g['dur']:.2f} s" if g and g.get("dur") is not None
-                else "",
-                "" if r.get("confidence") is None
-                else f"{r['confidence']:.2f}",
-                pin,
-            ))
-            self._row_data[iid] = r
+        for r in proj.rows:
+            iid = self.tree.insert("", "end", tags=r.tags, values=(
+                r.mark, r.title, hms(r.published), _t(r.placed),
+                r.gap,
+                "" if r.confidence is None else f"{r.confidence:.2f}",
+                r.pin))
+            self._row_data[iid] = r.source
         if sel and self.tree.exists(sel[0]):
             self.tree.selection_set(sel[0])
         self.tree.yview_moveto(scroll[0] if scroll else 0)
 
         self.conflict_note.set(
             "pins from an older Align: re-run Align to detect conflicting "
-            "pins" if self._conflicts_unknown else "")
-        if self._conflicts_unknown:
+            "pins" if proj.conflicts_unknown else "")
+        if proj.conflicts_unknown:
             self.conflict_label.grid(row=2, column=0, columnspan=2,
                                      sticky="w")
         else:
             self.conflict_label.grid_remove()
-        total = len(results)
-        weak = sum(1 for r in results if r.get("time") is None
-                   or (r.get("confidence") or 0) < self.min_conf.get())
-        conf = total - weak
         self.notebook.tab(self._chapters_tab,
-                          text=f"Chapters {conf}/{total}")
+                          text=f"Chapters {proj.confident_count}/{len(proj.rows)}")
 
-        states = self._compute_states()
+        states = proj.states
         self.stage_bar.update(states, self._stage)
         self._update_banner(states)
         self._update_panel_results(states)
@@ -1404,97 +652,41 @@ class WorkflowPanel(ttk.Frame):
 
     def _header_fix(self) -> str | None:
         """The ffmpeg command that rewrites a wrong Xing header."""
-        src = self.analysis.get("source") or {}
-        if not self.audio or src.get("timeline_trustworthy", True):
-            return None
-        stem, ext = os.path.splitext(self.audio)
-        return (f"ffmpeg -i {shlex.quote(self.audio)} -c:a copy "
-                f"-write_xing 1 {shlex.quote(stem + '.fixed' + ext)}")
+        proj = getattr(self, "_projection", None)
+        if proj is None:
+            proj = WorkflowProjection(
+                self.analysis,
+                self.min_conf.get() if hasattr(self, "min_conf") else 0.5,
+                self._disk or DiskFacts(), audio=self.audio)
+        return proj.header_fix
 
     def _update_panel_results(self, states: dict):
-        gaps = self.analysis.get("gaps") or {}
-        pops = gaps.get("populations") or []
-        src = self.analysis.get("source") or {}
-        if states["measure"]["state"] == PENDING:
-            self.measure_result.set("")
-        else:
-            lines = [f"{len(gaps.get('gaps') or [])} gaps in {len(pops)} "
-                     f"length populations"
-                     + (f"; longest: {pops[-1]['n']} around "
-                        f"{pops[-1]['centre']:.1f} s" if pops else "")]
-            if src.get("declared_duration") is not None \
-                    and src.get("decoded_duration") is not None:
-                lines.append(
-                    f"header says {hms(src['declared_duration'])}, audio is "
-                    f"{hms(src['decoded_duration'])} "
-                    f"({src.get('header_error_sec', 0):+.1f} s)")
-            fix = self._header_fix()
-            if fix:
-                lines.append(
-                    f"The header is wrong by "
-                    f"{src.get('header_error_ratio', 0) * 100:.1f}% - every "
-                    f"seek lands off. Fix it, then re-run Measure:\n    {fix}")
-            self.measure_result.set("\n".join(lines))
-        if self._header_fix():
+        proj = getattr(self, "_projection", None)
+        if proj is None or proj.analysis is not self.analysis:
+            proj = WorkflowProjection(
+                self.analysis,
+                self.min_conf.get() if hasattr(self, "min_conf") else 0.5,
+                self._disk or DiskFacts(), audio=self.audio)
+            self._projection = proj
+        self.measure_result.set(proj.measure_text)
+        if proj.header_fix:
             self.copy_fix_btn.grid()
         else:
             self.copy_fix_btn.grid_remove()
-
-        ident = self.analysis.get("identification") or {}
-        verdict = identify_verdict(ident)
-        best = ident.get("best_trial") or {}
-        if ident:
-            bits = [ident.get("label") or "?",
-                    f"{len(ident.get('chapters') or [])} chapters"]
-            if best.get("score") is not None:
-                bits.append(f"fit score {best['score']:.1f}")
-            if best.get("rate_spread") is not None:
-                bits.append(f"rate spread {best['rate_spread'] * 100:.1f}%")
-            if ident.get("duration_ratio"):
-                bits.append(f"runtime ratio {ident['duration_ratio']:.3f}")
-            text = " · ".join(bits) + {
-                "consistent": " - consistent: this edition fits the audio",
-                "weak": " - weak: positions are provisional, check a few by "
-                        "ear",
-                "rejected": " - rejected: most likely a different edition; "
-                            "try another ASIN or chapter file",
-            }[verdict]
-            for reason in ident.get("blocked") or []:
-                text += f"\n! {reason}"
-            self.identify_result.set(text)
-        else:
-            self.identify_result.set("")
-        self.identify_btn.configure(
-            text="Try another edition" if verdict == "rejected"
-            else "Identify")
-        al = self.analysis.get("alignment") or {}
-        if al:
-            rate = al.get("rate")
-            drift = f"{(rate - 1) * 3600:+.1f}s/h" if rate else "?"
-            self.align_result.set(
-                f"placed {sum(1 for r in al['results'] if r['time'] is not None)}"
-                f"/{len(al['results'])} - rate {rate} ({drift})")
-        emitted = self.analysis.get("emitted") or {}
-        if emitted:
-            total = len((self.analysis.get("alignment") or {}).get("results",
-                                                                   []))
-            self.emit_result.set(
-                f"{emitted.get('count')} embedded, "
-                f"{total - emitted.get('count', 0)} withheld")
+        self.identify_result.set(proj.identify_text)
+        self.identify_btn.configure(text=proj.identify_button)
+        self.align_result.set(proj.align_text)
+        self.emit_result.set(proj.emit_text)
 
     def _update_resolve(self):
         """Summary line, per-option statuses, and the recommendation."""
-        alignment = self.analysis.get("alignment") or {}
-        results = alignment.get("results") or []
-        thr = self.min_conf.get()
+        proj = getattr(self, "_projection", None)
+        if proj is None:
+            proj = WorkflowProjection(
+                self.analysis, self.min_conf.get(),
+                self._disk or DiskFacts(), audio=self.audio)
+        weak = proj.weak
         dur = (self.analysis.get("envelope") or {}).get("duration") or 0.0
-        pins = pinned_times(results)
-        weak = sorted((r for r in results if r["index"] != 0
-                       and not r.get("pinned")
-                       and (r.get("time") is None
-                            or (r.get("confidence") or 0) < thr)),
-                      key=lambda r: measurement_value(r, pins, dur),
-                      reverse=True)
 
         # summary line with clickable chapter numbers
         for w in self.unresolved_frame.winfo_children():
@@ -1515,7 +707,7 @@ class WorkflowPanel(ttk.Frame):
             ttk.Label(self.unresolved_frame,
                       text="nothing unresolved - spot-check by ear").pack(
                 side="left")
-        accent = recommend(self.analysis, weak)
+        accent = proj.recommendation
         self.next_var.set(f"next: {accent}")
 
         # statuses from the artifact
@@ -1557,8 +749,8 @@ class WorkflowPanel(ttk.Frame):
     # ------------------------------------------------------- command plumbing
     def _argv(self, *extra: str, prefix: list[str] | None = None) -> list[str]:
         assert self.audio is not None
-        base = self._cf if prefix is None else prefix
-        return [*base, "--work-dir", self.work_dir, *extra, self.audio]
+        return job_argv(prefix or self._cf, self.work_dir, *extra,
+                        audio=self.audio)
 
     def _run(self, name: str, argv: list[str], then=None, stage: str | None = None,
              on_line=None):
@@ -1625,14 +817,10 @@ class WorkflowPanel(ttk.Frame):
             self.identify_value.set(path)
 
     def _same_source_as_last(self) -> bool:
-        label = (self.analysis.get("identification") or {}).get("label") or ""
-        value = self.identify_value.get().strip()
-        mode = self.identify_mode.get()
-        if mode == "asin":
-            return label == f"Audnexus {value}"
-        if mode == "json":
-            return bool(value) and label == value
-        return os.path.basename(label) == "chapters.embedded.json"
+        return same_source(
+            self.identify_mode.get(),
+            self.identify_value.get().strip(),
+            (self.analysis.get("identification") or {}).get("label") or "")
 
     def cmd_identify_primary(self):
         verdict = identify_verdict(self.analysis.get("identification") or {})
@@ -1665,16 +853,17 @@ class WorkflowPanel(ttk.Frame):
         asin = asin or simpledialog.askstring("Identify", "Audible ASIN:",
                                               parent=self)
         if asin:
-            self._run("identify", [*self._argv("identify"), "--asin",
-                                   asin.strip()], stage="identify")
+            self._run("identify", identify_argv(
+                self._cf, self.work_dir, self.audio, "asin", asin.strip()),
+                      stage="identify")
 
     def cmd_identify_json(self, path=None):
         path = path or filedialog.askopenfilename(
             parent=self, title="Chapters JSON",
             filetypes=[("JSON", "*.json"), ("All files", "*")])
         if path:
-            self._run("identify", [*self._argv("identify"),
-                                   "--chapters-json", path],
+            self._run("identify", identify_argv(
+                self._cf, self.work_dir, self.audio, "json", path),
                       stage="identify")
 
     def cmd_identify_embedded(self):
@@ -1697,47 +886,17 @@ class WorkflowPanel(ttk.Frame):
                 {"startOffsetMs": int(round(c["start"] * 1000)),
                  "title": c["title"]} for c in chapters]}, f, indent=1)
         self.app.log(f"  dumped {len(chapters)} embedded chapters -> {dump}")
-        self._run("identify", [*self._argv("identify"), "--chapters-json",
-                               dump], stage="identify")
+        self._run("identify", identify_argv(
+            self._cf, self.work_dir, self.audio, "json", dump),
+                  stage="identify")
 
     # align -------------------------------------------------------------
     def _near_spec(self, raw: str) -> str | None:
-        """Normalize the position hint: `CH=TIME` passes through (time
-        normalized); a bare TIME maps to the chapter whose placed time
-        (or published, pre-align) is nearest."""
-        raw = raw.strip()
-        if not raw:
-            return None
-        if "=" in raw:
-            ch, _, t = raw.partition("=")
-            try:
-                n = int(ch)
-                seconds = parse_time(t)
-            except ValueError:
-                raise ValueError(
-                    f"hint wants CH=TIME (e.g. 3=43:47) or just a time, "
-                    f"got {raw!r}") from None
-            return f"{n}={clock(seconds)}"
-        seconds = parse_time(raw)  # raises ValueError for garbage
-        rows = list((self.analysis.get("alignment") or {}).get("results")
-                    or [])
-        by_placed = [r for r in rows if r.get("time") is not None]
-        if by_placed:
-            best = min(by_placed, key=lambda r: abs(r["time"] - seconds))
-            return f"{best['index'] + 1}={clock(seconds)}"
-        ident = (self.analysis.get("identification") or {}).get("chapters") \
-            or []
-        if not ident:
-            raise ValueError("run Identify first - no chapter list to map "
-                             "the time to")
-        best = min(ident, key=lambda c: abs(c["start"] - seconds))
-        idx = ident.index(best) if ident else 0
-        return f"{idx + 1}={clock(seconds)}"
+        return near_spec(raw, self.analysis)
 
     def cmd_align(self):
-        argv = self._argv("align", "--min-confidence",
-                          str(self.min_conf.get()))
         near = self.near_var.get().strip()
+        spec = None
         if near:
             try:
                 spec = self._near_spec(near)
@@ -1745,9 +904,10 @@ class WorkflowPanel(ttk.Frame):
                 messagebox.showerror("Align", str(e), parent=self)
                 return
             if spec:
-                argv += ["--near", spec]
                 self.hint_status.set(f"hint: {spec}")
-        self._run("align", argv, stage="align")
+        self._run("align", align_argv(self._cf, self.work_dir, self.audio,
+                                      self.min_conf.get(), spec),
+                  stage="align")
 
     # resolve -----------------------------------------------------------
     def _resolve_hint(self):
@@ -1800,14 +960,10 @@ class WorkflowPanel(ttk.Frame):
             messagebox.showinfo("Sweep", "no whisper venv found (set "
                                 "WHISPER_PYTHON)", parent=self)
             return
-        argv = [*self._argv("sweep", prefix=resolve_chapterfit(wpy)),
-                "--model", os.environ.get("WHISPER_MODEL", "base"),
-                "--pin", "-y"]
-        if start is not None:
-            argv += ["--start", clock(start)]
-        if end is not None:
-            argv += ["--end", clock(end)]
-        self._run("sweep", argv, stage="resolve", then=self.cmd_align)
+        self._run("sweep", whisper_argv(
+            resolve_chapterfit(wpy), self.work_dir, self.audio, "sweep",
+            model=os.environ.get("WHISPER_MODEL", "base"),
+            start=start, end=end), stage="resolve", then=self.cmd_align)
 
     def cmd_listen(self):
         wpy = whisper_python()
@@ -1815,10 +971,10 @@ class WorkflowPanel(ttk.Frame):
             messagebox.showinfo("Listen", "no whisper venv found (set "
                                 "WHISPER_PYTHON)", parent=self)
             return
-        self._run("listen", [*self._argv("listen", prefix=resolve_chapterfit(wpy)),
-                             "--model", os.environ.get("WHISPER_MODEL", "base"),
-                             "--pin", "-y"], stage="resolve",
-                  then=self.cmd_align)
+        self._run("listen", whisper_argv(
+            resolve_chapterfit(wpy), self.work_dir, self.audio, "listen",
+            model=os.environ.get("WHISPER_MODEL", "base")),
+                  stage="resolve", then=self.cmd_align)
 
     def cmd_transcripts(self):
         argv = self._argv("transcripts")
@@ -2007,19 +1163,11 @@ class WorkflowPanel(ttk.Frame):
     # emit / finalize -----------------------------------------------------
     def cmd_emit(self):
         assert self.work_dir is not None
-        argv = self._argv("emit",
-                          "--min-confidence", str(self.min_conf.get()),
-                          "--chapters-txt", os.path.join(self.work_dir, "chapters.txt"),
-                          "--abs-json", os.path.join(self.work_dir, "chapters.json"))
-        flags = {"--title": "title", "--author": "artist", "--album": "album",
-                 "--year": "date", "--genre": "genre", "--comment": "comment"}
-        for flag, key in flags.items():
-            v = self._meta_overrides().get(key)
-            if v:
-                argv += [flag, v]
-        if self.embed_var.get():
-            argv.append("--embed")
-        self._run("emit", argv, stage="emit")
+        meta = self._meta_overrides()
+        overrides = {flag: meta.get(key, "") for flag, key in META_FLAGS.items()}
+        self._run("emit", emit_argv(
+            self._cf, self.work_dir, self.audio, self.min_conf.get(),
+            self.embed_var.get(), overrides), stage="emit")
 
     def cmd_finalize_dry(self):
         self._run("finalize", self._argv("finalize"), stage="finalize-dry")

@@ -15,7 +15,8 @@ from .library import library_root as resolve_library_root
 from .library import scan_library
 from .mpv import Player
 from .runner import Runner
-from .workflow import SHORTCUTS, WorkflowPanel
+from .table import SHORTCUTS
+from .workflow import WorkflowPanel
 
 LIBRARY_WIDTH = 300
 

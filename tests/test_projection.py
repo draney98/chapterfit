@@ -1,0 +1,115 @@
+"""Pure WorkflowProjection: table rows, result copy, resolve ladder."""
+from chaptertools.gui.projection import WorkflowProjection
+from chaptertools.gui.stages import DiskFacts
+
+
+def _ident(*starts):
+    return {"best_trial": {"score": 6.0, "rate_spread": 0.01},
+            "label": "Audnexus B00TEST",
+            "duration_ratio": 1.0,
+            "chapters": [{"title": f"Ch {i + 1}", "start": s}
+                         for i, s in enumerate(starts)]}
+
+
+def _row(i, title, published, time, conf, pinned=False):
+    return {"index": i, "title": title, "published": published,
+            "time": time, "confidence": conf, "pinned": pinned,
+            "spread": 0.0}
+
+
+def test_pre_align_rows_honor_pins():
+    art = {
+        "identification": _ident(0.0, 90.0, 180.0),
+        "pins": {"1": 94.875},
+    }
+    p = WorkflowProjection(art, 0.5, DiskFacts())
+    rows = p.rows
+    assert [r.mark for r in rows] == ["1", "2", "3"]
+    assert rows[1].placed == 94.875
+    assert rows[1].pin == "pin"
+    assert rows[1].tags == ()
+    assert rows[0].tags == ("unplaced",)
+    assert p.confident_count == 1
+    assert p.conflicts_unknown is False
+
+
+def test_aligned_rows_mark_withheld_and_conflicts():
+    results = [
+        _row(0, "One", 0.0, 0.0, 0.9),
+        _row(1, "Two", 90.0, 95.0, 0.1),
+        _row(2, "Three", 180.0, 185.0, 0.8, pinned=True),
+    ]
+    art = {
+        "envelope": {"duration": 3600.0}, "calibration": {"x": 1},
+        "fingerprint": {"x": 1},
+        "identification": _ident(0.0, 90.0, 180.0),
+        "alignment": {"results": results, "conflicts": [2], "rate": 1.0},
+        "gaps": {"gaps": [{"mid": 95.0, "dur": 2.5}]},
+    }
+    p = WorkflowProjection(art, 0.5, DiskFacts())
+    assert [r.mark for r in p.rows] == ["1", "?2", "3"]
+    assert p.rows[1].tags == ("lowconf",)
+    assert p.rows[1].gap == "2.50 s"
+    assert p.rows[2].tags == ("conflict",)
+    assert p.rows[2].pin == "! pin"
+    assert p.confident_count == 2
+    assert p.states["align"]["state"] == "attention"
+    assert p.states["resolve"]["state"] == "attention"
+    assert p.next == "resolve"
+
+
+def test_old_artifact_without_conflicts_does_not_guess():
+    results = [_row(0, "One", 0.0, 0.0, 0.9),
+               _row(1, "Two", 90.0, 95.0, 0.9, pinned=True)]
+    results[1]["spread"] = None
+    art = {"identification": _ident(0.0, 90.0),
+           "alignment": {"results": results, "rate": 1.0}}
+    p = WorkflowProjection(art, 0.5, DiskFacts())
+    assert p.rows[1].tags == ()
+    assert p.conflicts_unknown is True
+
+
+def test_measure_and_identify_copy():
+    art = {
+        "envelope": {"duration": 3600.0}, "calibration": {"x": 1},
+        "fingerprint": {"x": 1},
+        "gaps": {"gaps": [{"mid": 600.0, "dur": 2.0},
+                          {"mid": 1200.0, "dur": 3.2}],
+                 "populations": [{"k": 0, "n": 41, "centre": 3.2}]},
+        "source": {"timeline_trustworthy": False,
+                   "declared_duration": 3500.0,
+                   "decoded_duration": 3600.0,
+                   "header_error_sec": 100.0,
+                   "header_error_ratio": 0.028},
+        "identification": {
+            **_ident(0.0, 90.0),
+            "best_trial": {"score": 1.2, "rate_spread": 0.09},
+            "duration_ratio": 0.71,
+            "blocked": ["file is 71% of the published runtime."],
+        },
+    }
+    p = WorkflowProjection(art, 0.5, DiskFacts(), audio="/tmp/Book.mp3")
+    assert "2 gaps in 1 length populations" in p.measure_text
+    assert "41 around 3.2 s" in p.measure_text
+    assert "-write_xing 1" in p.measure_text and "Book.fixed.mp3" in p.measure_text
+    assert p.identify_button == "Try another edition"
+    assert "rate spread 9.0%" in p.identify_text
+    assert "runtime ratio 0.710" in p.identify_text
+    assert "rejected" in p.identify_text
+    assert "71% of the published" in p.identify_text
+
+
+def test_resolve_weak_order_and_recommendation():
+    results = [
+        _row(0, "One", 0.0, 0.0, 1.0),
+        _row(1, "Two", 600.0, 600.0, 0.9),
+        _row(2, "Three", 1200.0, 1210.0, 0.1),
+    ]
+    art = {"envelope": {"duration": 3600.0}, "calibration": {"x": 1},
+           "gaps": {"gaps": []}, "fingerprint": {"x": 1},
+           "identification": _ident(0.0, 600.0, 1200.0),
+           "alignment": {"results": results, "rate": 1.0, "conflicts": []}}
+    p = WorkflowProjection(art, 0.5, DiskFacts())
+    assert [r["index"] for r in p.weak] == [2]
+    assert p.recommendation == "Listen"
+    assert p.next == "resolve"

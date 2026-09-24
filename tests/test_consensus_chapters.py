@@ -95,7 +95,7 @@ def test_misleading_long_gap():
     result = cc.evaluate_timeline(
         tl, sil, prior, 1100, 4.0, 120.0, False, None, 15.0)
     placed = [d.placed for d in result.decisions[1:]]
-    assert all(abs(p - t) < 5.0 for p, t in zip(placed, true)), placed
+    assert all(abs(p - t) < 5.0 for p, t in zip(placed, true, strict=True)), placed
     print("ok misleading long gap")
 
 

@@ -528,6 +528,29 @@ def test_resolve_summary_keeps_next_label(tmp_path):
         app.destroy()
 
 
+def test_auto_advance_follows_next_stage(tmp_path):
+    app = _make_app(tmp_path)
+    try:
+        wf = app.workflow
+        wf.set_book(_book(tmp_path))
+        assert wf._stage == "measure"
+        measured = {k: v for k, v in WEAK_ART.items()
+                    if k not in ("identification", "alignment")}
+        _write_artifact(wf, measured)
+        wf._on_done(0, stage="measure", name="measure")
+        assert wf._stage == "identify"
+        identified = {**measured,
+                      "identification": WEAK_ART["identification"]}
+        _write_artifact(wf, identified)
+        wf._on_done(0, stage="identify", name="identify")
+        assert wf._stage == "align"
+        _write_artifact(wf, WEAK_ART)
+        wf._on_done(0, stage="align", name="align")
+        assert wf._stage == "resolve"  # weak chapters skip past Align
+    finally:
+        app.destroy()
+
+
 def test_spawn_failure_is_reported(tmp_path):
     app = _make_app(tmp_path)
     try:
@@ -668,7 +691,7 @@ def test_rejected_identify_offers_another_edition(tmp_path):
 
 
 def test_similar_gaps_cadence():
-    from chaptertools.gui.workflow import similar_gaps
+    from chaptertools.gui.table import similar_gaps
 
     # published starts 0, 100, 200, 300; pins hold chapters 0 and 3 at
     # 1x rate (times 0 and 300): chapters 1 and 2 predict to 100 and 200
@@ -693,7 +716,7 @@ def test_similar_gaps_cadence():
 
 
 def test_similar_gaps_duration_and_edges():
-    from chaptertools.gui.workflow import similar_gaps
+    from chaptertools.gui.table import similar_gaps
 
     chapters = [{"title": "c0", "start": 0.0}, {"title": "c1", "start": 100.0}]
     # pins sit on silences of ~2.0s and ~4.0s -> reference median 3.0s

@@ -307,6 +307,8 @@ def classify_gaps(gaps, max_pops=6):
     selectable at all.
     """
     if len(gaps) < 4:
+        for g in gaps:
+            g["pop"] = 0
         return [{"k": 0, "n": len(gaps), "centre": 1.0, "lo": 0.0,
                  "hi": 1e9, "median": 1.0}]
     parts = valley_split([g["dur"] for g in gaps])

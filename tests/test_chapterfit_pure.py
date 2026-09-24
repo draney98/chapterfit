@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import array
-import json
 import math
-import os
 import sys
 from pathlib import Path
 
@@ -43,6 +41,13 @@ def test_find_gaps_synthetic_envelope():
     assert len(gaps) == 1
     assert abs(gaps[0]["dur"] - 2.0) < 1e-9
     assert abs(gaps[0]["mid"] - 3.0) < 1e-9
+
+
+def test_classify_gaps_few_still_tag_pop():
+    gaps = [{"dur": 1.0}, {"dur": 1.05}]
+    pops = cf.classify_gaps(gaps)
+    assert pops[0]["k"] == 0 and pops[0]["n"] == 2
+    assert all(g["pop"] == 0 for g in gaps)
 
 
 def test_flatten_chapters_fixture(audnex_stainless):
