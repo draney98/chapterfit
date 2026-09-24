@@ -48,7 +48,7 @@ into the repo:
 
 - `docs/original-layout-prompt.md` — the full layout redesign spec
   (workflow-oriented stage bar, panels, tabs, acceptance checks).
-- `docs/original-resolve-panel-prompt.md` — the Resolve panel addendum
+- `docs/original-resolve-addendum.md` — the Resolve panel addendum
   (summary line, escalation statuses, recommendation ladder, by-ear
   redesign).
 
