@@ -8,6 +8,7 @@ import re
 import subprocess
 from dataclasses import dataclass
 
+from chaptertools.media import probe_tags
 from chaptertools.util import die
 
 __all__ = [
@@ -33,16 +34,7 @@ class Placed:
 
 def read_tags(path: str) -> dict:
     """Global tags of a media file via ffprobe: {title, artist, album, ...}."""
-    r = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
-                        "format_tags", "-of", "json", path],
-                       capture_output=True, text=True)
-    if r.returncode:
-        return {}
-    try:
-        tags = json.loads(r.stdout).get("format", {}).get("tags", {})
-    except ValueError:
-        return {}
-    return {k.strip().lower(): v for k, v in tags.items() if v.strip()}
+    return probe_tags(path)
 
 
 def merge_tags(original: dict, overrides: dict) -> dict:

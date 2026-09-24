@@ -54,6 +54,8 @@ usage: $(basename "$0") AUDIO_FILE [options]
   --confirm N            chapters to confirm from the narration (default $CONFIRM_TARGET)
   --min-confidence N     confidence needed to emit (default $MIN_CONF)
   --work-dir DIR         analysis artifact location
+                         (default \$CHAPTERFIT_WORK/<author>/<book>, CHAPTERFIT_WORK
+                         defaulting to ~/.local/share/chapterfit)
   -y, --yes              take the recommended option at every prompt
 EOF
   exit 0

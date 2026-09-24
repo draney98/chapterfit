@@ -8,23 +8,25 @@ area: header, stage bar, one visible stage panel, and the notebook tabs
 from __future__ import annotations
 
 import json
-import math
 import os
+import queue
 import shlex
 import shutil
 import statistics
-import subprocess
 import sys
+import time
 import tkinter as tk
 import tkinter.font as tkfont
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
+from chaptertools.envelope.alignment import measurement_value, pinned_times
 from chaptertools.envelope.emit import select_chapters
 from chaptertools.util import clock, hms, parse_time
 
 from . import fonts, palette, tips
-from .harvest import found_summary, harvest_book
+from .facts import MediaFactsLoader
+from .harvest import found_summary, placeholder_harvest
 from .library import analysis_path, load_analysis, work_dir_for
 from .runner import Job
 from .stages import (
@@ -217,6 +219,11 @@ class WorkflowPanel(ttk.Frame):
         self._cf = resolve_chapterfit()
         self._stage: str = "measure"
         self._disk: DiskFacts | None = None
+        self.facts = MediaFactsLoader()
+        self._facts_token = 0     # newest facts request
+        self._harvest_token = 0   # newest request that also wants a harvest
+        self._harvest_shown: dict = {}  # field values we filled in last
+        self._refresh_after = None
         # audio path -> artifact mtime when its finalize dry run succeeded
         self._dry_ok: dict[str, float | None] = {}
         self._pin_autofilled = False
@@ -254,7 +261,7 @@ class WorkflowPanel(ttk.Frame):
         book_lbl.bind("<Leave>", self._hide_tip)
         self.found_var = tk.StringVar(value="")
 
-        self.stage_bar = StageBar(self, self.set_stage)
+        self.stage_bar = StageBar(self, self._pick_stage)
         self.stage_bar.grid(row=1, column=0, sticky="ew", pady=(4, 0))
 
         # amber explainer strip: shown when the SELECTED stage needs attention
@@ -561,7 +568,7 @@ class WorkflowPanel(ttk.Frame):
         ttk.Label(p, text="Minimum confidence:").grid(row=0, column=0,
                                                       sticky="w")
         self.min_conf = tk.DoubleVar(value=0.5)
-        self.min_conf.trace_add("write", lambda *_: self._refresh())
+        self.min_conf.trace_add("write", lambda *_: self._refresh_soon())
         self.min_conf_spin = ttk.Spinbox(p, from_=0.0, to=1.0, increment=0.05,
                                          width=5, textvariable=self.min_conf)
         self.min_conf_spin.grid(row=0, column=1, sticky="w")
@@ -1005,45 +1012,80 @@ class WorkflowPanel(ttk.Frame):
             self.banner_var.set("")
             self.banner.grid_remove()
 
-    def _disk_facts(self) -> DiskFacts:
-        """Folder facts from disk (raw listing, never the GUI scan)."""
-        d = DiskFacts()
+    # ------------------------------------------------------ media facts --
+    def _request_facts(self, harvest: bool = False):
+        """Ask the worker for folder/ffprobe facts; they arrive via
+        poll_facts, so nothing here blocks the Tk thread."""
         if not self.audio:
-            return d
-        folder = os.path.dirname(self.audio)
-        exts = (".mp3", ".m4a", ".m4b", ".flac", ".ogg", ".wav")
-        files = [f for f in os.listdir(folder)
-                 if os.path.splitext(f)[1].lower() in exts]
-        d.audio_files = files
-        if len(files) == 1:
-            probe = subprocess.run(
-                ["ffprobe", "-v", "error", "-show_chapters", "-of", "json",
-                 os.path.join(folder, files[0])],
-                capture_output=True, text=True)
+            return
+        self._facts_token += 1
+        if harvest:
+            self._harvest_token = self._facts_token
+        self.facts.request(self._facts_token, self.audio,
+                           (self.analysis or {}).get("emitted"), harvest)
+
+    def poll_facts(self) -> bool:
+        """Apply whatever the worker has finished (called by the pump)."""
+        applied = False
+        while True:
             try:
-                chs = json.loads(probe.stdout).get("chapters", [])
-            except ValueError:
-                chs = []
-            d.embedded_chapters = len(chs)
-            if chs:
-                d.embedded_last_start = float(chs[-1].get("start_time", 0) or 0)
-        emitted = (self.analysis or {}).get("emitted") or {}
-        if emitted.get("count"):
-            ch_file = os.path.splitext(self.audio)[0] + ".chapters" \
-                + os.path.splitext(self.audio)[1]
-            if os.path.isfile(ch_file):
-                probe = subprocess.run(
-                    ["ffprobe", "-v", "error", "-show_chapters", "-of", "json",
-                     ch_file], capture_output=True, text=True)
-                try:
-                    chs = json.loads(probe.stdout).get("chapters", [])
-                except ValueError:
-                    chs = []
-                d.chapters_file_match = (
-                    len(chs) == emitted.get("count")
-                    and chs and abs(float(chs[-1].get("start_time", 0) or 0)
-                                    - emitted.get("last", -1)) < 0.1)
-        return d
+                token, audio, disk, harvest, err = \
+                    self.facts.results.get_nowait()
+            except queue.Empty:
+                return applied
+            self._apply_facts(token, audio, disk, harvest, err)
+            applied = True
+
+    def wait_for_facts(self, timeout: float = 10.0) -> None:
+        """Block until the newest request is answered (tests, scripts)."""
+        deadline = time.monotonic() + timeout
+        while self._facts_pending():
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise TimeoutError("media facts did not arrive")
+            try:
+                item = self.facts.results.get(timeout=left)
+            except queue.Empty:
+                continue
+            self._apply_facts(*item)
+
+    def _facts_pending(self) -> bool:
+        return self._facts_seen < self._facts_token \
+            or self._harvest_seen < self._harvest_token
+
+    _facts_seen = 0
+    _harvest_seen = 0
+
+    def _apply_facts(self, token, audio, disk, harvest, err):
+        if audio != self.audio:
+            return  # a book we have since left
+        self._facts_seen = max(self._facts_seen, token)
+        if harvest is not None or err is not None:
+            self._harvest_seen = max(self._harvest_seen, token)
+        if err is not None:
+            self.app.log(f"! could not read {os.path.basename(audio)}: {err}")
+            return
+        if token >= self._facts_token and disk is not None:
+            self._disk = disk
+        if harvest is not None and token >= self._harvest_token:
+            self._set_harvest(harvest)
+        self._refresh()
+        if self._auto_stage:
+            self._auto_stage = False
+            self.set_stage(next_stage(self._compute_states()))
+
+    def _set_harvest(self, harvest: dict):
+        """Fill Book info, leaving any field the user has edited."""
+        self.harvest = harvest
+        self.found_var.set(found_summary(harvest))
+        for key, var in self.meta_vars.items():
+            new = harvest["suggested"].get(key, "")
+            if var.get() == self._harvest_shown.get(key, var.get()):
+                var.set(new)
+            self._harvest_shown[key] = new
+        self._update_header()
+
+    _auto_stage = False
 
     def _compute_states(self) -> dict:
         states = stage_states(self.analysis,
@@ -1082,11 +1124,21 @@ class WorkflowPanel(ttk.Frame):
         self.sweep_end.set("")
         self._pin_autofilled = False
         self._sweep_autofilled = False
-        self._reharvest()
-        self._disk = self._disk_facts()
+        self._disk = None
+        self._harvest_shown = {}
+        self._set_harvest(placeholder_harvest(self.audio))
         self._refresh()
         self._prefill_identify()
         self.set_stage(next_stage(self._compute_states()))
+        # the stage is chosen again once disk facts are in, unless the
+        # user picks one first
+        self._auto_stage = True
+        self._request_facts(harvest=True)
+
+    def _pick_stage(self, key: str):
+        """A stage chosen by the user: no automatic re-choice after that."""
+        self._auto_stage = False
+        self.set_stage(key)
 
     def _prefill_identify(self):
         """Show which source the last identify used - without clobbering
@@ -1114,14 +1166,13 @@ class WorkflowPanel(ttk.Frame):
         self._identify_mode_changed()
 
     def _reharvest(self):
-        """Read what the folder has and prefill the Book info fields."""
+        """Re-read button: read the folder again and refill every Book info
+        field (an explicit request, so edits are replaced)."""
         if not self.audio:
             return
-        self.harvest = harvest_book(self.audio)
-        self.found_var.set(found_summary(self.harvest))
-        for key, var in self.meta_vars.items():
-            var.set(self.harvest["suggested"].get(key, ""))
-        self._update_header()
+        self._harvest_shown = {}
+        self.found_var.set("reading tags and chapters from the file…")
+        self._request_facts(harvest=True)
 
     def _update_header(self):
         """One line: Title — Author · duration · ASIN · elided file name."""
@@ -1186,8 +1237,29 @@ class WorkflowPanel(ttk.Frame):
                 "genre": self.meta_vars["genre"].get().strip(),
                 "comment": self.meta_vars["comment"].get().strip()}
 
+    REFRESH_DEBOUNCE_MS = 250
+
+    def _refresh_soon(self):
+        """Spinbox arrows and typing fire a write per step: redraw once
+        they pause."""
+        if self._refresh_after is not None:
+            self.after_cancel(self._refresh_after)
+        self._refresh_after = self.after(self.REFRESH_DEBOUNCE_MS,
+                                         self._debounced_refresh)
+
+    def _debounced_refresh(self):
+        self._refresh_after = None
+        self._refresh()
+
+    def flush_refresh(self):
+        """Run a pending debounced refresh now."""
+        if self._refresh_after is not None:
+            self.after_cancel(self._refresh_after)
+            self._debounced_refresh()
+
     def _refresh(self):
-        """Read the analysis artifact and update every view."""
+        """Read the analysis artifact and update every view. Never runs a
+        subprocess: disk facts come from the MediaFactsLoader."""
         self.analysis = {}
         if self.audio:
             self.analysis = load_analysis(self.audio, self.work_dir)
@@ -1267,7 +1339,6 @@ class WorkflowPanel(ttk.Frame):
         self.notebook.tab(self._chapters_tab,
                           text=f"Chapters {conf}/{total}")
 
-        self._disk = self._disk_facts()
         states = self._compute_states()
         self.stage_bar.update(states, self._stage)
         self._update_banner(states)
@@ -1427,24 +1498,13 @@ class WorkflowPanel(ttk.Frame):
         results = alignment.get("results") or []
         thr = self.min_conf.get()
         dur = (self.analysis.get("envelope") or {}).get("duration") or 0.0
-        pins = [r["time"] for r in results
-                if r.get("pinned") and r.get("time") is not None]
-
-        def listening_value(r):
-            # mirrors suggest_measurements: uncertainty x sqrt(leverage)
-            if r.get("time") is None:
-                lev = dur / 2
-            else:
-                lev = min((abs(r["time"] - p) for p in pins), default=dur / 2)
-            unc = (1 - (r.get("confidence") or 0)) + (r.get("spread")
-                                                      or 0) / 60.0
-            return unc * math.sqrt(max(lev, 0.0))
-
+        pins = pinned_times(results)
         weak = sorted((r for r in results if r["index"] != 0
                        and not r.get("pinned")
                        and (r.get("time") is None
                             or (r.get("confidence") or 0) < thr)),
-                      key=listening_value, reverse=True)
+                      key=lambda r: measurement_value(r, pins, dur),
+                      reverse=True)
 
         # summary line with clickable chapter numbers
         for w in self.unresolved_frame.winfo_children():
@@ -1532,6 +1592,7 @@ class WorkflowPanel(ttk.Frame):
         else:
             self.app.log(f"exit {code}")
         self._refresh()
+        self._request_facts()
         if cancelled:
             self.app.log(f"! {name} cancelled")
             return
@@ -1552,6 +1613,7 @@ class WorkflowPanel(ttk.Frame):
             target = next_stage(self._compute_states())
             if target != self._stage:
                 self.set_stage(target)
+            self._auto_stage = True  # again once fresh disk facts land
 
     # ------------------------------------------------------------- actions --
     def cmd_measure(self):
@@ -1628,6 +1690,10 @@ class WorkflowPanel(ttk.Frame):
 
     def cmd_identify_embedded(self):
         """Use the chapters already embedded in the file as the source."""
+        if self.harvest.get("loading"):
+            self.app.log("still reading the file's chapters - try again in "
+                         "a moment")
+            return
         chapters = self.harvest.get("embedded_chapters") or []
         if len(chapters) < 2:
             messagebox.showinfo("Identify (embedded)",

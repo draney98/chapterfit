@@ -491,7 +491,9 @@ def main():
         description="Locate audiobook chapters by measurement.",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--work-dir", help="where to keep the analysis artifact "
-                                       "(default: beside the audio)")
+                                       "(default: $CHAPTERFIT_WORK/<author>/"
+                                       "<book>, CHAPTERFIT_WORK defaulting to "
+                                       "~/.local/share/chapterfit)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("measure", help="verify, envelope, calibrate, classify")

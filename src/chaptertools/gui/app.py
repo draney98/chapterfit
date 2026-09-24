@@ -325,6 +325,7 @@ class App(tk.Tk):
                     job.on_done(job, payload)
             elif kind == "refused":
                 self.log(f"! {job.name} not started: {payload}")
+        self.workflow.poll_facts()
         t = self.player.poll()
         self._playback_time = t
         self.workflow.update_playback(t)

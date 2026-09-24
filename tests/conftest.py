@@ -10,6 +10,13 @@ import pytest
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
+@pytest.fixture(autouse=True)
+def _private_work_root(tmp_path_factory, monkeypatch):
+    """No test may write into the user's real ~/.local/share/chapterfit."""
+    monkeypatch.setenv("CHAPTERFIT_WORK",
+                       str(tmp_path_factory.mktemp("work-root")))
+
+
 @pytest.fixture
 def fixtures_dir() -> Path:
     return FIXTURES

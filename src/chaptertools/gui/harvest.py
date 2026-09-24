@@ -1,11 +1,10 @@
 """Read everything a book folder can tell us, for GUI prefill."""
 from __future__ import annotations
 
-import json
 import os
-import subprocess
 import xml.etree.ElementTree as ET
 
+from chaptertools.media import probe_chapters
 from chaptertools.output import read_tags
 
 
@@ -30,18 +29,8 @@ def read_nfo(folder: str) -> dict:
 
 def embedded_chapters(path: str) -> list[dict]:
     """Chapters already inside the file: [{start, title}] (Audnexus shape)."""
-    r = subprocess.run(["ffprobe", "-v", "error", "-show_chapters",
-                        "-of", "json", path],
-                       capture_output=True, text=True)
-    if r.returncode:
-        return []
-    try:
-        raw = json.loads(r.stdout).get("chapters", [])
-    except ValueError:
-        return []
-    return [{"start": float(c.get("start_time", 0) or 0),
-             "title": (c.get("tags") or {}).get("title") or "Chapter"}
-            for c in raw]
+    return [{"start": c["start"], "title": c["title"]}
+            for c in probe_chapters(path)]
 
 
 def _first(*vals) -> str:
@@ -57,13 +46,19 @@ def harvest_book(audio: str) -> dict:
     """
     audio = os.path.abspath(audio)
     folder = os.path.dirname(audio)
+    return _assemble(audio, read_tags(audio), read_nfo(folder),
+                     embedded_chapters(audio))
+
+
+def placeholder_harvest(audio: str) -> dict:
+    """Folder names only - no file reads - while the real harvest loads."""
+    return {**_assemble(os.path.abspath(audio), {}, {}, []), "loading": True}
+
+
+def _assemble(audio: str, tags: dict, nfo: dict, chapters: list) -> dict:
+    folder = os.path.dirname(audio)
     author_folder = os.path.basename(os.path.dirname(folder))
     book_folder = os.path.basename(folder)
-
-    tags = read_tags(audio)
-    nfo = read_nfo(folder)
-    chapters = embedded_chapters(audio)
-
     return {
         "tags": tags,
         "nfo": nfo,
@@ -86,6 +81,8 @@ def harvest_book(audio: str) -> dict:
 
 def found_summary(h: dict) -> str:
     """One human line about what the folder gave us."""
+    if h.get("loading"):
+        return "reading tags and chapters from the file…"
     bits = []
     if h["tags"]:
         bits.append("ID3 tags: " + ", ".join(sorted(h["tags"])))

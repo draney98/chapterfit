@@ -29,8 +29,9 @@ class Player:
         self.sock_path: str | None = None
         self._sock: socket.socket | None = None
         self._buf = ""
-        self._replies: dict[int, dict] = {}
         self._next_id = 0
+        self._time_rid: int | None = None   # outstanding playback-time ask
+        self._time: float | None = None     # newest answer
         self._paused = False
 
     @property
@@ -60,50 +61,48 @@ class Player:
         self._paused = False
         self._connect()
 
-    def _connect(self):
-        if self._sock is not None or self.sock_path is None:
-            return
-        for _ in range(40):
-            if not self.alive:
-                return
-            if os.path.exists(self.sock_path):
-                s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                s.settimeout(0.2)
-                try:
-                    s.connect(self.sock_path)
-                except OSError:
-                    # the socket file can appear before mpv accepts on it
-                    s.close()
-                    time.sleep(0.05)
-                    continue
-                self._sock = s
-                self._buf = ""
-                self._replies = {}
-                return
-            time.sleep(0.05)
+    def _connect(self) -> bool:
+        """One non-blocking attempt; the pump simply tries again next tick
+        (the socket file can appear before mpv accepts on it)."""
+        if self._sock is not None:
+            return True
+        if self.sock_path is None or not self.alive \
+                or not os.path.exists(self.sock_path):
+            return False
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            s.connect(self.sock_path)
+        except OSError:
+            s.close()
+            return False
+        s.setblocking(False)
+        self._sock, self._buf, self._time_rid = s, "", None
+        return True
 
     def poll(self) -> float | None:
-        """Current playback time in seconds, or None when unavailable."""
+        """Newest known playback time in seconds, or None when unavailable.
+        Never waits: it reads what mpv already sent and asks again."""
         if not self.alive:
             self.stop()
             return None
-        if self._sock is None:
-            self._connect()
-            if self._sock is None:
-                return None
-        reply = self._rpc("get_property", "playback-time")
-        if reply and reply.get("error") == "success" \
-                and reply.get("data") is not None:
-            return float(reply["data"])
-        return None
+        if not self._connect():
+            return None
+        self._drain()
+        now = time.monotonic()
+        if self._time_rid is None or now - self._time_asked > 1.0:
+            self._time_rid = self._send("get_property", "playback-time")
+            self._time_asked = now
+        return self._time
+
+    _time_asked = 0.0
 
     def toggle_pause(self):
         self._paused = not self._paused
-        self._rpc("set_property", "pause", self._paused)
+        self._send("set_property", "pause", self._paused)
 
     def seek(self, delta: float):
         """Move relative to the current position; works while paused."""
-        self._rpc("seek", delta, "exact")
+        self._send("seek", delta, "exact")
 
     def stop(self):
         proc, self.proc = self.proc, None
@@ -115,7 +114,7 @@ class Player:
         if path and os.path.exists(path):
             with suppress(OSError):
                 os.unlink(path)
-        self._buf, self._replies = "", {}
+        self._buf, self._time_rid, self._time = "", None, None
         self._paused = False
         if proc is not None and proc.poll() is None:
             proc.terminate()
@@ -125,7 +124,8 @@ class Player:
                 proc.kill()
 
     # ------------------------------------------------------------- ipc --
-    def _rpc(self, *command) -> dict | None:
+    def _send(self, *command) -> int | None:
+        """Fire a command; replies are read later by _drain."""
         if self._sock is None:
             return None
         self._next_id += 1
@@ -133,30 +133,34 @@ class Player:
         msg = json.dumps({"command": list(command), "request_id": rid}) + "\n"
         try:
             self._sock.sendall(msg.encode())
+        except BlockingIOError:
+            return None  # a full socket buffer: drop this one command
         except OSError:
             self._sock = None
             return None
-        return self._read_reply(rid)
+        return rid
 
-    def _read_reply(self, rid: int, timeout: float = 0.5) -> dict | None:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if rid in self._replies:
-                return self._replies.pop(rid)
+    def _drain(self):
+        """Read everything mpv has sent so far without waiting."""
+        while self._sock is not None:
             try:
                 chunk = self._sock.recv(65536)
-            except TimeoutError:
-                continue
+            except BlockingIOError:
+                break
             except OSError:
                 self._sock = None
-                return None
+                break
             if not chunk:
                 self._sock = None
-                return None
+                break
             self._buf += chunk.decode(errors="replace")
-            while "\n" in self._buf:
-                line, self._buf = self._buf.split("\n", 1)
-                obj = parse_reply(line)
-                if obj is not None:
-                    self._replies[int(obj["request_id"])] = obj
-        return self._replies.pop(rid, None)
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            obj = parse_reply(line)
+            if obj is None or obj.get("request_id") != self._time_rid:
+                continue
+            self._time_rid = None
+            if obj.get("error") == "success" and obj.get("data") is not None:
+                self._time = float(obj["data"])
+        if self._sock is None:
+            self._time_rid = None

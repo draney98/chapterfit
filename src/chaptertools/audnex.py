@@ -17,6 +17,12 @@ __all__ = [
     "AudnexBook",
     "parse_audnex",
     "http_json",
+    "AudnexError",
+    "cache_file",
+    "read_cached_chapters",
+    "fetch_chapters_payload",
+    "chapters_payload",
+    "fetch_book_meta",
     "fetch_audnex",
     "flatten_chapters",
 ]
@@ -123,46 +129,108 @@ def http_json(url: str, timeout: int = 20, user_agent: str | None = None) -> dic
         return json.loads(r.read().decode("utf-8"))
 
 
-def fetch_audnex(asin: str, region: str, cache_dir: str | None,
-                 user_agent: str | None = None) -> AudnexBook:
-    """Fetch with chapterize-style cache naming: {asin}.{region}.chapters.json."""
-    cache_path = None
-    if cache_dir:
-        os.makedirs(cache_dir, exist_ok=True)
-        cache_path = os.path.join(cache_dir, f"{asin}.{region}.chapters.json")
-        if os.path.exists(cache_path):
-            with open(cache_path) as f:
-                return parse_audnex(json.load(f), asin)
+class AudnexError(Exception):
+    """A chapter list could not be had; the message is for the user."""
 
+
+def cache_file(cache_dir: str, asin: str, region: str) -> str:
+    """The one cache name both pipelines write."""
+    return os.path.join(cache_dir, f"chapters.{asin}.{region}.json")
+
+
+def _legacy_cache_file(cache_dir: str, asin: str, region: str) -> str:
+    """Name the silence pipeline used to write; still read."""
+    return os.path.join(cache_dir, f"{asin}.{region}.chapters.json")
+
+
+def read_cached_chapters(cache_dir: str | None, asin: str,
+                         region: str) -> tuple[dict, str] | None:
+    """(payload, path) from the cache, or None."""
+    if not cache_dir:
+        return None
+    for path in (cache_file(cache_dir, asin, region),
+                 _legacy_cache_file(cache_dir, asin, region)):
+        try:
+            with open(path) as f:
+                return json.load(f), path
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def fetch_chapters_payload(asin: str, region: str,
+                           user_agent: str | None = None,
+                           timeout: int = 25) -> dict:
+    """The raw Audnexus chapter payload from the network."""
     url = f"{AUDNEX_BASE}/books/{asin}/chapters?region={region}"
     try:
-        payload = http_json(url, user_agent=user_agent)
+        return http_json(url, timeout=timeout, user_agent=user_agent)
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", "replace")[:400]
         if e.code == 404:
-            die(f"Audnexus has no chapter data for ASIN {asin} (region {region}).\n"
-                f"  Chapter data needs Audible credentials on the server side and is\n"
-                f"  missing for some titles. Try --region uk, or check the ASIN.")
-        die(f"Audnexus HTTP {e.code} for {asin}: {body}")
+            raise AudnexError(
+                f"Audnexus has no chapter data for ASIN {asin} (region "
+                f"{region}).\n  Chapter data needs Audible credentials on the "
+                f"server side and is\n  missing for some titles. Try "
+                f"--region uk, or check the ASIN.") from e
+        raise AudnexError(f"Audnexus HTTP {e.code} for {asin}: {body}") from e
     except urllib.error.URLError as e:
-        die(f"could not reach Audnexus: {e.reason}")
+        raise AudnexError(f"could not reach Audnexus: {e.reason}") from e
+    except (TimeoutError, OSError, ValueError) as e:
+        raise AudnexError(f"could not read Audnexus reply: {e}") from e
 
-    book = parse_audnex(payload, asin)
 
+def chapters_payload(asin: str, region: str, cache_dir: str | None = None,
+                     offline: bool = False, user_agent: str | None = None,
+                     on_cached=None) -> dict:
+    """Cached payload if present, else fetched (and cached). Raises
+    AudnexError. `on_cached(path)` is told when the cache answered."""
+    hit = read_cached_chapters(cache_dir, asin, region)
+    if hit is not None:
+        payload, path = hit
+        if on_cached:
+            on_cached(path)
+        return payload
+    if offline:
+        raise AudnexError(f"no cached chapter data for {asin}/{region} and "
+                          f"--offline was set")
+    payload = fetch_chapters_payload(asin, region, user_agent=user_agent)
+    if cache_dir:
+        try:
+            os.makedirs(cache_dir, exist_ok=True)
+            with open(cache_file(cache_dir, asin, region), "w") as f:
+                json.dump(payload, f)
+        except OSError:
+            pass
+    return payload
+
+
+def fetch_book_meta(asin: str, region: str,
+                    user_agent: str | None = None) -> tuple[str | None, str | None]:
+    """(title, author) from Audnexus, or Nones; never raises."""
     try:
         meta = http_json(f"{AUDNEX_BASE}/books/{asin}?region={region}",
                          user_agent=user_agent)
-        book.title = meta.get("title")
         authors = meta.get("authors") or []
-        if authors:
-            book.author = ", ".join(
-                a.get("name", "") for a in authors if a.get("name"))
+        author = ", ".join(a.get("name", "") for a in authors
+                           if a.get("name")) or None
+        return meta.get("title"), author
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError,
-            ValueError, KeyError, TypeError, OSError):
-        pass
+            ValueError, KeyError, TypeError, AttributeError, OSError):
+        return None, None
 
-    if cache_path:
-        with open(cache_path, "w") as f:
-            json.dump(payload, f)
 
+def fetch_audnex(asin: str, region: str, cache_dir: str | None,
+                 user_agent: str | None = None) -> AudnexBook:
+    """Parsed chapter list (cached as chapters.{asin}.{region}.json) plus
+    title/author when the network answers."""
+    fetched = read_cached_chapters(cache_dir, asin, region) is None
+    try:
+        payload = chapters_payload(asin, region, cache_dir,
+                                   user_agent=user_agent)
+    except AudnexError as e:
+        die(str(e))
+    book = parse_audnex(payload, asin)
+    if fetched:
+        book.title, book.author = fetch_book_meta(asin, region, user_agent)
     return book

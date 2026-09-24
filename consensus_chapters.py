@@ -28,8 +28,6 @@ import json
 import math
 import os
 import sys
-import urllib.error
-import urllib.request
 from dataclasses import dataclass, field
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -37,6 +35,8 @@ sys.path.insert(0, HERE)
 
 try:
     import chapterize
+
+    from chaptertools import audnex  # on sys.path once chapterize is
 except ImportError:
     chapterize = None
 
@@ -51,7 +51,6 @@ except ImportError:
     lv = None
 
 USER_AGENT = "consensus_chapters.py/1.0"
-AUDNEX_BASE = "https://api.audnex.us"
 
 
 # ==========================================================================
@@ -650,30 +649,17 @@ def timeline_from_lv(project) -> SourceTimeline:
 
 
 def fetch_audnex_book(asin: str, region: str) -> chapterize.AudnexBook | None:
-    url = f"{AUDNEX_BASE}/books/{asin}/chapters?region={region}"
+    """Soft variant: None when Audnexus has nothing (consensus goes on)."""
     try:
-        req = urllib.request.Request(url, headers={
-            "User-Agent": USER_AGENT, "Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=25) as r:
-            payload = json.loads(r.read().decode("utf-8"))
+        payload = audnex.fetch_chapters_payload(asin, region,
+                                                user_agent=USER_AGENT)
         book = chapterize.parse_audnex(payload, asin)
-        try:
-            meta = chapterize.http_json(
-                f"{AUDNEX_BASE}/books/{asin}?region={region}")
-            book.title = meta.get("title") or book.title
-            authors = meta.get("authors") or []
-            if authors:
-                book.author = ", ".join(
-                    a.get("name", "") for a in authors if a.get("name"))
-        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError,
-                ValueError, KeyError, TypeError, OSError):
-            pass
-        return book
-    except urllib.error.HTTPError:
+    except (audnex.AudnexError, ValueError, KeyError, TypeError):
         return None
-    except (urllib.error.URLError, TimeoutError, ValueError, KeyError,
-            TypeError, OSError, json.JSONDecodeError):
-        return None
+    title, author = audnex.fetch_book_meta(asin, region, USER_AGENT)
+    book.title = title or book.title
+    book.author = author or book.author
+    return book
 
 
 def load_audible_timelines(args, local_dur: float) -> list[SourceTimeline]:

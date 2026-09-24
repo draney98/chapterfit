@@ -1,30 +1,18 @@
 """Kodi-style album.nfo writing: one <track> per embedded chapter."""
 from __future__ import annotations
 
-import json
 import os
 import shutil
-import subprocess
 import xml.etree.ElementTree as ET
+
+from chaptertools.media import probe_chapters
 
 INDENT = "  "
 
 
 def chapters_from_file(path: str) -> list[dict]:
     """Embedded chapters of a media file: [{title, start, end}]."""
-    r = subprocess.run(["ffprobe", "-v", "error", "-show_chapters",
-                        "-of", "json", path],
-                       capture_output=True, text=True)
-    if r.returncode:
-        return []
-    out = []
-    for c in json.loads(r.stdout).get("chapters", []):
-        out.append({
-            "title": c.get("tags", {}).get("title") or "Chapter",
-            "start": float(c.get("start_time", 0) or 0),
-            "end": float(c.get("end_time", 0) or 0),
-        })
-    return out
+    return probe_chapters(path)
 
 
 def fmt_duration(seconds: float) -> str:

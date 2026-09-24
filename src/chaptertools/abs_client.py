@@ -4,12 +4,12 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
 
+from chaptertools import media
 from chaptertools.envelope.artifact import Artifact, __version__
 from chaptertools.nfo import write_album_nfo
 from chaptertools.util import die, hms, need
@@ -209,14 +209,10 @@ def find_item(abs_api: ABS, lid: str, audio: str, title_hint: str | None):
 
 def verify_embedded(path: str, expect_dur: float | None):
     """The embedded copy must be sound before the original is displaced."""
-    r = subprocess.run(["ffprobe", "-v", "error", "-show_chapters",
-                        "-show_entries", "format=duration", "-of", "json", path],
-                       capture_output=True, text=True)
-    if r.returncode:
+    if not media.readable(path):
         die(f"ffprobe cannot read {path}")
-    j = json.loads(r.stdout)
-    chapters = j.get("chapters") or []
-    dur = float((j.get("format") or {}).get("duration") or 0)
+    chapters = media.probe_chapters(path)
+    dur = media.probe_duration(path) or 0.0
     if len(chapters) < 2:
         die(f"{os.path.basename(path)} has {len(chapters)} chapter(s) - "
             f"run 'emit --embed' first")
@@ -500,7 +496,7 @@ def cmd_finalize(args):
     if prog and prog.get("progress"):
         print(f"\n  ! this item has listening progress "
               f"({float(prog.get('progress', 0))*100:.1f}%). Deleting clears it.")
-        saved = os.path.join(args.work_dir or folder, f"progress.{iid}.json")
+        saved = os.path.join(art.work_dir, f"progress.{iid}.json")
         try:
             with open(saved, "w") as f:
                 json.dump(prog, f, indent=1)

@@ -6,7 +6,8 @@ import json
 import os
 import sys
 
-from chaptertools.util import die, normalize_work_dir
+from chaptertools import workdir
+from chaptertools.util import die
 
 ENVELOPE_HZ = 20          # 50 ms frames
 ENV_FLOOR_DB = -96.0
@@ -20,19 +21,22 @@ class Artifact:
 
     def __init__(self, audio: str, work_dir: str | None = None):
         self.audio = os.path.abspath(audio)
-        base = os.path.basename(self.audio)
-        if work_dir:
-            raw = work_dir
-            work_dir = os.path.abspath(normalize_work_dir(work_dir))
-            if work_dir != os.path.abspath(raw) and "\\" in raw:
-                print(f"  ! work-dir had shell escapes; using {work_dir}",
-                      file=sys.stderr)
-            os.makedirs(work_dir, exist_ok=True)
-            self.path = os.path.join(work_dir, base + ".analysis.json")
-            self.env_path = os.path.join(work_dir, base + ".envelope.i8")
-        else:
-            self.path = self.audio + ".analysis.json"
-            self.env_path = self.audio + ".envelope.i8"
+        resolved = workdir.resolve_work_dir(self.audio, work_dir)
+        if work_dir and resolved != os.path.abspath(work_dir) \
+                and "\\" in work_dir:
+            print(f"  ! work-dir had shell escapes; using {resolved}",
+                  file=sys.stderr)
+        self.work_dir = resolved
+        try:
+            os.makedirs(resolved, exist_ok=True)
+        except OSError as e:
+            die(f"cannot create work directory {resolved}: {e.strerror}. "
+                f"Use --work-dir or set CHAPTERFIT_WORK.")
+        notice = workdir.adopt_beside_audio(self.audio, resolved)
+        if notice:
+            print(f"  note: {notice}", file=sys.stderr)
+        self.path = workdir.artifact_path(self.audio, resolved)
+        self.env_path = workdir.envelope_path(self.audio, resolved)
         self.data = {}
         self.load()
 

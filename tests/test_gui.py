@@ -82,18 +82,20 @@ def test_library_root_falls_back_to_cwd(tmp_path, monkeypatch):
 
 
 def test_work_dir_for_mirrors_chapterbook(tmp_path, monkeypatch):
-    monkeypatch.delenv("CHAPTERFIT_WORK", raising=False)
-    monkeypatch.setattr(lib, "work_root", lambda: str(tmp_path))
+    monkeypatch.setenv("CHAPTERFIT_WORK", str(tmp_path / "work"))
     audio = tmp_path / "library" / "Greg Bear" / "Eon" / "Eon.mp3"
     assert lib.work_dir_for(str(audio)) == \
-        str(tmp_path / "Greg Bear" / "Eon")
+        str(tmp_path / "work" / "Greg Bear" / "Eon")
 
 
-def test_load_analysis_missing_is_empty(tmp_path):
-    audio = tmp_path / "book.mp3"
+def test_load_analysis_missing_is_empty(tmp_path, monkeypatch):
+    monkeypatch.setenv("CHAPTERFIT_WORK", str(tmp_path / "work"))
+    audio = tmp_path / "Author" / "Book" / "book.mp3"
+    audio.parent.mkdir(parents=True)
     audio.touch()
     assert lib.load_analysis(str(audio)) == {}
-    assert lib.analysis_path(str(audio)) == str(audio) + ".analysis.json"
+    assert lib.analysis_path(str(audio)) == \
+        str(tmp_path / "work" / "Author" / "Book" / "book.mp3.analysis.json")
 
 
 def test_runner_streams_lines_and_exit_code(tmp_path):
@@ -315,8 +317,10 @@ def test_withheld_shading_matches_emit(tmp_path):
         assert app.workflow.conflict_note.get() == ""
         results[4]["spread"] = 0.0
 
-        # raising the spinner threshold re-shades immediately (rows rebuilt)
+        # raising the spinner threshold re-shades once it settles (debounced)
         app.workflow.min_conf.set(0.95)
+        assert app.workflow._refresh_after is not None
+        app.workflow.flush_refresh()
         assert tags_and_label(iids()[2]) == ({"lowconf"}, "?3")
         assert _withheld(results, 0.95) == {2, 3, 4, 6}
     finally:
@@ -950,9 +954,16 @@ def test_book_info_prefill_and_emit_flags(tmp_path, monkeypatch):
     try:
         app.workflow.set_book(str(tmp_path / "library" / "Author" / "Book"
                                   / "Book.mp3"))
+        # folder names show at once; the file is read off the Tk thread
+        assert app.workflow.meta_vars["title"].get() == "Book"
+        assert "reading" in app.workflow.found_var.get()
+        app.workflow.meta_vars["year"].set("1950")  # typed while loading
+        app.workflow.wait_for_facts()
         # no tags/nfo in the fixture -> fallback to folder names
         assert app.workflow.meta_vars["title"].get() == "Book"
         assert app.workflow.meta_vars["author"].get() == "Author"
+        assert app.workflow.meta_vars["year"].get() == "1950"
+        assert app.workflow._disk is not None
 
         ran = []
         monkeypatch.setattr(wf.WorkflowPanel, "_run",

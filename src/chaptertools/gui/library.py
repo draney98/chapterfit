@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import os
 
+from chaptertools import workdir
+
 AUDIO_EXTS = {".mp3", ".m4a", ".m4b", ".flac", ".ogg", ".wav"}
 SKIP_DIRS = {"__pycache__", "src", "tests", ".pytest_cache"}
 
@@ -14,33 +16,27 @@ def library_root(explicit: str | None = None) -> str:
         explicit or os.environ.get("CHAPTERFIT_LIBRARY") or os.getcwd())
 
 
-def work_root() -> str:
-    return os.environ.get("CHAPTERFIT_WORK") or os.path.join(
-        os.path.expanduser("~"), ".local", "share", "chapterfit")
-
-
 def work_dir_for(audio: str) -> str:
-    """Mirror chapterbook.sh: WORK/<author>/<book-folder>."""
-    folder = os.path.dirname(os.path.abspath(audio))
-    author = os.path.basename(os.path.dirname(folder)) or "unknown"
-    book = os.path.basename(folder) or os.path.splitext(os.path.basename(audio))[0]
-    return os.path.join(work_root(), author, book)
+    """The shared rule (chaptertools.workdir): WORK/<author>/<book-folder>."""
+    return workdir.default_work_dir(audio)
 
 
 def analysis_path(audio: str, work_dir: str | None = None) -> str:
-    base = os.path.basename(audio) + ".analysis.json"
-    if work_dir:
-        return os.path.join(work_dir, base)
-    return audio + ".analysis.json"
+    return workdir.artifact_path(audio, workdir.resolve_work_dir(audio, work_dir))
 
 
 def load_analysis(audio: str, work_dir: str | None = None) -> dict:
-    try:
-        with open(analysis_path(audio, work_dir)) as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
+    """The book's artifact; a legacy beside-audio one is shown until the
+    first run adopts it."""
+    for path in (analysis_path(audio, work_dir),
+                 os.path.abspath(audio) + workdir.ARTIFACT_SUFFIX):
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            continue
+        return data if isinstance(data, dict) else {}
+    return {}
 
 
 def is_audio(name: str) -> bool:

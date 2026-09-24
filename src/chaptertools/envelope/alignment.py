@@ -122,21 +122,37 @@ def chance_rate(n_cands, dur, tol):
     return min(1.0, 2.0 * tol * n_cands / max(dur, 1e-9))
 
 
+def uncertainty(r) -> float:
+    """How unsure a placement is: missing confidence plus posterior spread."""
+    return (1 - (r.get("confidence") or 0)) + (r.get("spread") or 0) / 60.0
+
+
+def leverage(r, pinned: list[float], dur: float) -> float:
+    """Distance from the nearest measured point; an unplaced chapter (and a
+    book with no pins) counts as half the book away."""
+    if r.get("time") is None:
+        return dur / 2
+    return min((abs(r["time"] - p) for p in pinned), default=dur / 2)
+
+
+def measurement_value(r, pinned: list[float], dur: float) -> float:
+    """What listening to this chapter is worth: uncertainty x sqrt(leverage)."""
+    return uncertainty(r) * math.sqrt(max(leverage(r, pinned, dur), 0.0))
+
+
+def pinned_times(results) -> list[float]:
+    return [r["time"] for r in results
+            if r.get("pinned") and r.get("time") is not None]
+
+
 def suggest_measurements(art, al, n=2):
     """Which single listening check would reduce uncertainty the most?"""
     res = al["results"]
-    pinned = [r["time"] for r in res if r["pinned"] and r["time"] is not None]
+    pinned = pinned_times(res)
     dur = art.data["envelope"]["duration"]
-    scored = []
-    for r in res:
-        if r["index"] == 0 or r["pinned"] or r["time"] is None:
-            continue
-        # uncertainty x leverage: distance from the nearest measured point
-        lev = min((abs(r["time"] - p) for p in pinned), default=dur / 2)
-        unc = (1 - r["confidence"]) + (r["spread"] or 0) / 60.0
-        if unc < 0.02:
-            continue
-        scored.append((unc * math.sqrt(lev), r))
+    scored = [(measurement_value(r, pinned, dur), r) for r in res
+              if r["index"] != 0 and not r["pinned"] and r["time"] is not None
+              and uncertainty(r) >= 0.02]
     scored.sort(key=lambda x: -x[0])
     out, used = [], []
     for _, r in scored:

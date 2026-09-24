@@ -1,56 +1,25 @@
 """Edition identification against Audnexus chapter lists."""
 from __future__ import annotations
 
-import json
-import math
 import os
 import statistics
-import urllib.error
-import urllib.request
 
-from chaptertools.audnex import AUDNEX_BASE, flatten_chapters
-from chaptertools.envelope.alignment import chance_rate, score_population
+from chaptertools.audnex import AudnexError, chapters_payload
+from chaptertools.envelope.alignment import score_population
 from chaptertools.envelope.artifact import Artifact
 from chaptertools.util import die, hms
-
-def _fetch_chapters_net(asin: str, region: str) -> dict:
-    url = f"{AUDNEX_BASE}/books/{asin}/chapters?region={region}"
-    req = urllib.request.Request(url, headers={
-        "User-Agent": "chapterfit/1.0", "Accept": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=25) as r:
-            return json.loads(r.read().decode())
-    except urllib.error.HTTPError as e:
-        die(f"Audnexus HTTP {e.code} for {asin}")
-    except urllib.error.URLError as e:
-        die(f"cannot reach Audnexus: {e.reason}")
 
 
 def fetch_chapters(asin: str, region: str, cache_dir: str | None = None,
                    offline: bool = False) -> dict:
-    cp = None
-    if cache_dir:
-        cp = os.path.join(cache_dir, f"chapters.{asin}.{region}.json")
-        if os.path.exists(cp):
-            try:
-                with open(cp) as f:
-                    print(f"  using cached chapter data ({os.path.basename(cp)})")
-                    return json.load(f)
-            except (OSError, ValueError):
-                pass
-    if offline:
-        die(f"no cached chapter data for {asin}/{region} and --offline was set")
-    payload = _fetch_chapters_net(asin, region)
-    if cp:
-        try:
-            with open(cp, "w") as f:
-                json.dump(payload, f)
-        except OSError:
-            pass
-    return payload
-
-
-# flatten_chapters provided by chaptertools.audnex
+    """Raw Audnexus payload through the shared cache (chaptertools.audnex)."""
+    try:
+        return chapters_payload(
+            asin, region, cache_dir, offline=offline,
+            on_cached=lambda p: print(
+                f"  using cached chapter data ({os.path.basename(p)})"))
+    except AudnexError as e:
+        die(str(e))
 
 
 def coarse_fit(chapters, cands, dur, max_off, tol):
