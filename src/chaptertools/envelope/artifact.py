@@ -6,13 +6,12 @@ import json
 import os
 import sys
 
-from chaptertools import workdir
+from chaptertools import __version__, workdir
 from chaptertools.util import die
 
 ENVELOPE_HZ = 20          # 50 ms frames
 ENV_FLOOR_DB = -96.0
 AUDNEX = "https://api.audnex.us"
-__version__ = "1.13.0"
 SCHEMA = 3
 
 class Artifact:
@@ -61,6 +60,7 @@ class Artifact:
         self.data["file"] = self.fingerprint()
 
     def save(self):
+        self.data["written_by"] = f"chaptertools {__version__}"
         tmp = self.path + ".tmp"
         try:
             with open(tmp, "w") as f:

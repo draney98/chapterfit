@@ -16,9 +16,10 @@ class Job:
     in the UI thread (via the app's pump)."""
 
     def __init__(self, name: str, argv: list[str], on_done=None,
-                 on_line=None):
+                 on_line=None, env: dict | None = None):
         self.name = name
         self.argv = list(argv)
+        self.env = env  # None: inherit the GUI's environment
         self.on_done = on_done
         self.on_line = on_line
         self.cancelled = False
@@ -61,6 +62,7 @@ class Runner:
             with self._lock:
                 self._proc = subprocess.Popen(
                     job.argv,
+                    env=job.env,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,

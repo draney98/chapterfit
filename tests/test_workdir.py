@@ -37,7 +37,9 @@ def test_artifact_default_is_work_root_not_media_tree(tmp_path, monkeypatch):
     art = Artifact(str(audio))
     art.save()
     assert art.path == library.analysis_path(str(audio))
-    assert Path(art.path).is_file()
+    from chaptertools import __version__
+    assert json.loads(Path(art.path).read_text())["written_by"] == \
+        f"chaptertools {__version__}"
     assert sorted(p.name for p in audio.parent.iterdir()) == ["book.mp3"]
 
 

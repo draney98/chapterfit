@@ -145,6 +145,20 @@ def test_runner_cancel_marks_job_and_frees_runner(tmp_path):
     assert not runner.busy
 
 
+@pytest.fixture
+def fake_whisper(tmp_path, monkeypatch):
+    """An executable stand-in for the whisper venv's python."""
+    import chaptertools.gui.workflow as wf
+
+    py = tmp_path / "whisper-venv" / "bin" / "python"
+    py.parent.mkdir(parents=True)
+    py.write_text("#!/bin/sh\nexit 0\n")
+    py.chmod(0o755)
+    monkeypatch.setenv("WHISPER_PYTHON", str(py))
+    assert wf.whisper_python() == str(py)
+    return str(py)
+
+
 def _make_app(tmp_path):
     tkinter = pytest.importorskip("tkinter")
     try:
@@ -449,7 +463,7 @@ def test_table_shows_pins_before_align(tmp_path):
         app.destroy()
 
 
-def test_listen_and_sweep_chain_into_align(tmp_path, monkeypatch):
+def test_listen_and_sweep_chain_into_align(tmp_path, monkeypatch, fake_whisper):
     import chaptertools.gui.workflow as wf
 
     app = _make_app(tmp_path)
@@ -460,10 +474,6 @@ def test_listen_and_sweep_chain_into_align(tmp_path, monkeypatch):
         monkeypatch.setattr(wf.WorkflowPanel, "_run",
                             lambda self, name, argv, then=None, stage=None,
                             on_line=None: ran.append(then))
-        monkeypatch.setattr(wf, "whisper_python",
-                            lambda: "/home/oem/.venvs/whisper/bin/python")
-        app.workflow._cf = ["/usr/bin/python3", "-u",
-                            "/srv/media/books/chapterfit.py"]
 
         app.workflow.cmd_listen()
         app.workflow.cmd_sweep(start=100.0, end=700.0)
@@ -826,7 +836,8 @@ def test_log_is_selectable_but_readonly(tmp_path):
         app.destroy()
 
 
-def test_cmd_listen_runs_whisper_python_on_the_script(tmp_path, monkeypatch):
+def test_cmd_listen_runs_whisper_python_on_the_module(tmp_path, monkeypatch,
+                                                      fake_whisper):
     import chaptertools.gui.workflow as wf
 
     app = _make_app(tmp_path)
@@ -837,44 +848,29 @@ def test_cmd_listen_runs_whisper_python_on_the_script(tmp_path, monkeypatch):
         monkeypatch.setattr(wf.WorkflowPanel, "_run",
                             lambda self, name, argv, then=None, stage=None, on_line=None:
                             ran.append(argv))
-        monkeypatch.setattr(wf, "whisper_python",
-                            lambda: "/home/oem/.venvs/whisper/bin/python")
-        app.workflow._cf = ["/usr/bin/python3", "/srv/media/books/chapterfit.py"]
 
         app.workflow.cmd_listen()
 
         assert len(ran) == 1
         argv = ran[0]
-        assert argv[0] == "/home/oem/.venvs/whisper/bin/python"
-        assert argv[1] == "-u"  # unbuffered: true log ordering
-        assert argv[2] == "/srv/media/books/chapterfit.py"
-        assert "/usr/bin/python3" not in argv[:3]
+        # the venv interpreter runs the package module (no script needed)
+        assert argv[:4] == [fake_whisper, "-u", "-m", "chaptertools.cli.chapterfit"]
         assert "listen" in argv and "--pin" in argv
     finally:
         app.destroy()
 
 
-def test_cmd_listen_refuses_console_script(tmp_path, monkeypatch):
-    import chaptertools.gui.workflow as wf
+def test_module_launch_works_outside_the_project(tmp_path):
+    """What whisper jobs rely on: any interpreter, any cwd, package_env()."""
+    from chaptertools.gui.workflow import resolve_chapterfit
+    from chaptertools.util import package_env
 
-    app = _make_app(tmp_path)
-    try:
-        app.workflow.set_book(str(tmp_path / "library" / "Author" / "Book"
-                                  / "Book.mp3"))
-        ran = []
-        monkeypatch.setattr(wf.WorkflowPanel, "_run",
-                            lambda self, name, argv, then=None, stage=None, on_line=None:
-                            ran.append(argv))
-        monkeypatch.setattr(wf, "whisper_python",
-                            lambda: "/home/oem/.venvs/whisper/bin/python")
-        app.workflow._cf = ["/usr/local/bin/chapterfit"]  # no .py path
-
-        app.workflow.cmd_listen()
-
-        assert ran == []  # refused rather than building a broken command
-        assert any("whisper" in (m or "").lower() for _, m in app.dialogs)
-    finally:
-        app.destroy()
+    env = package_env({"PATH": os.environ.get("PATH", "")})
+    out = subprocess.run([*resolve_chapterfit(sys.executable), "version"],
+                         cwd=tmp_path, env=env, capture_output=True, text=True)
+    from chaptertools import __version__
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip() == f"chapterfit {__version__}"
 
 
 @pytest.mark.integration

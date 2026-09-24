@@ -10,7 +10,8 @@ import urllib.error
 import urllib.request
 
 from chaptertools import media
-from chaptertools.envelope.artifact import Artifact, __version__
+from chaptertools import __version__
+from chaptertools.envelope.artifact import Artifact
 from chaptertools.nfo import write_album_nfo
 from chaptertools.util import die, hms, need
 from chaptertools.util import q as _q

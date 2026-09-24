@@ -11,18 +11,15 @@ import json
 import os
 import queue
 import shlex
-import shutil
 import statistics
-import sys
 import time
 import tkinter as tk
 import tkinter.font as tkfont
-from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from chaptertools.envelope.alignment import measurement_value, pinned_times
 from chaptertools.envelope.emit import select_chapters
-from chaptertools.util import clock, hms, parse_time
+from chaptertools.util import clock, hms, module_argv, package_env, parse_time
 
 from . import fonts, palette, tips
 from .facts import MediaFactsLoader
@@ -44,20 +41,18 @@ from .stages import (
     stage_states,
 )
 
+CHAPTERFIT_MODULE = "chaptertools.cli.chapterfit"
 
-def resolve_chapterfit() -> list[str] | None:
-    """Root chapterfit.py when running from the project tree, else installed.
+
+def resolve_chapterfit(python: str | None = None) -> list[str]:
+    """chapterfit as a module of the package this GUI runs from; jobs get
+    package_env() so any interpreter finds it (the whisper venv included).
 
     Runs with -u: stdout is unbuffered, so when a step dies its stderr
     (errors, tracebacks) interleaves in true order in the log instead of
     appearing above the flushed stdout block.
     """
-    root = Path(__file__).resolve().parents[3]
-    script = root / "chapterfit.py"
-    if script.is_file():
-        return [sys.executable, "-u", str(script)]
-    exe = shutil.which("chapterfit")
-    return [exe] if exe else None
+    return module_argv(CHAPTERFIT_MODULE, python=python, unbuffered=True)
 
 
 def whisper_python() -> str | None:
@@ -1109,11 +1104,6 @@ class WorkflowPanel(ttk.Frame):
             and self._dry_ok[self.audio] == self._artifact_mtime()
 
     def set_book(self, audio: str):
-        if self._cf is None:
-            messagebox.showerror(
-                "chapterfit", "Cannot find chapterfit.py or an installed "
-                "'chapterfit' command.")
-            return
         self.audio = os.path.abspath(audio)
         self.work_dir = work_dir_for(self.audio)
         self.book_var.set(self.audio)
@@ -1566,20 +1556,19 @@ class WorkflowPanel(ttk.Frame):
 
     # ------------------------------------------------------- command plumbing
     def _argv(self, *extra: str, prefix: list[str] | None = None) -> list[str]:
-        assert self._cf is not None and self.audio is not None
+        assert self.audio is not None
         base = self._cf if prefix is None else prefix
         return [*base, "--work-dir", self.work_dir, *extra, self.audio]
 
     def _run(self, name: str, argv: list[str], then=None, stage: str | None = None,
              on_line=None):
-        assert self._cf is not None
         if self.app.runner.busy:
             self.app.log(f"! {name} not started: another job is still running")
             return
         self.app.log(f"$ {' '.join(argv)}")
         self.set_busy(True)
         self.app.runner.run(Job(
-            name, argv, on_line=on_line,
+            name, argv, on_line=on_line, env=package_env(),
             on_done=lambda j, code: self._on_done(
                 code, then=then, stage=stage, name=j.name,
                 cancelled=getattr(j, "cancelled", False))))
@@ -1811,10 +1800,7 @@ class WorkflowPanel(ttk.Frame):
             messagebox.showinfo("Sweep", "no whisper venv found (set "
                                 "WHISPER_PYTHON)", parent=self)
             return
-        script = self._whisper_script()
-        if script is None:
-            return
-        argv = [*self._argv("sweep", prefix=[wpy, "-u", script]),
+        argv = [*self._argv("sweep", prefix=resolve_chapterfit(wpy)),
                 "--model", os.environ.get("WHISPER_MODEL", "base"),
                 "--pin", "-y"]
         if start is not None:
@@ -1829,25 +1815,10 @@ class WorkflowPanel(ttk.Frame):
             messagebox.showinfo("Listen", "no whisper venv found (set "
                                 "WHISPER_PYTHON)", parent=self)
             return
-        script = self._whisper_script()
-        if script is None:
-            return
-        self._run("listen", [*self._argv("listen", prefix=[wpy, "-u", script]),
+        self._run("listen", [*self._argv("listen", prefix=resolve_chapterfit(wpy)),
                              "--model", os.environ.get("WHISPER_MODEL", "base"),
                              "--pin", "-y"], stage="resolve",
                   then=self.cmd_align)
-
-    def _whisper_script(self):
-        # the venv python must run the chapterfit *script* directly
-        # (chapterbook.sh: WCF=("$WPY" "$CHAPTERFIT"))
-        script = next((a for a in (self._cf or [])[1:] if a.endswith(".py")),
-                      None)
-        if script is None:
-            messagebox.showerror(
-                "whisper", "whisper actions need the chapterfit.py script "
-                "(an installed console script cannot be re-run under the "
-                "whisper venv)", parent=self)
-        return script
 
     def cmd_transcripts(self):
         argv = self._argv("transcripts")

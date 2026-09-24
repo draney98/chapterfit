@@ -16,7 +16,49 @@ __all__ = [
     "q",
     "normalize_work_dir",
     "logsumexp",
+    "module_argv",
+    "package_env",
 ]
+
+
+def module_argv(module: str, python: str | None = None,
+                unbuffered: bool = False) -> list[str]:
+    """argv that runs a chaptertools module as a program; pair it with
+    package_env() so any interpreter (a whisper venv, say) can import it."""
+    return [python or sys.executable, *(["-u"] if unbuffered else []),
+            "-m", module]
+
+
+def _package_parent() -> str:
+    """A directory whose only job on PYTHONPATH is to expose chaptertools.
+    The source tree's src/ as is; for an installed copy a private link, so a
+    foreign interpreter never sees the rest of this site-packages."""
+    import chaptertools
+    pkg = os.path.dirname(os.path.abspath(chaptertools.__file__))
+    parent = os.path.dirname(pkg)
+    if os.path.basename(parent) not in ("site-packages", "dist-packages"):
+        return parent
+    import tempfile
+    shim = os.path.join(tempfile.gettempdir(), f"chaptertools-path-{os.getuid()}")
+    link = os.path.join(shim, "chaptertools")
+    try:
+        os.makedirs(shim, exist_ok=True)
+        if os.path.realpath(link) != pkg:
+            if os.path.lexists(link):
+                os.unlink(link)
+            os.symlink(pkg, link)
+    except OSError:
+        return parent
+    return shim
+
+
+def package_env(base: dict | None = None) -> dict:
+    """Environment whose PYTHONPATH puts chaptertools first."""
+    env = dict(os.environ if base is None else base)
+    parts = [_package_parent()] + [p for p in env.get("PYTHONPATH", "")
+                                   .split(os.pathsep) if p]
+    env["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(parts))
+    return env
 
 
 def clock(t) -> str:

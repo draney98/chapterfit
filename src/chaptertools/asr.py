@@ -9,7 +9,8 @@ import subprocess
 import sys
 import tempfile
 
-from chaptertools.envelope.artifact import Artifact, __version__
+from chaptertools import __version__
+from chaptertools.envelope.artifact import Artifact
 from chaptertools.util import die, hms, need, parse_time
 
 # Whisper on a 17-hour book is hours of compute. But a narrator says

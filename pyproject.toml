@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chaptertools"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Audiobook chapter alignment toolkit (silence-snap + envelope pipelines)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -18,9 +18,16 @@ whisper = ["faster-whisper>=1.0"]
 
 [project.scripts]
 chapterfit = "chaptertools.cli.chapterfit:main"
-chapterize = "chaptertools.cli.chapterize:main"
-chapterdebug = "chaptertools.cli.chapterdebug:main"
 chaptergui = "chaptertools.gui.app:main"
+chapterize = "chaptertools.silence.chapterize:main"
+chapterdebug = "chaptertools.silence.chapterdebug:main"
+abchapters = "chaptertools.silence.abchapters:main"
+consensus-chapters = "chaptertools.consensus.consensus_chapters:main"
+librivox-chapters = "chaptertools.sources.librivox_chapters:main"
+find-asin = "chaptertools.sources.find_asin:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "chaptertools.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -45,11 +52,12 @@ ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101"]
-"chapterfit.py" = ["E", "F", "I", "UP", "B", "SIM"]
-"chapterize.py" = ["E", "F", "I", "UP", "B", "SIM"]
-"chapterdebug.py" = ["E", "F", "I", "UP", "B", "SIM"]
-"abchapters.py" = ["E", "F", "I", "UP", "B", "SIM"]
-"consensus_chapters.py" = ["E", "F", "I", "UP", "B", "SIM"]
-"librivox_chapters.py" = ["E", "F", "I", "UP", "B", "SIM"]
-"find_asin.py" = ["E", "F", "I", "UP", "B", "SIM"]
+# moved-in legacy CLIs keep their pre-package lint scope
+"src/chaptertools/cli/chapterfit.py" = ["E", "F", "I", "UP", "B", "SIM"]
+"src/chaptertools/silence/chapterize.py" = ["E", "F", "I", "UP", "B", "SIM"]
+"src/chaptertools/silence/chapterdebug.py" = ["E", "F", "I", "UP", "B", "SIM"]
+"src/chaptertools/silence/abchapters.py" = ["E", "F", "I", "UP", "B", "SIM"]
+"src/chaptertools/consensus/consensus_chapters.py" = ["E", "F", "I", "UP", "B", "SIM"]
+"src/chaptertools/sources/librivox_chapters.py" = ["E", "F", "I", "UP", "B", "SIM"]
+"src/chaptertools/sources/find_asin.py" = ["E", "F", "I", "UP", "B", "SIM"]
 "chaptergui.py" = ["E", "F", "I", "UP", "B", "SIM"]
