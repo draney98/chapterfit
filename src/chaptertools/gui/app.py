@@ -183,6 +183,9 @@ class App(tk.Tk):
         copy = ttk.Button(bar, text="Copy all", command=self.copy_log)
         copy.pack(side="right", padx=(0, 2))
         tips.tooltip(copy, "copy the whole log to the clipboard")
+        clear = ttk.Button(bar, text="Clear log", command=self.clear_log)
+        clear.pack(side="right", padx=(0, 8))
+        tips.tooltip(clear, "empty the log")
         save = ttk.Button(bar, text="Save log…", command=self.save_log)
         save.pack(side="right", padx=(0, 8))
         tips.tooltip(save, "write the log to a file")
@@ -205,6 +208,7 @@ class App(tk.Tk):
                            lambda e: menu.tk_popup(e.x_root, e.y_root))
         self._log_tab = tab
         self.notebook.add(tab, text="Log")
+        self.bind_all("<Button-1>", self._log_button_click, add="+")
 
     # ------------------------------------------------------------ log pane --
     def _make_log_readonly(self):
@@ -222,6 +226,24 @@ class App(tk.Tk):
     def _copy_selection(self):
         if self.log_text.tag_ranges("sel"):
             self.log_text.event_generate("<<Copy>>")
+
+    def clear_log(self):
+        self.log_text.delete("1.0", "end")
+        self.log_errors = 0
+        self.notebook.tab(self._log_tab, text="Log")
+
+    def _log_button_click(self, event):
+        w = event.widget
+        if w.winfo_class() not in ("TButton", "Button"):
+            return
+        try:
+            if "disabled" in str(w.cget("state")):
+                return
+            label = str(w.cget("text") or "").strip()
+        except tk.TclError:
+            return
+        if label:
+            self.log(f"clicked {label}")
 
     def copy_log(self):
         self.clipboard_clear()

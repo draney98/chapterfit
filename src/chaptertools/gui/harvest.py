@@ -5,6 +5,7 @@ import os
 import xml.etree.ElementTree as ET
 
 from chaptertools.media import probe_chapters
+from chaptertools.nfo import read_nfo_chapters
 from chaptertools.output import read_tags
 
 
@@ -47,15 +48,17 @@ def harvest_book(audio: str) -> dict:
     audio = os.path.abspath(audio)
     folder = os.path.dirname(audio)
     return _assemble(audio, read_tags(audio), read_nfo(folder),
-                     embedded_chapters(audio))
+                     embedded_chapters(audio),
+                     read_nfo_chapters(os.path.join(folder, "album.nfo")))
 
 
 def placeholder_harvest(audio: str) -> dict:
     """Folder names only - no file reads - while the real harvest loads."""
-    return {**_assemble(os.path.abspath(audio), {}, {}, []), "loading": True}
+    return {**_assemble(os.path.abspath(audio), {}, {}, [], []), "loading": True}
 
 
-def _assemble(audio: str, tags: dict, nfo: dict, chapters: list) -> dict:
+def _assemble(audio: str, tags: dict, nfo: dict, chapters: list,
+              nfo_chapters: list | None = None) -> dict:
     folder = os.path.dirname(audio)
     author_folder = os.path.basename(os.path.dirname(folder))
     book_folder = os.path.basename(folder)
@@ -63,6 +66,7 @@ def _assemble(audio: str, tags: dict, nfo: dict, chapters: list) -> dict:
         "tags": tags,
         "nfo": nfo,
         "embedded_chapters": chapters,
+        "nfo_chapters": nfo_chapters or [],
         "has_chapters_json": os.path.isfile(os.path.join(folder,
                                                          "chapters.json")),
         "has_chapters_txt": os.path.isfile(os.path.join(folder,
@@ -89,7 +93,10 @@ def found_summary(h: dict) -> str:
     n = len(h["embedded_chapters"])
     bits.append(f"{n} embedded chapter{'s' if n != 1 else ''}" if n
                 else "no embedded chapters")
-    if h["nfo"]:
+    nfo_ch = h.get("nfo_chapters") or []
+    if len(nfo_ch) >= 2:
+        bits.append(f"{len(nfo_ch)} NFO chapters")
+    elif h["nfo"]:
         nfo = h["nfo"]
         bits.append(f"album.nfo ({nfo.get('title') or '?'}, "
                     f"{nfo.get('tracks', 0)} tracks)")

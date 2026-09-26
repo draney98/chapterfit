@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 import xml.etree.ElementTree as ET
 
 from chaptertools.media import probe_chapters
+from chaptertools.util import die
 
 INDENT = "  "
 
@@ -13,6 +15,63 @@ INDENT = "  "
 def chapters_from_file(path: str) -> list[dict]:
     """Embedded chapters of a media file: [{title, start, end}]."""
     return probe_chapters(path)
+
+
+def parse_nfo_duration(text: str | None) -> float:
+    """NFO track length as seconds. Accepts m:ss or h:mm:ss; junk is 0."""
+    parts = (text or "").strip().split(":")
+    if not parts or any(not p.isdigit() for p in parts) or len(parts) > 3:
+        return 0.0
+    nums = [int(p) for p in parts]
+    if len(nums) == 1:
+        return float(nums[0])
+    if len(nums) == 2:
+        return float(nums[0] * 60 + nums[1])
+    return float(nums[0] * 3600 + nums[1] * 60 + nums[2])
+
+
+def read_nfo_chapters(path: str) -> list[dict]:
+    """Chapter list from album.nfo tracks: [{title, start, end}].
+
+    Starts are the running sum of track durations. Fewer than two tracks
+    is an album-as-one-file, not a chapter list, so that returns [].
+    """
+    try:
+        root = ET.parse(path).getroot()
+    except (OSError, ET.ParseError):
+        return []
+    if root.tag != "album":
+        return []
+    chapters = []
+    cursor = 0.0
+    for tr in root.findall("track"):
+        title = (tr.findtext("title") or "").strip() or "Untitled"
+        dur = parse_nfo_duration(tr.findtext("duration"))
+        chapters.append({"title": title, "start": cursor, "end": cursor + dur})
+        cursor += dur
+    return chapters if len(chapters) >= 2 else []
+
+
+def chapters_differ(a: list[dict], b: list[dict]) -> bool:
+    """True when two chapter lists are not the same edition.
+
+    Titles must match. Durations are compared as whole seconds (NFO
+    stores them that way) and starts may differ by up to one second.
+    """
+    if len(a) != len(b):
+        return True
+    for x, y in zip(a, b, strict=True):
+        if (x.get("title") or "").strip() != (y.get("title") or "").strip():
+            return True
+        if abs(float(x.get("start") or 0) - float(y.get("start") or 0)) > 1:
+            return True
+        if x.get("end") is None or y.get("end") is None:
+            continue
+        xd = round(float(x["end"]) - float(x["start"]))
+        yd = round(float(y["end"]) - float(y["start"]))
+        if xd != yd:
+            return True
+    return False
 
 
 def fmt_duration(seconds: float) -> str:
@@ -64,9 +123,18 @@ def render_nfo(existing: str | None, chapters: list[dict],
     return ET.tostring(root, encoding="unicode", xml_declaration=False)
 
 
+def nfo_would_replace(path: str, incoming: list[dict]) -> bool:
+    """True when path already holds a chapter list unlike incoming."""
+    if not path or not os.path.isfile(path):
+        return False
+    existing = read_nfo_chapters(path)
+    return bool(existing) and chapters_differ(existing, incoming)
+
+
 def write_album_nfo(folder: str, audio: str, apply: bool = False,
                     title: str | None = None,
-                    artist: str | None = None) -> int:
+                    artist: str | None = None,
+                    force: bool = False) -> int:
     """Write folder/album.nfo from the embedded chapters of `audio`.
 
     Dry runs only report. Real writes back up a pre-existing album.nfo once.
@@ -88,13 +156,29 @@ def write_album_nfo(folder: str, audio: str, apply: bool = False,
     text = render_nfo(nfo if os.path.isfile(nfo) else None,
                       chapters, title, artist)
     total = chapters[-1]["end"]
+    replacing = nfo_would_replace(nfo, chapters)
 
     if not apply:
         print(f"  album.nfo       : would write {len(chapters)} tracks "
           f"({fmt_duration(total)} total)"
           + (" - album.nfo.bak would hold the previous version"
-             if os.path.isfile(nfo) else ""))
+             if os.path.isfile(nfo) else "")
+          + (f" - would replace {len(read_nfo_chapters(nfo))} existing "
+             "NFO chapters" if replacing else ""))
         return len(chapters)
+
+    if replacing and not force:
+        n_old = len(read_nfo_chapters(nfo))
+        if sys.stdin.isatty():
+            answer = input(
+                f"  album.nfo has {n_old} chapters that differ. "
+                "Replace them? [y/N] ")
+            if not answer.lower().startswith("y"):
+                print("  album.nfo       : left unchanged")
+                return 0
+        else:
+            die("album.nfo already has chapter tracks that differ; "
+                "re-run with --force-nfo or -y")
 
     if os.path.isfile(nfo) and not os.path.isfile(nfo + ".bak"):
         shutil.copy2(nfo, nfo + ".bak")

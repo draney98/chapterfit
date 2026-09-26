@@ -58,7 +58,8 @@ class StagePanels:
                   "Audnexus"),
                  ("JSON file", "json", "a chapters JSON file on disk"),
                  ("Embedded", "emb", "the chapters already in the audio "
-                  "file")]
+                  "file"),
+                 ("NFO", "nfo", "the chapter tracks already in album.nfo")]
         self.identify_radios = []
         for text, mode, tip in modes:
             rb = ttk.Radiobutton(radios, text=text, value=mode,
@@ -84,6 +85,55 @@ class StagePanels:
         self.identify_result = self._result_line(p, row=3, colspan=4)
         self._tip(self.identify_btn, "check the chosen chapter list "
                   "against the real silences before aligning")
+        self.asin_frame = ttk.Frame(p)
+        self.asin_frame.grid(row=4, column=0, columnspan=4, sticky="ew",
+                             pady=(4, 0))
+        self.asin_frame.columnconfigure(1, weight=1)
+        self.asin_title = tk.StringVar()
+        self.asin_author = tk.StringVar()
+        self.asin_keywords = tk.StringVar()
+        self.asin_region = tk.StringVar(value="us")
+        query_fields = (
+            ("Title", self.asin_title,
+             "title sent to Audible; edit it before Search"),
+            ("Author", self.asin_author,
+             "author sent to Audible; edit it before Search"),
+            ("Keywords", self.asin_keywords,
+             "free-text search instead of title and author"),
+        )
+        for row, (label, var, tip) in enumerate(query_fields):
+            ttk.Label(self.asin_frame, text=label).grid(
+                row=row, column=0, sticky="w", padx=(0, 6))
+            entry = ttk.Entry(self.asin_frame, textvariable=var)
+            entry.grid(row=row, column=1, columnspan=2, sticky="ew",
+                       pady=(2, 0))
+            self._tip(entry, tip)
+        ttk.Label(self.asin_frame, text="Region").grid(
+            row=3, column=0, sticky="w", padx=(0, 6), pady=(2, 0))
+        self.asin_region_box = ttk.Combobox(
+            self.asin_frame, textvariable=self.asin_region, width=6,
+            values=("us", "uk", "ca", "au", "de", "fr", "it", "es", "in", "jp"))
+        self.asin_region_box.grid(row=3, column=1, sticky="w", pady=(2, 0))
+        self._tip(self.asin_region_box, "Audible catalog region")
+        self.asin_search_btn = ttk.Button(self.asin_frame, text="Search",
+                                          command=self.cmd_search_asin)
+        self.asin_search_btn.grid(row=3, column=2, sticky="w", padx=(8, 0),
+                                  pady=(2, 0))
+        self._tip(self.asin_search_btn,
+                  "search Audible with the title, author, keywords, and "
+                  "region above")
+        cols = ("asin", "title", "author", "runtime", "score")
+        self.asin_tree = ttk.Treeview(self.asin_frame, columns=cols,
+                                      show="headings", height=4)
+        headings = (("asin", "ASIN", 110), ("title", "Title", 220),
+                    ("author", "Author", 140), ("runtime", "Runtime", 70),
+                    ("score", "Score", 50))
+        for col, heading, width in headings:
+            self.asin_tree.heading(col, text=heading)
+            self.asin_tree.column(col, width=width, stretch=col == "title")
+        self.asin_tree.grid(row=4, column=0, columnspan=3, sticky="ew",
+                            pady=(4, 0))
+        self.asin_tree.bind("<<TreeviewSelect>>", self._on_asin_select)
         self._identify_mode_changed()
         return p
 

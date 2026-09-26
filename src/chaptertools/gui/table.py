@@ -29,7 +29,7 @@ TITLE_MIN = "An Average Chapter Title"
 
 def similar_gaps(gaps: list[dict], pins: dict[int, float],
                  chapters: list[dict], mode: str,
-                 limit: int = 25) -> list[dict]:
+                 limit: int = 10) -> list[dict]:
     """Gaps most similar to the pinned chapters (cadence or duration)."""
     if not pins or not gaps:
         return []
@@ -105,6 +105,54 @@ def similar_gaps(gaps: list[dict], pins: dict[int, float],
         if len(out) >= limit:
             break
     return out
+
+
+def _gap_at(gaps: list[dict], t: float, tol: float = 0.06):
+    best, bd = None, 1e9
+    for g in gaps:
+        d = abs(g["mid"] - t)
+        if d < bd:
+            best, bd = g, d
+    return best if bd <= tol else None
+
+
+def gap_marks(gaps: list[dict], rows, mode: str = "cadence",
+              limit: int = 10) -> tuple[list[dict], list[dict]]:
+    """Placed-chapter bars, plus extra candidate gaps.
+
+    With nothing placed, the extras are the longest silences. Otherwise
+    they are the gaps `similar_gaps` ranks from those placed times, so a
+    chapter that already sits on a silence is not listed again.
+    """
+    if not gaps:
+        return [], []
+    rows = list(rows)
+    bars = []
+    for r in rows:
+        if r.placed is None:
+            continue
+        bars.append({"time": r.placed, "title": r.title,
+                     "n": r.index + 1,
+                     "gap": _gap_at(gaps, r.placed)})
+    if not bars:
+        ranked = sorted(gaps, key=lambda g: g.get("dur") or 0, reverse=True)
+        extras = [{"gap": g, "pred": None, "chapter_title": "", "ref": None}
+                  for g in ranked[:limit]]
+        return [], extras
+    n = max(r.index for r in rows) + 1
+    chapters = [{"title": "", "start": 0.0} for _ in range(n)]
+    pins: dict[int, float] = {}
+    for r in rows:
+        if r.published is not None:
+            start = r.published
+        elif r.placed is not None:
+            start = r.placed
+        else:
+            start = 0.0
+        chapters[r.index] = {"title": r.title, "start": start}
+        if r.placed is not None:
+            pins[r.index] = r.placed
+    return bars, similar_gaps(gaps, pins, chapters, mode, limit=limit)
 
 
 class TableViews:
@@ -227,40 +275,14 @@ class TableViews:
         c.delete("all")
         gaps = (self.analysis.get("gaps") or {}).get("gaps") or []
         dur = (self.analysis.get("envelope") or {}).get("duration") or 0.0
-        pins = {int(k): v for k, v in (self.analysis.get("pins") or {})
-                .items()}
-        chapters = (self.analysis.get("identification") or {}) \
-            .get("chapters") or []
         if not gaps or not dur:
             self.gap_legend.set("")
             return
-        if not pins:
-            self.gap_legend.set("pin chapters to focus the strip")
-            return
-        claimed = {}
-        for r in (self.analysis.get("alignment") or {}).get("results", []):
-            t = r.get("time")
-            if t is None:
-                continue
-            for g in gaps:
-                if abs(g["mid"] - t) <= 0.06:
-                    claimed[round(g["mid"], 3)] = r
+        rows = getattr(getattr(self, "_projection", None), "rows", None) or []
         mode = self.gap_mode_var.get()
-        similar = similar_gaps(gaps, pins, chapters, mode)
-
-        def on_gap(t):
-            return min(gaps, key=lambda g: abs(g["mid"] - t)) \
-                if min((abs(g["mid"] - t) for g in gaps), default=1e9) \
-                <= 0.06 else None
-
-        pin_draws = []
-        for idx in sorted(pins):
-            g = on_gap(pins[idx])
-            title = chapters[idx]["title"] if idx < len(chapters) else "?"
-            pin_draws.append({"x": pins[idx], "gap": g,
-                              "title": title, "n": idx + 1})
-        durs = [d["gap"]["dur"] for d in pin_draws if d["gap"]] \
-            + [s["gap"]["dur"] for s in similar]
+        chapters, extras = gap_marks(gaps, rows, mode)
+        durs = [b["gap"]["dur"] for b in chapters if b.get("gap")] \
+            + [s["gap"]["dur"] for s in extras if s.get("gap")]
         maxdur = max(durs) if durs else 1.0
         width = max(c.winfo_width(), 400)
         height = max(c.winfo_height(), int(c["height"]))
@@ -278,34 +300,36 @@ class TableViews:
                            lambda e, t=tip: self._gap_tip(t))
                 c.tag_bind(tag, "<Leave>", lambda e: self._gap_tip(None))
 
-        for d in pin_draws:
-            g = d["gap"]
-            tip = (f"{hms(d['x'])} · {d['title']} (#{d['n']}) · pinned"
+        for b in chapters:
+            g = b.get("gap")
+            tip = (f"{hms(b['time'])} · {b['title']} (#{b['n']})"
                    + (f" · on a {g['dur']:.2f} s silence" if g
                       else " · off-gap"))
-            bar(d["x"], g["dur"] if g else None, palette.PIN_BAR, tip)
-        for s in similar:
+            bar(b["time"], g["dur"] if g else None, palette.PIN_BAR, tip)
+        for s in extras:
             g = s["gap"]
-            r = claimed.get(round(g["mid"], 3))
             note = ""
-            if r is not None:
-                note = f" · claimed by {r['title']} (#{r['index'] + 1})"
             if mode == "cadence" and s.get("pred") is not None:
-                note += (f" · near {s['chapter_title']}"
-                         f" (predicted {hms(s['pred'])})")
+                note = (f" · near {s['chapter_title']}"
+                        f" (predicted {hms(s['pred'])})")
             elif mode == "duration" and s.get("ref") is not None:
-                note = f" · pins' silences run ~{s['ref']:.2f} s"
+                note = f" · chapter silences run ~{s['ref']:.2f} s"
             bar(g["mid"], g["dur"], palette.GAP_BAR,
-                f"{hms(g['mid'])} · {g['dur']:.2f} s{note or ' · unclaimed'}")
+                f"{hms(g['mid'])} · {g['dur']:.2f} s{note or ' · candidate'}")
         c.create_line(0, mid_y, width, mid_y, fill=palette.MUTED)
         for frac, anchor in ((0, "w"), (0.5, "center"), (1, "e")):
             c.create_text(4 + frac * (width - 8), height - axis_h // 2,
                           text=hms(dur * frac), anchor=anchor,
                           font="TkDefaultFont", fill=palette.MUTED)
-        by = "cadence" if mode == "cadence" else "silence length"
-        self.gap_legend.set(
-            f"{len(pin_draws)} pinned chapters (purple) · "
-            f"{len(similar)} similar gaps by {by} (blue) · hover for detail")
+        if chapters:
+            by = "cadence" if mode == "cadence" else "silence length"
+            self.gap_legend.set(
+                f"{len(chapters)} chapters (purple) · "
+                f"{len(extras)} candidate gaps by {by} (blue) · "
+                "hover for detail")
+        else:
+            self.gap_legend.set(
+                f"{len(extras)} longest silences (blue) · hover for detail")
 
     _gap_tipwin = None
 

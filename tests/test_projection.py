@@ -113,3 +113,79 @@ def test_resolve_weak_order_and_recommendation():
     assert [r["index"] for r in p.weak] == [2]
     assert p.recommendation == "Listen"
     assert p.next == "resolve"
+
+
+def test_nfo_chapters_are_placed_ahead_of_the_artifact():
+    nfo = [{"title": "Opening Credits", "start": 0.0, "end": 25.0},
+           {"title": "One", "start": 25.0, "end": 2281.0}]
+    p = WorkflowProjection({}, 0.5, DiskFacts(), nfo_chapters=nfo)
+    assert [r.title for r in p.rows] == ["Opening Credits", "One"]
+    assert p.rows[1].placed == 25.0
+    assert p.rows[1].published is None
+    assert p.rows[1].tags == ()
+
+    identified = WorkflowProjection(
+        {"identification": _ident(0.0, 90.0),
+         "alignment": {"results": [
+             _row(0, "Aligned", 0.0, 1.0, 0.9),
+             _row(1, "Also", 90.0, 91.0, 0.9)],
+             "rate": 1.0, "conflicts": []}},
+        0.5, DiskFacts(), nfo_chapters=nfo)
+    assert [r.title for r in identified.rows] == ["Opening Credits", "One"]
+    assert identified.rows[1].placed == 25.0
+    assert identified.rows[1].published == 90.0
+    assert identified.rows[1].tags == ()
+
+    no_nfo = WorkflowProjection(
+        {"identification": _ident(0.0, 90.0),
+         "alignment": {"results": [
+             _row(0, "Aligned", 0.0, 1.0, 0.9),
+             _row(1, "Also", 90.0, 91.0, 0.9)],
+             "rate": 1.0, "conflicts": []}},
+        0.5, DiskFacts())
+    assert [r.title for r in no_nfo.rows] == ["Aligned", "Also"]
+    assert no_nfo.rows[1].placed == 91.0
+
+
+def test_one_track_nfo_does_not_replace_alignment():
+    art = {"identification": _ident(0.0, 90.0),
+           "alignment": {"results": [
+               _row(0, "Aligned", 0.0, 1.0, 0.9),
+               _row(1, "Also", 90.0, 91.0, 0.9)],
+               "rate": 1.0, "conflicts": []}}
+    one = [{"title": "The Whole Book", "start": 0.0, "end": 3600.0}]
+    for nfo in (one, []):
+        p = WorkflowProjection(art, 0.5, DiskFacts(), nfo_chapters=nfo)
+        assert [r.title for r in p.rows] == ["Aligned", "Also"]
+        assert p.rows[1].placed == 91.0
+
+
+def test_transcript_text_from_heard_clips():
+    from chaptertools.gui.projection import filter_transcript, transcript_line_time, transcript_text
+
+    heard = {"heard": {"clips": {
+        "12.5|3|base": '[{"s": 0.0, "t": "chapter two"}]'}}}
+    assert "chapter two" in transcript_text(heard)
+    assert transcript_text({}) == ""
+    assert transcript_text({"heard": {}}) == ""
+
+    body = transcript_text(heard) + "\n" + "     1:00:00.000  the road"
+    assert "chapter two" in filter_transcript(body, "chapter")
+    assert "the road" not in filter_transcript(body, "chapter")
+    assert filter_transcript(body, "") == body
+    assert filter_transcript(body, "chapt[").startswith("bad regex:")
+    assert transcript_line_time(transcript_text(heard).splitlines()[0]) == 12.5
+    assert transcript_line_time("no timestamp here") is None
+
+
+def test_found_summary_names_nfo_chapters():
+    from chaptertools.gui.harvest import found_summary
+
+    base = {"tags": {}, "embedded_chapters": [], "nfo": {"title": "Book",
+                                                         "tracks": 3},
+            "has_chapters_json": False, "has_chapters_txt": False,
+            "nfo_chapters": [{"title": "A"}, {"title": "B"}, {"title": "C"}]}
+    assert "3 NFO chapters" in found_summary(base)
+    one = {**base, "nfo_chapters": [], "nfo": {"title": "Dune", "tracks": 1}}
+    assert "1 tracks" in found_summary(one)
+    assert "NFO chapters" not in found_summary(one)

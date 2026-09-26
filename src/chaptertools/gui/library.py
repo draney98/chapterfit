@@ -21,6 +21,106 @@ def work_dir_for(audio: str) -> str:
     return workdir.default_work_dir(audio)
 
 
+def asin_result_path(audio: str, work_dir: str) -> str:
+    """find-asin-library.sh writes <audio>.asin.json beside the analysis."""
+    return os.path.join(work_dir, os.path.basename(audio) + ".asin.json")
+
+
+def _load_asin(audio: str, work_dir: str | None) -> dict:
+    if not audio or not work_dir:
+        return {}
+    try:
+        with open(asin_result_path(audio, work_dir)) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def asin_query(audio: str, work_dir: str | None) -> dict[str, str]:
+    """Title and author last sent to Audible, else the book folder names."""
+    data = _load_asin(audio, work_dir)
+    title = str(data.get("guessed_title") or "").strip()
+    author = str(data.get("guessed_author") or "").strip()
+    if audio:
+        folder = os.path.dirname(os.path.abspath(audio))
+        if not title:
+            title = os.path.basename(folder)
+        if not author:
+            author = os.path.basename(os.path.dirname(folder))
+    return {"title": title, "author": author}
+
+
+def asin_candidates(audio: str, work_dir: str | None) -> list[dict]:
+    """Rows from a saved find_asin result: asin, title, author, runtime, score.
+
+    Missing, unreadable, or empty files return [].
+    """
+    data = _load_asin(audio, work_dir)
+    if not data:
+        return []
+    rows = []
+    for cand in data.get("candidates") or []:
+        if not isinstance(cand, dict):
+            continue
+        asin = str(cand.get("asin") or "").strip()
+        if not asin:
+            continue
+        authors = cand.get("authors") or []
+        author = authors if isinstance(authors, str) else ", ".join(
+            str(a) for a in authors if a)
+        runtime = cand.get("runtime_min")
+        score = cand.get("score")
+        rows.append({
+            "asin": asin,
+            "title": str(cand.get("title") or ""),
+            "author": author,
+            "runtime": "" if runtime is None else f"{runtime} min",
+            "score": "" if score is None else f"{float(score):.2f}",
+        })
+    return rows
+
+
+def asin_emit_defaults(audio: str, work_dir: str | None,
+                       label: str) -> dict[str, str]:
+    """Title, author, album, and year for the ASIN Identify used.
+
+    The label is ``Audnexus <asin>``. Fields come from that candidate in
+    the saved search. Genre and comment are not in the result. An unknown
+    ASIN, or no file, returns {}.
+    """
+    asin = label.split(" ", 1)[1].strip() if label.startswith("Audnexus ") else ""
+    if not asin:
+        return {}
+    for cand in _load_asin(audio, work_dir).get("candidates") or []:
+        if not isinstance(cand, dict):
+            continue
+        if str(cand.get("asin") or "").strip() != asin:
+            continue
+        title = str(cand.get("title") or "").strip()
+        authors = cand.get("authors") or []
+        author = authors if isinstance(authors, str) else ", ".join(
+            str(a) for a in authors if a)
+        release = str(cand.get("release") or "").strip()
+        year = release[:4] if len(release) >= 4 and release[:4].isdigit() else ""
+        out: dict[str, str] = {}
+        if title:
+            out["title"] = title
+            out["album"] = title
+        if author.strip():
+            out["author"] = author.strip()
+        if year:
+            out["year"] = year
+        return out
+    return {}
+
+
+def top_asin(audio: str, work_dir: str | None) -> str | None:
+    """Best ASIN from a saved find_asin result, or None."""
+    rows = asin_candidates(audio, work_dir)
+    return rows[0]["asin"] if rows else None
+
+
 def analysis_path(audio: str, work_dir: str | None = None) -> str:
     return workdir.artifact_path(audio, workdir.resolve_work_dir(audio, work_dir))
 

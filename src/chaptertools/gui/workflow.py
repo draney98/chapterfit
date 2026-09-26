@@ -15,6 +15,7 @@ import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
+from chaptertools.nfo import chapters_differ, read_nfo_chapters
 from chaptertools.util import clock, hms, package_env, parse_time
 
 from . import fonts, palette, tips
@@ -23,6 +24,7 @@ from .commands import (
     align_argv,
     chapterfit_prefix,
     emit_argv,
+    find_asin_argv,
     identify_argv,
     job_argv,
     near_spec,
@@ -31,9 +33,23 @@ from .commands import (
 )
 from .facts import MediaFactsLoader
 from .harvest import found_summary, placeholder_harvest
-from .library import analysis_path, load_analysis, work_dir_for
+from .library import (
+    analysis_path,
+    asin_candidates,
+    asin_emit_defaults,
+    asin_query,
+    asin_result_path,
+    load_analysis,
+    top_asin,
+    work_dir_for,
+)
 from .panels import StagePanels
-from .projection import WorkflowProjection
+from .projection import (
+    WorkflowProjection,
+    filter_transcript,
+    transcript_line_time,
+    transcript_text,
+)
 from .runner import Job
 from .stages import (
     ATTENTION,
@@ -243,10 +259,12 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         tab.rowconfigure(1, weight=1)
         ttk.Label(tab, text="Filter (regex):").grid(row=0, column=0,
                                                    sticky="w")
-        self.grep_var = tk.StringVar()
+        self.grep_var = tk.StringVar(value="chapter")
         e = ttk.Entry(tab, textvariable=self.grep_var)
         e.grid(row=0, column=1, sticky="ew", padx=4)
         e.bind("<Return>", lambda e: self.cmd_transcripts())
+        self.grep_var.trace_add(
+            "write", lambda *_: self._show_saved_transcripts())
         self._tip(e, "only lines matching this regular expression, case "
                   "insensitive; empty shows everything")
         show = ttk.Button(tab, text="Show transcripts",
@@ -258,6 +276,7 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
             font=tkfont.nametofont("TkFixedFont", root=self))
         self.transcripts_text.grid(row=1, column=0, columnspan=3,
                                    sticky="nsew")
+        self.transcripts_text.bind("<Double-1>", self._transcript_seek)
         self.notebook.add(tab, text="Transcripts")
 
     # -------------------------------------------------------------- state --
@@ -354,6 +373,7 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         if harvest is not None and token >= self._harvest_token:
             self._set_harvest(harvest)
         self._refresh()
+        self._maybe_identify_from_nfo()
         if self._auto_stage:
             self._auto_stage = False
             self.set_stage(next_stage(self._compute_states()))
@@ -362,12 +382,25 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         """Fill Book info, leaving any field the user has edited."""
         self.harvest = harvest
         self.found_var.set(found_summary(harvest))
+        self._apply_book_info()
+        self._update_header()
+
+    def _apply_book_info(self):
+        """Emit fields: harvest suggestion, then the identified ASIN."""
+        if not hasattr(self, "meta_vars"):
+            return
+        suggested = dict((self.harvest or {}).get("suggested") or {})
+        label = ((self.analysis or {}).get("identification") or {}).get(
+            "label") or ""
+        for key, value in asin_emit_defaults(
+                self.audio or "", self.work_dir, label).items():
+            if value:
+                suggested[key] = value
         for key, var in self.meta_vars.items():
-            new = harvest["suggested"].get(key, "")
+            new = suggested.get(key, "")
             if var.get() == self._harvest_shown.get(key, var.get()):
                 var.set(new)
             self._harvest_shown[key] = new
-        self._update_header()
 
     _auto_stage = False
 
@@ -396,6 +429,13 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         self.audio = os.path.abspath(audio)
         self.work_dir = work_dir_for(self.audio)
         self.book_var.set(self.audio)
+        folder = os.path.dirname(self.audio)
+        title = os.path.basename(folder) or os.path.basename(self.audio)
+        author = os.path.basename(os.path.dirname(folder))
+        rule = "────────"
+        self.app.log(rule)
+        self.app.log(f"{author} / {title}" if author else title)
+        self.app.log(rule)
         # per-book field provenance: the next row selection fills them again
         self.pin_ch.set("")
         self.pin_time.set("0:00:00.000")
@@ -405,9 +445,12 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         self._sweep_autofilled = False
         self._disk = None
         self._harvest_shown = {}
+        self._nfo_decided = False
         self._set_harvest(placeholder_harvest(self.audio))
         self._refresh()
         self._prefill_identify()
+        self._fill_asin_list()
+        self._fill_asin_query()
         self.set_stage(next_stage(self._compute_states()))
         # the stage is chosen again once disk facts are in, unless the
         # user picks one first
@@ -434,12 +477,22 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         elif label:
             if os.path.basename(label) == "chapters.embedded.json":
                 self.identify_mode.set("emb")
+            elif os.path.basename(label) == "chapters.nfo.json":
+                self.identify_mode.set("nfo")
             elif os.path.isfile(label):
                 self.identify_mode.set("json")
             else:
                 return
             self.identify_value.set(label)
             self._identify_autofilled = True
+        elif (asin := top_asin(self.audio or "", self.work_dir)):
+            self.identify_mode.set("asin")
+            self.identify_value.set(asin)
+            self._identify_autofilled = True
+        elif getattr(self, "_identify_autofilled", False):
+            self.identify_value.set("")
+            self._identify_autofilled = False
+            return
         else:
             return
         self._identify_mode_changed()
@@ -461,6 +514,8 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         dur = ((self.analysis.get("envelope") or {}).get("duration"))
         ident = self.analysis.get("identification") or {}
         asin = ident.get("label") or ident.get("candidate") or ""
+        if not asin:
+            asin = top_asin(self.audio or "", self.work_dir) or ""
         name = os.path.basename(self.audio) if self.audio else ""
         bits = [f"{title} — {author}" if author else title]
         if dur:
@@ -542,12 +597,14 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         self.analysis = {}
         if self.audio:
             self.analysis = load_analysis(self.audio, self.work_dir)
+        self._apply_book_info()
 
         proj = WorkflowProjection(
             self.analysis,
             self.min_conf.get() if hasattr(self, "min_conf") else 0.5,
             self._disk or DiskFacts(),
-            audio=self.audio)
+            audio=self.audio,
+            nfo_chapters=(self.harvest or {}).get("nfo_chapters") or [])
         self._projection = proj
         sel = self.tree.selection()
         scroll = self.tree.yview()
@@ -584,6 +641,7 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         self._update_resolve()
         self._update_header()
         self.gap_canvas.after_idle(self._draw_gap_graph)
+        self._show_saved_transcripts()
         self._states = states
         self._update_controls()
 
@@ -601,7 +659,8 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
                 self.hint_btn, self.listen_btn, self.sweep_start_entry,
                 self.sweep_end_entry, self.range_btn, self.probe_btn,
                 self.full_btn, self.pin_btn, self.unpin_btn, self.reread_btn,
-                self.emit_btn, self.finalize_btn, self.apply_btn]
+                self.emit_btn, self.finalize_btn, self.apply_btn,
+                self.asin_search_btn]
 
     def _update_controls(self):
         """One place decides what is enabled, and tooltips say why not."""
@@ -637,8 +696,13 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         if mode == "emb":
             off([self.identify_entry],
                 "Embedded uses the chapters already in the file")
+        if mode == "nfo":
+            off([self.identify_entry],
+                "NFO uses the chapter tracks in album.nfo")
         if mode != "json":
             off([self.identify_browse], "Browse picks a chapters JSON file")
+        if mode != "asin":
+            off([self.asin_search_btn], "Search is for the ASIN source")
         if not self._selected_row() and not self.pin_ch.get().strip():
             off([self.pin_btn, self.unpin_btn],
                 "select a chapter in the table")
@@ -795,6 +859,8 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
             if target != self._stage:
                 self.set_stage(target)
             self._auto_stage = True  # again once fresh disk facts land
+        if stage == "measure" and code == 0:
+            self._maybe_identify_from_nfo()
 
     # ------------------------------------------------------------- actions --
     def cmd_measure(self):
@@ -808,6 +874,11 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         if mode == "json" and not self.identify_value.get():
             self.identify_value.set(os.path.join(
                 os.path.dirname(self.audio or ".") or ".", "chapters.json"))
+        if hasattr(self, "asin_frame"):
+            if mode == "asin":
+                self.asin_frame.grid()
+            else:
+                self.asin_frame.grid_remove()
 
     def _identify_browse(self):
         path = filedialog.askopenfilename(
@@ -821,6 +892,59 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
             self.identify_mode.get(),
             self.identify_value.get().strip(),
             (self.analysis.get("identification") or {}).get("label") or "")
+
+    def _fill_asin_query(self, *, keep_keywords: bool = False):
+        """Show the title and author that Search will send."""
+        if not hasattr(self, "asin_title"):
+            return
+        query = asin_query(self.audio or "", self.work_dir)
+        self.asin_title.set(query["title"])
+        self.asin_author.set(query["author"])
+        if not keep_keywords:
+            self.asin_keywords.set("")
+
+    def _fill_asin_list(self):
+        if not hasattr(self, "asin_tree"):
+            return
+        self.asin_tree.delete(*self.asin_tree.get_children())
+        for row in asin_candidates(self.audio or "", self.work_dir):
+            self.asin_tree.insert("", "end", values=(
+                row["asin"], row["title"], row["author"],
+                row["runtime"], row["score"]))
+
+    def _on_asin_select(self, _event=None):
+        sel = self.asin_tree.selection()
+        if not sel:
+            return
+        asin = self.asin_tree.item(sel[0], "values")[0]
+        if not asin:
+            return
+        self.identify_value.set(asin)
+        self._identify_autofilled = True
+
+    def cmd_search_asin(self):
+        if not self.audio or not self.work_dir:
+            return
+        os.makedirs(self.work_dir, exist_ok=True)
+        out = asin_result_path(self.audio, self.work_dir)
+        self._run("find-asin", find_asin_argv(
+            self.audio, out,
+            title=self.asin_title.get(),
+            author=self.asin_author.get(),
+            keywords=self.asin_keywords.get(),
+            region=self.asin_region.get()),
+            then=self._after_asin_search)
+
+    def _after_asin_search(self):
+        self._fill_asin_query(keep_keywords=True)
+        self._fill_asin_list()
+        rows = asin_candidates(self.audio or "", self.work_dir)
+        if not rows:
+            return
+        if not self.identify_value.get().strip() \
+                or getattr(self, "_identify_autofilled", False):
+            self.identify_value.set(rows[0]["asin"])
+            self._identify_autofilled = True
 
     def cmd_identify_primary(self):
         verdict = identify_verdict(self.analysis.get("identification") or {})
@@ -846,6 +970,8 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
             else:
                 messagebox.showinfo("Identify", "choose an existing JSON file",
                                     parent=self)
+        elif mode == "nfo":
+            self.cmd_identify_nfo()
         else:
             self.cmd_identify_embedded()
 
@@ -889,6 +1015,60 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         self._run("identify", identify_argv(
             self._cf, self.work_dir, self.audio, "json", dump),
                   stage="identify")
+
+    def cmd_identify_nfo(self) -> bool:
+        """Use album.nfo chapter tracks as the source. Returns whether a
+        job was started."""
+        if self.harvest.get("loading"):
+            self.app.log("still reading album.nfo - try again in a moment")
+            return False
+        chapters = self.harvest.get("nfo_chapters") or []
+        if len(chapters) < 2:
+            messagebox.showinfo("Identify (NFO)",
+                                "album.nfo has fewer than 2 chapter tracks",
+                                parent=self)
+            return False
+        if self.app.runner.busy:
+            return False
+        assert self.work_dir is not None
+        dump = os.path.join(self.work_dir, "chapters.nfo.json")
+        os.makedirs(self.work_dir, exist_ok=True)
+        with open(dump, "w") as f:
+            json.dump({"chapters": [
+                {"startOffsetMs": int(round(c["start"] * 1000)),
+                 "title": c["title"]} for c in chapters]}, f, indent=1)
+        self.app.log(f"  dumped {len(chapters)} NFO chapters -> {dump}")
+        self._run("identify", identify_argv(
+            self._cf, self.work_dir, self.audio, "json", dump),
+                  stage="identify")
+        return True
+
+    def _maybe_identify_from_nfo(self):
+        """Load NFO chapters once measure exists. Ask only when that would
+        replace an identification already on the artifact."""
+        if getattr(self, "_nfo_decided", False) or not self.audio:
+            return
+        if self.harvest.get("loading"):
+            return
+        chapters = self.harvest.get("nfo_chapters") or []
+        if len(chapters) < 2:
+            return
+        if self._compute_states()["measure"]["state"] == "pending":
+            return
+        ident = (self.analysis.get("identification") or {}).get("chapters") or []
+        if ident and not chapters_differ(ident, chapters):
+            self._nfo_decided = True
+            return
+        if ident and not messagebox.askyesno(
+                "album.nfo chapters",
+                f"album.nfo has {len(chapters)} chapters that differ from "
+                "the current identification.\n\nReplace the chapter list "
+                "with the NFO tracks?",
+                parent=self):
+            self._nfo_decided = True
+            return
+        if self.cmd_identify_nfo():
+            self._nfo_decided = True
 
     # align -------------------------------------------------------------
     def _near_spec(self, raw: str) -> str | None:
@@ -976,6 +1156,16 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
             model=os.environ.get("WHISPER_MODEL", "base")),
                   stage="resolve", then=self.cmd_align)
 
+    def _show_saved_transcripts(self):
+        """Fill the Transcripts tab from the artifact, or clear it."""
+        if not hasattr(self, "transcripts_text"):
+            return
+        pattern = self.grep_var.get() if hasattr(self, "grep_var") else ""
+        body = filter_transcript(transcript_text(self.analysis), pattern)
+        self.transcripts_text.delete("1.0", "end")
+        if body:
+            self.transcripts_text.insert("1.0", body + "\n")
+
     def cmd_transcripts(self):
         argv = self._argv("transcripts")
         grep = self.grep_var.get().strip()
@@ -987,6 +1177,18 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
     def _transcript_line(self, line: str):
         self.transcripts_text.insert("end", line + "\n")
         self.transcripts_text.see("end")
+
+    def _transcript_seek(self, event):
+        index = self.transcripts_text.index(f"@{event.x},{event.y}")
+        line = self.transcripts_text.get(f"{index} linestart",
+                                         f"{index} lineend")
+        t = transcript_line_time(line)
+        if t is None or not self.audio:
+            return
+        if self.app.player.alive:
+            self.app.player.seek_to(t)
+        else:
+            self.app.play(self.audio, start=t, length=0)
 
     # pin by ear ----------------------------------------------------------
     def _selected_row(self):
@@ -1173,11 +1375,17 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         self._run("finalize", self._argv("finalize"), stage="finalize-dry")
 
     def cmd_finalize_apply(self):
-        if not messagebox.askyesno(
-                "Finalize", "Move the original aside and reload the book in "
-                "Audiobookshelf?", parent=self):
+        nfo_path = os.path.join(os.path.dirname(self.audio or ""), "album.nfo")
+        existing = read_nfo_chapters(nfo_path)
+        prompt = ("Move the original aside and reload the book in "
+                  "Audiobookshelf?")
+        if len(existing) >= 2:
+            prompt += (f"\n\nalbum.nfo already has {len(existing)} chapter "
+                       "tracks. They will be replaced if they differ from "
+                       "the chapters being written.")
+        if not messagebox.askyesno("Finalize", prompt, parent=self):
             return
-        argv = self._argv("finalize", "--apply", "-y")
+        argv = self._argv("finalize", "--apply", "-y", "--force-nfo")
         if self.allow_delete_var.get():
             argv.append("--allow-delete")
         self._run("finalize", argv, stage="finalize")

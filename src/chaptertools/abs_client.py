@@ -383,7 +383,9 @@ def cmd_finalize(args):
     emitted_tags = (art.data.get("emitted") or {}).get("tags") or {}
     write_album_nfo(folder, final if apply else src, apply=apply,
                     title=emitted_tags.get("title"),
-                    artist=emitted_tags.get("artist"))
+                    artist=emitted_tags.get("artist"),
+                    force=bool(getattr(args, "force_nfo", False)
+                               or getattr(args, "yes", False)))
 
     # ---- 3. talk to Audiobookshelf --------------------------------------
     env = load_env(args.env, args.work_dir, audio)

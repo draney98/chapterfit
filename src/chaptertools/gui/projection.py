@@ -6,12 +6,13 @@ change and then paints; tests ask the same questions without a window.
 from __future__ import annotations
 
 import os
+import re
 import shlex
 from dataclasses import dataclass, field
 
 from chaptertools.envelope.alignment import measurement_value, pinned_times
 from chaptertools.envelope.emit import select_chapters
-from chaptertools.util import hms
+from chaptertools.util import hms, parse_time
 
 from .stages import (
     PENDING,
@@ -46,6 +47,7 @@ class WorkflowProjection:
     min_conf: float
     disk: DiskFacts
     audio: str | None = None
+    nfo_chapters: list | None = None
     states: dict = field(init=False)
     rows: list[TableRow] = field(init=False)
     weak: list[dict] = field(init=False)
@@ -78,10 +80,27 @@ class WorkflowProjection:
         self.emit_text = self._emit_text()
 
     def _display_results(self) -> list[dict]:
+        nfo = self.nfo_chapters or []
+        if len(nfo) >= 2:
+            ident_ch = ((self.analysis.get("identification") or {})
+                        .get("chapters") or [])
+            rows = []
+            for i, c in enumerate(nfo):
+                published = None
+                if i < len(ident_ch):
+                    published = ident_ch[i].get("start")
+                rows.append({
+                    "index": i, "title": c.get("title", ""),
+                    "published": published, "time": c.get("start"),
+                    "confidence": 1.0, "pinned": False, "nfo": True,
+                })
+            return rows
         alignment = self.analysis.get("alignment") or {}
         results = list(alignment.get("results") or [])
         if results:
             return results
+        ident = self.analysis.get("identification") or {}
+        source = ident.get("chapters") or []
         pins_now = self.analysis.get("pins") or {}
         return [
             {"index": i, "title": c.get("title", ""),
@@ -89,9 +108,7 @@ class WorkflowProjection:
              "time": pins_now.get(str(i)),
              "confidence": 1.0 if str(i) in pins_now else None,
              "pinned": str(i) in pins_now}
-            for i, c in enumerate(
-                (self.analysis.get("identification") or {})
-                .get("chapters") or [])]
+            for i, c in enumerate(source)]
 
     def _conflicts_unknown(self) -> bool:
         alignment = self.analysis.get("alignment") or {}
@@ -102,7 +119,7 @@ class WorkflowProjection:
     def _rows(self) -> list[TableRow]:
         results = self._display_results()
         alignment = self.analysis.get("alignment") or {}
-        aligned = bool(alignment)
+        aligned = bool(alignment) and not any(r.get("nfo") for r in results)
         withheld = select_chapters(results, self.min_conf)[1] if aligned else set()
         conflicts = set(alignment.get("conflicts") or [])
         gap_at = {round(g["mid"], 3): g for g in
@@ -216,3 +233,41 @@ class WorkflowProjection:
         total = len((self.analysis.get("alignment") or {}).get("results") or [])
         return (f"{emitted.get('count')} embedded, "
                 f"{total - emitted.get('count', 0)} withheld")
+
+
+def transcript_text(analysis: dict) -> str:
+    """Transcript tab body from the artifact's heard clips, or empty."""
+    from chaptertools.asr import collect_transcripts
+
+    class _Heard:
+        def __init__(self, data):
+            self.data = data
+
+    lines = []
+    for t, _model, text, _words in collect_transcripts(_Heard(analysis or {})):
+        if text:
+            lines.append(f"{hms(t):>13}  {text}")
+    return "\n".join(lines)
+
+
+def filter_transcript(body: str, pattern: str) -> str:
+    """Keep lines matching `pattern`. An empty pattern keeps every line."""
+    pattern = (pattern or "").strip()
+    if not pattern:
+        return body
+    try:
+        rx = re.compile(pattern, re.IGNORECASE)
+    except re.error as e:
+        return f"bad regex: {e}"
+    return "\n".join(ln for ln in body.splitlines() if rx.search(ln))
+
+
+def transcript_line_time(line: str) -> float | None:
+    """The leading H:MM:SS.mmm on a transcript line, or None."""
+    token = line.strip().split(None, 1)
+    if not token or ":" not in token[0]:
+        return None
+    try:
+        return parse_time(token[0])
+    except ValueError:
+        return None

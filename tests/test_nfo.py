@@ -6,7 +6,15 @@ import xml.etree.ElementTree as ET
 
 import pytest
 
-from chaptertools.nfo import chapters_from_file, fmt_duration, render_nfo
+from chaptertools.nfo import (
+    chapters_differ,
+    chapters_from_file,
+    fmt_duration,
+    nfo_would_replace,
+    parse_nfo_duration,
+    read_nfo_chapters,
+    render_nfo,
+)
 
 SAMPLE_NFO = """<?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <album>
@@ -32,6 +40,107 @@ CHAPTERS = [
     {"title": "Chapter One", "start": 20.5, "end": 3904.0},
     {"title": "Chapter Two", "start": 3904.0, "end": 7523.0},
 ]
+
+
+MULTI_NFO = """<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<album>
+  <title>Revelation Space</title>
+  <artist>Alastair Reynolds</artist>
+  <track>
+    <title>Opening Credits</title>
+    <duration>0:25</duration>
+  </track>
+  <track>
+    <title>One: Mantell Sector</title>
+    <duration>37:36</duration>
+  </track>
+  <track>
+    <title>Two</title>
+    <duration>2:05:23</duration>
+  </track>
+</album>
+"""
+
+
+def test_parse_nfo_duration():
+    assert parse_nfo_duration("37:36") == 37 * 60 + 36
+    assert parse_nfo_duration("2:05:23") == 2 * 3600 + 5 * 60 + 23
+    assert parse_nfo_duration("0:25") == 25
+    assert parse_nfo_duration("") == 0
+    assert parse_nfo_duration("nope") == 0
+
+
+def test_read_nfo_chapters_accumulates_starts(tmp_path):
+    nfo = tmp_path / "album.nfo"
+    nfo.write_text(MULTI_NFO, encoding="utf-8")
+    chapters = read_nfo_chapters(str(nfo))
+    assert [c["title"] for c in chapters] == [
+        "Opening Credits", "One: Mantell Sector", "Two"]
+    assert chapters[0]["start"] == 0
+    assert chapters[0]["end"] == 25
+    assert chapters[1]["start"] == 25
+    assert chapters[1]["end"] == 25 + 37 * 60 + 36
+    assert chapters[2]["start"] == chapters[1]["end"]
+
+
+def test_read_nfo_chapters_skips_single_track_album(tmp_path):
+    nfo = tmp_path / "album.nfo"
+    nfo.write_text(SAMPLE_NFO, encoding="utf-8-sig")
+    assert read_nfo_chapters(str(nfo)) == []
+
+
+def test_read_nfo_chapters_missing_or_broken(tmp_path):
+    assert read_nfo_chapters(str(tmp_path / "missing.nfo")) == []
+    bad = tmp_path / "bad.nfo"
+    bad.write_text("<album><track>not closed", encoding="utf-8")
+    assert read_nfo_chapters(str(bad)) == []
+
+
+def test_chapters_differ_allows_whole_second_rounding():
+    a = [{"title": "One", "start": 0.0, "end": 25.4},
+         {"title": "Two", "start": 25.4, "end": 100.2}]
+    b = [{"title": "One", "start": 0.0, "end": 25.0},
+         {"title": "Two", "start": 25.0, "end": 100.0}]
+    assert chapters_differ(a, b) is False
+    assert chapters_differ(a, [{**b[0], "title": "Other"}, b[1]]) is True
+    assert chapters_differ(a, b[:1]) is True
+
+
+def test_nfo_would_replace_only_when_chapter_lists_differ(tmp_path):
+    nfo = tmp_path / "album.nfo"
+    nfo.write_text(MULTI_NFO, encoding="utf-8")
+    same = read_nfo_chapters(str(nfo))
+    assert nfo_would_replace(str(nfo), same) is False
+    other = [{"title": "Different", "start": 0.0, "end": 10.0},
+             {"title": "Also", "start": 10.0, "end": 20.0}]
+    assert nfo_would_replace(str(nfo), other) is True
+    single = tmp_path / "one.nfo"
+    single.write_text(SAMPLE_NFO, encoding="utf-8-sig")
+    assert nfo_would_replace(str(single), other) is False
+
+
+def test_write_refuses_nfo_overwrite_without_force(tmp_path, monkeypatch):
+    from chaptertools.nfo import write_album_nfo
+
+    monkeypatch.setattr("chaptertools.nfo.chapters_from_file",
+                        lambda _path: [
+                            {"title": "A", "start": 0.0, "end": 10.0},
+                            {"title": "B", "start": 10.0, "end": 40.0}])
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    book = tmp_path / "Author" / "Book"
+    book.mkdir(parents=True)
+    nfo = book / "album.nfo"
+    nfo.write_text(MULTI_NFO, encoding="utf-8")
+    before = nfo.read_text(encoding="utf-8")
+    with pytest.raises(SystemExit):
+        write_album_nfo(str(book), "unused.mp3", apply=True)
+    assert nfo.read_text(encoding="utf-8") == before
+
+    n = write_album_nfo(str(book), "unused.mp3", apply=True, force=True)
+    assert n == 2
+    titles = [t.findtext("title")
+              for t in ET.parse(nfo).getroot().findall("track")]
+    assert titles == ["A", "B"]
 
 
 def test_fmt_duration():

@@ -35,6 +35,16 @@ An older `<audio>.analysis.json` left beside the file is copied into the
 work directory the first time the book is opened, with a notice. The
 media tree stays data-only.
 
+To measure every book that does not already have those artifacts:
+
+```bash
+./measure-library.sh /srv/media/books
+./measure-library.sh /srv/media/books --dry-run
+./find-asin-library.sh /srv/media/books
+./find-asin-library.sh /srv/media/books --dry-run
+./find-asin-library.sh /srv/media/books -- --verify
+```
+
 ## GUI
 
 A Tkinter front end for the envelope pipeline lives in

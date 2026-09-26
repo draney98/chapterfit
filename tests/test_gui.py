@@ -15,6 +15,128 @@ from chaptertools.gui.runner import Job, Runner
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def test_top_asin_reads_saved_find_asin_result(tmp_path):
+    audio = tmp_path / "Brave New World.mp3"
+    audio.write_bytes(b"")
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "Brave New World.mp3.asin.json").write_text(json.dumps({
+        "candidates": [{"asin": "B00Y18C77Q", "score": 0.2},
+                       {"asin": "B000000000"}]}))
+    assert lib.top_asin(str(audio), str(work)) == "B00Y18C77Q"
+    assert lib.top_asin(str(audio), str(tmp_path / "missing")) is None
+
+
+def test_asin_candidates_rows_and_empty(tmp_path):
+    from chaptertools.gui.commands import find_asin_argv
+
+    audio = tmp_path / "Brave New World.mp3"
+    audio.write_bytes(b"")
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "Brave New World.mp3.asin.json").write_text(json.dumps({
+        "candidates": [{
+            "asin": "B00Y18C77Q",
+            "title": "Brave New World",
+            "authors": ["Aldous Huxley"],
+            "runtime_min": 95,
+            "score": 0.1956,
+        }, {"title": "no asin"}]}))
+    rows = lib.asin_candidates(str(audio), str(work))
+    assert rows == [{
+        "asin": "B00Y18C77Q",
+        "title": "Brave New World",
+        "author": "Aldous Huxley",
+        "runtime": "95 min",
+        "score": "0.20",
+    }]
+    assert lib.asin_candidates(str(audio), str(tmp_path / "missing")) == []
+    empty = work / "empty.mp3.asin.json"
+    empty.write_text("{}")
+    (tmp_path / "empty.mp3").write_bytes(b"")
+    assert lib.asin_candidates(str(tmp_path / "empty.mp3"), str(work)) == []
+    argv = find_asin_argv(
+        str(audio), str(work / "out.json"),
+        title="Brave New World", author="Aldous Huxley",
+        keywords="huxley", region="uk")
+    assert argv[argv.index(str(audio)) + 1:] == [
+        "--title", "Brave New World",
+        "--author", "Aldous Huxley",
+        "--keywords", "huxley",
+        "--region", "uk",
+        "--json", str(work / "out.json"),
+    ]
+    assert "--verify" not in argv
+    bare = find_asin_argv(str(audio), str(work / "out.json"))
+    assert bare[-3:] == [str(audio), "--json", str(work / "out.json")]
+
+
+def test_asin_query_uses_saved_guess_then_folders(tmp_path):
+    audio = tmp_path / "Aldous Huxley" / "Brave New World" / "book.mp3"
+    audio.parent.mkdir(parents=True)
+    audio.write_bytes(b"")
+    work = tmp_path / "work"
+    work.mkdir()
+    assert lib.asin_query(str(audio), str(work)) == {
+        "title": "Brave New World",
+        "author": "Aldous Huxley",
+    }
+    (work / "book.mp3.asin.json").write_text(json.dumps({
+        "guessed_title": "16 - Brave New World",
+        "guessed_author": "Top 100 Sci-Fi Books",
+    }))
+    assert lib.asin_query(str(audio), str(work)) == {
+        "title": "16 - Brave New World",
+        "author": "Top 100 Sci-Fi Books",
+    }
+
+
+def test_asin_emit_defaults_from_identified_candidate(tmp_path):
+    audio = tmp_path / "Aldous Huxley" / "Brave New World" / "book.mp3"
+    audio.parent.mkdir(parents=True)
+    audio.write_bytes(b"")
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "book.mp3.asin.json").write_text(json.dumps({
+        "candidates": [{
+            "asin": "B002V1BVK4",
+            "title": "Brave New World",
+            "authors": ["Aldous Huxley"],
+            "release": "2008-01-16",
+        }, {"asin": "B00Y18C77Q", "title": "A Reader's Guide",
+            "authors": ["Someone Else"], "release": "2015-01-01"}]}))
+    assert lib.asin_emit_defaults(
+        str(audio), str(work), "Audnexus B002V1BVK4") == {
+            "title": "Brave New World",
+            "album": "Brave New World",
+            "author": "Aldous Huxley",
+            "year": "2008",
+        }
+    assert lib.asin_emit_defaults(str(audio), str(work), "Audnexus B000") == {}
+    assert lib.asin_emit_defaults(str(audio), str(work), "") == {}
+
+
+def test_emit_embed_flag_does_not_consume_audio(tmp_path):
+    audio = tmp_path / "Brave New World.mp3"
+    audio.write_bytes(b"not-audio")
+    work = tmp_path / "work"
+    r = subprocess.run(
+        [sys.executable, os.path.join(PROJECT_ROOT, "chapterfit.py"),
+         "--work-dir", str(work), "emit",
+         "--min-confidence", "0.5",
+         "--chapters-txt", str(work / "chapters.txt"),
+         "--abs-json", str(work / "chapters.json"),
+         "--title", "Brave New World",
+         "--author", "Aldous Huxley",
+         "--year", "1932",
+         "--embed", str(audio)],
+        capture_output=True, text=True)
+    err = r.stderr + r.stdout
+    assert "required: audio" not in err
+    assert r.returncode != 2
+    assert "alignment" in err
+
+
 def test_scan_library_finds_audio(tmp_path):
     root = tmp_path / "library"
     book = root / "Isaac Asimov" / "Foundation"
@@ -741,6 +863,35 @@ def test_similar_gaps_duration_and_edges():
     assert similar_gaps(gaps, {}, chapters, "duration") == []
 
 
+def test_gap_marks_chapters_without_pins_and_longest():
+    from types import SimpleNamespace
+
+    from chaptertools.gui.table import gap_marks
+
+    def row(i, title, published, placed):
+        return SimpleNamespace(index=i, title=title,
+                               published=published, placed=placed)
+
+    # one placed chapter, no pins: its bar, plus at most 10 extras
+    rows = [row(0, "c0", 0.0, 0.0), row(1, "c1", 100.0, None)]
+    gaps = [{"mid": 0.0, "dur": 2.0}] + [
+        {"mid": float(m), "dur": 2.0} for m in range(50, 400, 10)]
+    bars, extras = gap_marks(gaps, rows, "cadence")
+    assert [b["time"] for b in bars] == [0.0]
+    assert bars[0]["title"] == "c0"
+    assert len(extras) == 10
+    assert all(abs(e["gap"]["mid"]) > 0.06 for e in extras)
+
+    # nothing placed: the 10 longest silences
+    bare = [row(0, "c0", 0.0, None)]
+    longs = [{"mid": float(i), "dur": float(i)} for i in range(15)]
+    bars, extras = gap_marks(longs, bare, "cadence")
+    assert bars == []
+    assert [e["gap"]["dur"] for e in extras] == [
+        float(i) for i in range(14, 4, -1)]
+    assert gap_marks([], rows, "cadence") == ([], [])
+
+
 def test_identify_prefill_from_label(tmp_path):
     app = _make_app(tmp_path)
     try:
@@ -1042,6 +1193,31 @@ def test_identify_embedded_dumps_and_runs(tmp_path, monkeypatch):
         app.workflow.cmd_identify_embedded()
         assert ran == []
         assert any("embedded" in (m or "").lower() for _, m in app.dialogs)
+    finally:
+        app.destroy()
+
+
+def test_identify_nfo_dumps_and_runs(tmp_path, monkeypatch):
+    import chaptertools.gui.workflow as wf
+
+    app = _make_app(tmp_path)
+    try:
+        app.workflow.set_book(str(tmp_path / "library" / "Author" / "Book"
+                                  / "Book.mp3"))
+        ran = []
+        monkeypatch.setattr(wf.WorkflowPanel, "_run",
+                            lambda self, name, argv, then=None, stage=None, on_line=None:
+                            ran.append(argv))
+        app.workflow.harvest = {
+            "nfo_chapters": [{"start": 0.0, "title": "Opening", "end": 25.0},
+                             {"start": 25.0, "title": "One", "end": 90.0}]}
+        assert app.workflow.cmd_identify_nfo() is True
+        dump = ran[0][ran[0].index("--chapters-json") + 1]
+        with open(dump) as f:
+            payload = json.load(f)
+        assert payload["chapters"][0]["title"] == "Opening"
+        assert payload["chapters"][1]["startOffsetMs"] == 25000
+        assert os.path.basename(dump) == "chapters.nfo.json"
     finally:
         app.destroy()
 

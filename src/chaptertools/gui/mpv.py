@@ -104,6 +104,12 @@ class Player:
         """Move relative to the current position; works while paused."""
         self._send("seek", delta, "exact")
 
+    def seek_to(self, seconds: float):
+        """Jump to an absolute time. Works while paused."""
+        seconds = max(0.0, seconds)
+        self._send("seek", seconds, "absolute")
+        self._time = seconds
+
     def stop(self):
         proc, self.proc = self.proc, None
         sock, self._sock = self._sock, None

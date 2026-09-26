@@ -407,7 +407,8 @@ def cmd_emit(args):
         with open(args.abs_json, "w") as f:
             json.dump(out, f, indent=2)
         print(f"  wrote {args.abs_json}")
-    if args.ffmetadata or args.embed is not None:
+    embed_dest = getattr(args, "embed_dest", None)
+    if args.ffmetadata or args.embed or embed_dest:
         lines = [";FFMETADATA1"]
         for k, v in tags.items():
             lines.append(f"{k}={v}")
@@ -421,8 +422,8 @@ def cmd_emit(args):
             with open(args.ffmetadata, "w") as f:
                 f.write(meta)
             print(f"  wrote {args.ffmetadata}")
-        if args.embed is not None:
-            dest = args.embed or (os.path.splitext(art.audio)[0]
+        if args.embed or embed_dest:
+            dest = embed_dest or (os.path.splitext(art.audio)[0]
                                   + ".chapters" + os.path.splitext(art.audio)[1])
             tmp = dest + ".ffmeta.tmp"
             with open(tmp, "w") as f:
@@ -471,8 +472,9 @@ def cmd_emit(args):
   can be a few tens of milliseconds off - inaudible, but it is why embedding
   is the more faithful option.""")
 
-    if not (args.abs_json or args.ffmetadata or args.embed is not None
-            or args.split or args.chapters_txt):
+    if not (args.abs_json or args.ffmetadata or args.embed
+            or getattr(args, "embed_dest", None) or args.split
+            or args.chapters_txt):
         print("  (nothing written - pass --abs-json, --ffmetadata or --embed)")
 
 
@@ -579,7 +581,12 @@ def main():
                    help="do not require ABS to show chapters")
     p.add_argument("--timeout", type=int, default=900,
                    help="seconds to wait for a library scan (default 900)")
-    p.add_argument("-y", "--yes", action="store_true")
+    p.add_argument("-y", "--yes", action="store_true",
+                   help="answer yes to prompts, including replacing "
+                        "existing album.nfo chapter tracks")
+    p.add_argument("--force-nfo", action="store_true",
+                   help="replace existing album.nfo chapter tracks "
+                        "without asking")
     p.add_argument("-v", "--verbose", action="store_true")
     p.set_defaults(func=cmd_finalize)
 
@@ -680,7 +687,11 @@ def main():
     p.add_argument("--comment", help="global ID3 comment")
     p.add_argument("--abs-json", metavar="FILE")
     p.add_argument("--ffmetadata", metavar="FILE")
-    p.add_argument("--embed", nargs="?", const="", metavar="DEST")
+    p.add_argument("--embed", action="store_true",
+                   help="write a chaptered copy of the audio")
+    p.add_argument("--embed-dest", metavar="DEST",
+                   help="path for that copy "
+                        "(default: <name>.chapters.<ext>)")
     p.add_argument("--split", metavar="DIR",
                    help="write one file per chapter into DIR")
     p.add_argument("--chapters-txt", metavar="FILE",

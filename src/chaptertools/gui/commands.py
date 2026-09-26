@@ -12,6 +12,28 @@ META_FLAGS = {
 }
 
 
+def find_asin_argv(audio: str, json_path: str, *,
+                   title: str = "", author: str = "", keywords: str = "",
+                   region: str = "", python: str | None = None) -> list[str]:
+    """find_asin writing its candidate list; no --verify.
+
+    Blank title, author, and keywords are omitted so find_asin guesses.
+    Keywords, when set, replace the title/author query.
+    """
+    argv = [*module_argv("chaptertools.sources.find_asin", python=python,
+                         unbuffered=True), audio]
+    if title.strip():
+        argv += ["--title", title.strip()]
+    if author.strip():
+        argv += ["--author", author.strip()]
+    if keywords.strip():
+        argv += ["--keywords", keywords.strip()]
+    if region.strip():
+        argv += ["--region", region.strip()]
+    argv += ["--json", json_path]
+    return argv
+
+
 def chapterfit_prefix(python: str | None = None) -> list[str]:
     """Unbuffered `python -m chaptertools.cli.chapterfit`."""
     return module_argv(CHAPTERFIT_MODULE, python=python, unbuffered=True)
