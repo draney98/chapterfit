@@ -18,7 +18,8 @@ def _button_labels(widget):
     return labels
 
 
-def test_session_player_and_log_drawer(tmp_path):
+def test_session_player_and_log_drawer(tmp_path, monkeypatch):
+    monkeypatch.setenv("CHAPTERFIT_CONFIG", str(tmp_path / "config"))
     if not os.environ.get("DISPLAY"):
         pytest.skip("no display")
     from chaptertools.gui.app import App
@@ -57,5 +58,16 @@ def test_session_player_and_log_drawer(tmp_path):
             assert gone not in labels
         assert "Apply to library" in labels
         assert "Dry run" in labels
+        app._library_open = False
+        app.workflow.set_book(str(book))
+        app.update_idletasks()
+        assert app._library_collapsed
+        app.toggle_library()
+        assert not app._library_collapsed
+        app._fill_library()
+        app.library_filter.set("done")
+        assert not app.lib_tree.get_children("")
+        app.library_filter.set("work")
+        assert app.lib_tree.get_children("")
     finally:
         app.destroy()

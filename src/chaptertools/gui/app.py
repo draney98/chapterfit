@@ -1,6 +1,8 @@
 """Main window: library pane, workflow main area, tabs, status bar."""
 from __future__ import annotations
 
+import contextlib
+import json
 import os
 import queue
 import sys
@@ -11,8 +13,8 @@ from tkinter import filedialog, messagebox, ttk
 from chaptertools.util import clock
 
 from . import fonts
+from .library import book_marks, scan_library
 from .library import library_root as resolve_library_root
-from .library import scan_library
 from .log_drawer import LogDrawer
 from .mpv import Player
 from .player_bar import PlayerBar
@@ -42,7 +44,7 @@ class App(tk.Tk):
         self._build_ui()
         self._fill_library()
         self.fit_minsize()
-        self.after_idle(lambda: self._pane.sashpos(0, LIBRARY_WIDTH))
+        self.after_idle(self._place_library_sash)
         self.after(100, self._pump)
         self.protocol("WM_DELETE_WINDOW", self._quit)
 
@@ -118,7 +120,7 @@ class App(tk.Tk):
             "In the chapter table:\n\n" + SHORTCUTS.replace(" · ", "\n")
             + "\n\nAnywhere:\n\nCtrl++ / Ctrl+- larger / smaller text\n"
               "Ctrl+0 default text size\n"
-              "Ctrl+Shift+L log\n"
+              "Ctrl+L library · Ctrl+Shift+L log\n"
               "Space play or pause · ←/→ ±5 s · Shift+←/→ ±10 s",
             parent=self)
 
@@ -135,9 +137,18 @@ class App(tk.Tk):
         pane.pack(fill="both", expand=True)
 
         # ---- library pane -------------------------------------------------
-        lib = ttk.LabelFrame(pane, text="Library", padding=4)
+        lib = ttk.Frame(pane, padding=4)
         pane.add(lib, weight=0)
-        searchbar = ttk.Frame(lib)
+        self._lib = lib
+        self._library_open = _load_library_open()
+        self._library_collapsed = False
+        ttk.Style(self).configure("Library.TButton", padding=(2, 2))
+        self._lib_expand = ttk.Button(lib, text="›", width=2,
+                                      style="Library.TButton",
+                                      command=self.toggle_library)
+        self._lib_body = ttk.Frame(lib)
+        self._lib_body.pack(side="top", fill="both", expand=True)
+        searchbar = ttk.Frame(self._lib_body)
         searchbar.pack(side="top", fill="x", pady=(0, 4))
         ttk.Label(searchbar, text="search:").pack(side="left")
         self.search_var = tk.StringVar()
@@ -145,7 +156,17 @@ class App(tk.Tk):
         search_entry = ttk.Entry(searchbar, textvariable=self.search_var)
         search_entry.pack(side="left", fill="x", expand=True, padx=(4, 0))
         search_entry.bind("<Escape>", lambda e: self.search_var.set(""))
-        tree_box = ttk.Frame(lib)
+        ttk.Button(searchbar, text="‹", width=3,
+                   command=self.toggle_library).pack(side="right", padx=(4, 0))
+        chips = ttk.Frame(self._lib_body)
+        chips.pack(side="top", fill="x", pady=(0, 4))
+        self.library_filter = tk.StringVar(value="all")
+        self.library_filter.trace_add("write", lambda *_: self._apply_search())
+        for value, label in (("all", "All"), ("work", "Needs work"),
+                             ("done", "Done")):
+            ttk.Radiobutton(chips, text=label, value=value,
+                            variable=self.library_filter).pack(side="left")
+        tree_box = ttk.Frame(self._lib_body)
         tree_box.pack(side="top", fill="both", expand=True)
         tree_box.columnconfigure(0, weight=1)
         tree_box.rowconfigure(0, weight=1)
@@ -170,6 +191,7 @@ class App(tk.Tk):
         self.log_drawer = LogDrawer(self)
         self.log_text = self.log_drawer.text
         self.bind_all("<Control-Shift-L>", lambda e: self.toggle_log())
+        self.bind_all("<Control-l>", self.toggle_library)
         self.bind_all("<Button-1>", self._log_button_click, add="+")
 
         # ---- main area ----------------------------------------------------
@@ -244,7 +266,8 @@ class App(tk.Tk):
         for author in sorted(self._library):
             author_hit = active and query in author.lower()
             paths = [p for p in self._library[author]
-                     if not active or author_hit or query in _title_of(p)]
+                     if (not active or author_hit or query in _title_of(p))
+                     and self._chip_allows(p)]
             if not paths:
                 continue
             author_id = self.lib_tree.insert("", "end",
@@ -252,6 +275,9 @@ class App(tk.Tk):
             widest = max(widest, font.measure(author))
             for path in paths:
                 label = _book_label(path, self._library[author])
+                marks = book_marks(path)
+                if marks:
+                    label = f"{marks} {label}"
                 self.lib_tree.insert(author_id, "end", iid=str(path),
                                      text=label)
                 widest = max(widest, font.measure(label) + 20)
@@ -263,6 +289,49 @@ class App(tk.Tk):
 
     def _apply_search(self):
         self._render_library(self.search_var.get())
+
+    def _chip_allows(self, path: str) -> bool:
+        choice = self.library_filter.get()
+        if choice == "all":
+            return True
+        done = "✓" in book_marks(path)
+        if choice == "done":
+            return done
+        return not done
+
+    def toggle_library(self, event=None):
+        """Expand or collapse the list. The choice is remembered.
+
+        Shift is left for the log shortcut.
+        """
+        if event is not None and int(getattr(event, "state", 0)) & 0x0001:
+            return
+        self._library_open = self._library_collapsed
+        _save_library_open(self._library_open)
+        self._apply_library_collapse(not self._library_open)
+        return "break"
+
+    def sync_library_strip(self):
+        """Collapse while a book is open, unless the list is pinned open."""
+        collapse = bool(self.workflow.audio) and not self._library_open
+        self._apply_library_collapse(collapse)
+
+    def _apply_library_collapse(self, collapsed: bool):
+        self._library_collapsed = collapsed
+        if collapsed:
+            self._lib_body.pack_forget()
+            self._lib_expand.pack(side="top", anchor="n")
+        else:
+            self._lib_expand.pack_forget()
+            self._lib_body.pack(side="top", fill="both", expand=True)
+        self._place_library_sash()
+
+    def _place_library_sash(self):
+        width = LIBRARY_WIDTH
+        if self._library_collapsed:
+            width = max(44, self._lib_expand.winfo_reqwidth() + 8)
+        with contextlib.suppress(tk.TclError):
+            self._pane.sashpos(0, width)
 
     def _on_select(self, _event=None):
         sel = self.lib_tree.selection()
@@ -352,6 +421,31 @@ class App(tk.Tk):
         if getattr(self.workflow, "quality", None) is not None:
             self.workflow.quality.cancel()
         self.destroy()
+
+
+def _library_pref_path():
+    from chaptertools.audio_quality.presets import config_dir
+    return config_dir() / "gui.json"
+
+
+def _load_library_open() -> bool:
+    """False collapses the list once a book is open."""
+    try:
+        with open(_library_pref_path()) as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return False
+    return bool(data.get("library_open"))
+
+
+def _save_library_open(open_: bool) -> None:
+    path = _library_pref_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w") as handle:
+            json.dump({"library_open": open_}, handle)
+    except OSError:
+        pass
 
 
 def _book_label(path: str, siblings: list[str]) -> str:

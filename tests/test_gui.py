@@ -196,6 +196,26 @@ def test_scan_library_finds_audio(tmp_path):
     assert out["Isaac Asimov"] == [str(book / "Foundation.mp3")]
 
 
+def test_book_marks_follow_the_artifact(tmp_path):
+    audio = tmp_path / "Author" / "Book" / "Book.mp3"
+    audio.parent.mkdir(parents=True)
+    audio.write_bytes(b"x")
+    assert lib.book_marks(str(audio)) == ""
+    work = lib.work_dir_for(str(audio))
+    os.makedirs(work, exist_ok=True)
+    art = lib.analysis_path(str(audio), work)
+    with open(art, "w") as handle:
+        json.dump({"envelope": {"duration": 1}}, handle)
+    assert lib.book_marks(str(audio)) == "●"
+    with open(art, "w") as handle:
+        json.dump({"emitted": {"count": 3}}, handle)
+    assert lib.book_marks(str(audio)) == "✓"
+    stem, _ext = os.path.splitext(os.path.basename(audio))
+    with open(os.path.join(work, f"{stem}.quality.mp3"), "wb") as handle:
+        handle.write(b"x")
+    assert lib.book_marks(str(audio)) == "✓♪"
+
+
 def test_search_filters_library(tmp_path):
     app = _make_app(tmp_path)
     try:

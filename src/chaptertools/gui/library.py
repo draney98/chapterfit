@@ -160,6 +160,36 @@ def load_analysis(audio: str, work_dir: str | None = None) -> dict:
     return {}
 
 
+def book_marks(audio: str) -> str:
+    """Status glyphs from files already on disk. No decode and no probe.
+
+    ✓ chapters have been written, ● a scan or alignment is in progress,
+    ♪ cleaned audio exists.
+    """
+    work = work_dir_for(audio)
+    data: dict = {}
+    path = analysis_path(audio, work)
+    if os.path.isfile(path):
+        try:
+            with open(path) as handle:
+                loaded = json.load(handle)
+            if isinstance(loaded, dict):
+                data = loaded
+        except (OSError, ValueError):
+            data = {}
+    marks = ""
+    if data.get("emitted"):
+        marks += "✓"
+    elif data:
+        marks += "●"
+    stem, ext = os.path.splitext(os.path.basename(audio))
+    cleaned = os.path.join(work, stem + ".quality.mp3")
+    original = os.path.join(work, f"{stem}.original{ext}")
+    if os.path.isfile(cleaned) or os.path.isfile(original):
+        marks += "♪"
+    return marks
+
+
 def is_audio(name: str) -> bool:
     base = os.path.basename(name)
     if ".chapters." in base:

@@ -520,6 +520,8 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         self._auto_stage = True
         self._request_facts(harvest=True)
         self._maybe_autoscan()
+        if hasattr(self.app, "sync_library_strip"):
+            self.app.sync_library_strip()
 
     def _pick_stage(self, key: str):
         """A stage chosen by the user: no automatic re-choice after that."""
@@ -917,6 +919,8 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
     def _on_done(self, code, then=None, stage: str | None = None,
                  name: str = "the last step", cancelled: bool = False):
         self.set_busy(False)
+        if hasattr(self.app, "_apply_search"):
+            self.app._apply_search()
         if code is None:
             self.app.log(f"! {name} could not start (see the line above)")
         else:
