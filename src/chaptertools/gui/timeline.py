@@ -238,6 +238,9 @@ class Timeline(ttk.Frame):
                 canvas.create_text(x + 2, 2, anchor="nw", text=str(row.index + 1),
                                    fill=color, font=font)
                 last_x = x
+        show_preview = getattr(self.app.workflow, "_step", "") == "match"
+        if not show_preview:
+            return
         for t in self.app.session.preview_marks:
             if not (start <= t <= end):
                 continue

@@ -99,6 +99,28 @@ def _elide(text: str, font, room: int) -> str:
     return text[:(lo + 1) // 2] + "…" + text[len(text) - lo // 2:]
 
 
+def _chapter_counts(audio: str, work_dir: str | None) -> dict[str, str]:
+    path = asin_result_path(audio, work_dir) if audio else ""
+    if not path or not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    counts = {}
+    for cand in data.get("candidates") or []:
+        if not isinstance(cand, dict):
+            continue
+        asin = str(cand.get("asin") or "").strip()
+        chapters = cand.get("chapters")
+        if isinstance(chapters, list):
+            counts[asin] = str(len(chapters))
+        elif cand.get("chapter_count") is not None:
+            counts[asin] = str(cand["chapter_count"])
+    return counts
+
+
 def _stack(parent):
     """One frame per step, stacked in the same cell."""
     host = ttk.Frame(parent)
@@ -198,14 +220,17 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         place.grid(row=0, column=0, sticky="nsew")
         self._panels = {
             "measure": self._panel_measure(self._main_frames["scan"]),
-            "identify": self._panel_identify(self._main_frames["match"]),
+            "identify": self._panel_identify(self._insp_frames["match"]),
             "align": self._panel_align(place),
             "resolve": self._panel_resolve(place),
             "emit": self._panel_emit(self._main_frames["finish"]),
             "finalize": self._panel_finalize(self._insp_frames["finish"]),
         }
-        for key in ("measure", "identify", "emit", "finalize"):
+        for key in ("measure", "emit", "finalize"):
             self._panels[key].grid(row=0, column=0, sticky="nsew")
+        self._panels["identify"].grid(row=0, column=0, sticky="new")
+        self._build_book_info(self._insp_frames["match"])
+        self._build_editions(self._main_frames["match"])
         place.add(self._panels["align"], weight=1)
         place.add(self._panels["resolve"], weight=2)
         self._build_chapters_tab(self._main_frames["place"])
@@ -681,6 +706,7 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         self._update_resolve()
         self._update_header()
         self.timeline.redraw()
+        self._fill_asin_list()
         self._show_saved_transcripts()
         self._states = states
         self._update_controls()
@@ -1005,13 +1031,45 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
     def _fill_asin_list(self):
         if not hasattr(self, "asin_tree"):
             return
+        counts = _chapter_counts(self.audio or "", self.work_dir)
+        self._filling_editions = True
         self.asin_tree.delete(*self.asin_tree.get_children())
         for row in asin_candidates(self.audio or "", self.work_dir):
             self.asin_tree.insert("", "end", values=(
                 row["asin"], row["title"], row["author"], row["narrator"],
-                row["runtime"], row["score"]))
+                row["runtime"], counts.get(row["asin"], ""),
+                self._fit_label(row["asin"])))
+        self._filling_editions = False
+        self._show_edition_marks()
+
+    def _fit_label(self, asin: str) -> str:
+        ident = self.analysis.get("identification") or {}
+        label = ident.get("label") or ""
+        if not asin or not label.endswith(asin):
+            return ""
+        verdict = identify_verdict(ident) or ""
+        score = (ident.get("best_trial") or {}).get("score")
+        if isinstance(score, (int, float)):
+            return f"{verdict} {score:.1f}".strip()
+        return verdict
+
+    def _show_edition_marks(self) -> None:
+        chapters = (self.analysis.get("identification") or {}).get("chapters") or []
+        marks = [float(c["start"]) for c in chapters
+                 if isinstance(c, dict) and isinstance(c.get("start"), (int, float))]
+        self.app.session.preview_marks = marks
+        if hasattr(self, "timeline"):
+            self.timeline.redraw()
+        if hasattr(self, "fit_var"):
+            chosen = ""
+            label = (self.analysis.get("identification") or {}).get("label") or ""
+            if label.startswith("Audnexus "):
+                chosen = self._fit_label(label.split(" ", 1)[1].strip())
+            self.fit_var.set(chosen)
 
     def _on_asin_select(self, _event=None):
+        if getattr(self, "_filling_editions", False):
+            return
         sel = self.asin_tree.selection()
         if not sel:
             return
@@ -1020,6 +1078,37 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
             return
         self.identify_value.set(asin)
         self._identify_autofilled = True
+        label = (self.analysis.get("identification") or {}).get("label") or ""
+        if label.endswith(asin):
+            self._show_edition_marks()
+            return
+        self.cmd_identify_asin(asin)
+
+    def cmd_use_edition(self):
+        """Fill empty book-info fields, align, and open Place."""
+        sel = self.asin_tree.selection()
+        if not sel:
+            return
+        asin = str(self.asin_tree.item(sel[0], "values")[0])
+        defaults = asin_emit_defaults(
+            self.audio or "", self.work_dir, f"Audnexus {asin}")
+        filled = []
+        for key, value in defaults.items():
+            var = self.meta_vars.get(key)
+            if var is None or not value or var.get().strip():
+                continue
+            var.set(value)
+            filled.append(key)
+        if filled:
+            self.found_var.set("filled from the edition: " + ", ".join(filled))
+        self.show_step("place")
+        label = (self.analysis.get("identification") or {}).get("label") or ""
+        if not label.endswith(asin):
+            self._run("identify", identify_argv(
+                self._cf, self.work_dir, self.audio, "asin", asin),
+                stage="identify", then=self.cmd_align)
+            return
+        self.cmd_align()
 
     def cmd_search_asin(self):
         if not self.audio or not self.work_dir:

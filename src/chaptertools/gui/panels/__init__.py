@@ -127,19 +127,6 @@ class StagePanels:
         self._tip(self.asin_search_btn,
                   "search Audible with the title, author, keywords, and "
                   "region above")
-        cols = ("asin", "title", "author", "narrator", "runtime", "score")
-        self.asin_tree = ttk.Treeview(self.asin_frame, columns=cols,
-                                      show="headings", height=4)
-        headings = (("asin", "ASIN", 110), ("title", "Title", 180),
-                    ("author", "Author", 140), ("narrator", "Narrator", 160),
-                    ("runtime", "Runtime", 70), ("score", "Score", 50))
-        stretch = {"title", "author", "narrator"}
-        for col, heading, width in headings:
-            self.asin_tree.heading(col, text=heading)
-            self.asin_tree.column(col, width=width, stretch=col in stretch)
-        self.asin_tree.grid(row=4, column=0, columnspan=3, sticky="ew",
-                            pady=(4, 0))
-        self.asin_tree.bind("<<TreeviewSelect>>", self._on_asin_select)
         self._identify_mode_changed()
         return p
 
@@ -359,35 +346,63 @@ class StagePanels:
             right.grid(row=2, column=0, columnspan=2, sticky="nsew",
                        padx=0, pady=(6, 0))
 
-    def _panel_emit(self, host):
-        p = ttk.Frame(host)
-        info = ttk.LabelFrame(p, text="Book info (written to ID3 on emit)",
+    def _build_book_info(self, parent):
+        info = ttk.LabelFrame(parent, text="Book info (written at Finish)",
                               padding=6)
-        info.pack(side="left", fill="both", expand=True)
-        for c in range(6):
+        info.grid(row=1, column=0, sticky="ew", pady=(8, 0))
+        for c in range(4):
             info.columnconfigure(c, weight=1)
         self.meta_vars = {}
+        self._meta_entries = {}
         for n, key in enumerate(("title", "author", "album", "year",
                                  "genre", "comment")):
-            row, col = divmod(n, 3)
-            ttk.Label(info, text=f"{key}:").grid(row=row * 2, column=col * 2,
-                                                 sticky="e", padx=(8, 2))
+            row, col = divmod(n, 2)
+            ttk.Label(info, text=f"{key}:").grid(row=row, column=col * 2,
+                                                 sticky="e", padx=(4, 2))
             var = tk.StringVar()
             self.meta_vars[key] = var
-            ttk.Entry(info, textvariable=var, width=14).grid(
-                row=row * 2, column=col * 2 + 1, sticky="ew", padx=(0, 8),
-                pady=1)
+            entry = ttk.Entry(info, textvariable=var, width=16)
+            entry.grid(row=row, column=col * 2 + 1, sticky="ew", padx=(0, 6), pady=1)
+            self._meta_entries[key] = entry
         self.reread_btn = ttk.Button(info, text="Re-read",
                                      command=self._reharvest)
-        self.reread_btn.grid(row=2, column=6, sticky="w")
-        self._tip(self.reread_btn, "re-read tags and chapters from the "
-                  "folder (after emit changed the file)")
+        self.reread_btn.grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        self._tip(self.reread_btn, "re-read tags and chapters from the file")
         found = ttk.Label(info, textvariable=self.found_var,
                           foreground=palette.MUTED, justify="left")
-        found.grid(row=4, column=0, columnspan=7, sticky="w", pady=(4, 0))
+        found.grid(row=4, column=0, columnspan=4, sticky="w", pady=(4, 0))
         self._wrap_labels.append(found)
+
+    def _build_editions(self, parent):
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(0, weight=1)
+        cols = ("asin", "title", "author", "narrator", "runtime",
+                "chapters", "fit")
+        self.asin_tree = ttk.Treeview(parent, columns=cols, show="headings")
+        headings = (("asin", "ASIN", 110), ("title", "Title", 180),
+                    ("author", "Author", 140), ("narrator", "Narrator", 140),
+                    ("runtime", "Runtime", 70), ("chapters", "Chapters", 70),
+                    ("fit", "Fit", 90))
+        stretch = {"title", "author", "narrator"}
+        for col, heading, width in headings:
+            self.asin_tree.heading(col, text=heading)
+            self.asin_tree.column(col, width=width, stretch=col in stretch)
+        self.asin_tree.grid(row=0, column=0, sticky="nsew")
+        self.asin_tree.bind("<<TreeviewSelect>>", self._on_asin_select)
+        bar = ttk.Frame(parent)
+        bar.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        self.fit_var = tk.StringVar(value="")
+        ttk.Label(bar, textvariable=self.fit_var).pack(side="left")
+        self.use_edition_btn = ttk.Button(
+            bar, text="Use this edition", command=self.cmd_use_edition)
+        self.use_edition_btn.pack(side="right")
+        self._tip(self.use_edition_btn,
+                  "fill empty book info, align this edition, and open Place")
+
+    def _panel_emit(self, host):
+        p = ttk.Frame(host)
         side = ttk.Frame(p)
-        side.pack(side="left", fill="y", padx=(12, 0))
+        side.pack(side="left", fill="y")
         self.embed_var = tk.BooleanVar(value=True)
         embed_cb = ttk.Checkbutton(side, text="Embed chapters",
                                    variable=self.embed_var)
