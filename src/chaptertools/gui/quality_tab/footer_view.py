@@ -7,15 +7,12 @@ from tkinter import ttk
 
 from chaptertools.gui import tips
 
-_BITRATES = ("48k", "64k", "96k", "128k", "160k", "192k", "256k", "320k")
-
 
 class FooterBar(ttk.Frame):
     def __init__(self, master, hear_var, on_play, on_stop, on_hear,
                  on_process, on_replace, on_cancel):
         super().__init__(master, style="Quality.TFrame", padding=4)
-        self.on_process = on_process
-        self.on_cancel = on_cancel
+        del on_process, on_replace, on_cancel
         self.columnconfigure(0, weight=1)
 
         preview = ttk.Frame(self, style="Quality.TFrame")
@@ -36,27 +33,10 @@ class FooterBar(ttk.Frame):
 
         output = ttk.Frame(self, style="Quality.TFrame")
         output.grid(row=1, column=0, sticky="ew", pady=(4, 0))
-        ttk.Label(output, text="Output", style="GroundMuted.TLabel").pack(side="left")
         self.format_var = tk.StringVar(value="MP3")
-        ttk.Combobox(output, textvariable=self.format_var, values=("MP3",),
-                     width=6, state="readonly").pack(side="left", padx=(8, 0))
         self.bitrate_var = tk.StringVar(value="64k")
-        ttk.Combobox(output, textvariable=self.bitrate_var, values=_BITRATES,
-                     width=6, state="readonly").pack(side="left", padx=4)
         self.progress = ttk.Progressbar(output, maximum=1.0, length=120)
         self.progress.pack(side="left", padx=4)
-        self.replace_btn = ttk.Button(output, text="Replace library file",
-                                      command=on_replace, state="disabled")
-        self.replace_btn.pack(side="right")
-        tips.tooltip(self.replace_btn,
-                     "copy the cleaned MP3 over the library file, "
-                     "keeping the original in the work folder")
-        self.process_btn = ttk.Button(output, text="Process full file",
-                                      style="Quality.Accent.TButton", command=self._process)
-        self.process_btn.pack(side="right", padx=(0, 4))
-        tips.tooltip(self.process_btn,
-                     "write a cleaned MP3 in the work folder; "
-                     "the library file stays as it is")
         self._running = False
 
         self.status_var = tk.StringVar(value="")
@@ -67,13 +47,6 @@ class FooterBar(ttk.Frame):
         self._running = running
         state = "disabled" if running else "normal"
         self.play_btn.configure(state=state)
-        if running:
-            self.process_btn.configure(text="Cancel", style="TButton",
-                                       command=self.on_cancel)
-        else:
-            self.process_btn.configure(text="Process full file",
-                                       style="Quality.Accent.TButton",
-                                       command=self._process)
 
     def set_progress(self, fraction: float) -> None:
         self.progress["value"] = max(0.0, min(1.0, float(fraction or 0)))
@@ -82,7 +55,5 @@ class FooterBar(ttk.Frame):
         self.status_var.set(text)
 
     def set_replace(self, enabled: bool) -> None:
-        self.replace_btn.configure(state="normal" if enabled and not self._running else "disabled")
-
-    def _process(self) -> None:
-        self.on_process()
+        """The library write lives on Finish. This only records readiness."""
+        self._replace_ready = bool(enabled) and not self._running

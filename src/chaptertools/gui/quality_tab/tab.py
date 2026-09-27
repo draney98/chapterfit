@@ -106,9 +106,13 @@ class QualityTab(ttk.Frame):
             elif kind == "cancelled":
                 self._show_progress(0, None, "cancelled")
                 self._log("quality cancelled")
+                if self.workflow is not None:
+                    self.workflow._after_cleanup = None
             elif kind == "error":
                 self._show_progress(0, None, "failed")
                 self._log(f"quality: {payload}")
+                if self.workflow is not None:
+                    self.workflow._after_cleanup = None
                 messagebox.showerror("Audio quality", str(payload),
                                      parent=self.winfo_toplevel())
             elif kind == "refused":
@@ -189,6 +193,13 @@ class QualityTab(ttk.Frame):
             self.cmd_process, self.cmd_replace, self.cancel,
         )
         self.footer.grid(row=2, column=0, sticky="ew")
+        if self.workflow is not None and hasattr(self.workflow, "bitrate_var"):
+            self.footer.bitrate_var = self.workflow.bitrate_var
+            ttk.Checkbutton(
+                self.chain_panel, text="Include at Finish",
+                variable=self.workflow.include_cleanup,
+                command=self.workflow._sync_cleanup_choice,
+            ).grid(row=4, column=0, sticky="w", pady=(2, 0))
         self._fill_presets()
         self._show_stage(0)
         self._refresh_status()
@@ -261,9 +272,9 @@ class QualityTab(ttk.Frame):
                 audio, work, snapshot, start, cancel, progress),
         )
 
-    def cmd_process(self) -> None:
+    def cmd_process(self) -> bool:
         if not self._guard():
-            return
+            return False
         audio, work = self.audio, self.work_dir
         snapshot = self.chain.snapshot()
         self._inflight_snapshot = snapshot
@@ -274,22 +285,24 @@ class QualityTab(ttk.Frame):
             lambda cancel, progress: self._process_job(
                 audio, work, snapshot, bitrate, cancel, progress),
         )
+        return True
 
-    def cmd_replace(self) -> None:
+    def cmd_replace(self, confirmed: bool = False) -> None:
         if not self._guard():
             return
         from chaptertools.audio_quality.worker import output_mp3_path
         cleaned = output_mp3_path(self.work_dir, self.audio)
         if not os.path.isfile(cleaned):
             return
-        ok = messagebox.askyesno(
-            "Replace library file",
-            "Copy the cleaned MP3 over the library file?\n\n"
-            "The current library file is kept in the work folder "
-            "as the original, the first time you do this.",
-            parent=self.winfo_toplevel())
-        if not ok:
-            return
+        if not confirmed:
+            ok = messagebox.askyesno(
+                "Replace library file",
+                "Copy the cleaned MP3 over the library file?\n\n"
+                "The current library file is kept in the work folder "
+                "as the original, the first time you do this.",
+                parent=self.winfo_toplevel())
+            if not ok:
+                return
         audio, work = self.audio, self.work_dir
         self.jobs.start(
             "replace",
@@ -352,6 +365,11 @@ class QualityTab(ttk.Frame):
             gain = payload.get("gain_db")
             self._log(f"quality wrote {payload.get('mp3')} (gain {gain:.1f} dB)"
                       if isinstance(gain, float) else "quality wrote the MP3")
+            follow = getattr(self.workflow, "_after_cleanup", None)
+            if self.workflow is not None:
+                self.workflow._after_cleanup = None
+            if follow:
+                follow()
         elif name == "replace":
             self._log(f"library file replaced; original kept at {payload}")
         elif name == "learn":
@@ -501,6 +519,8 @@ class QualityTab(ttk.Frame):
         on = sum(1 for stage in self.chain.stages if not stage.bypass)
         session.cleanup["stages_on"] = on
         session.cleanup["preset"] = self._preset_name
+        if self.workflow is not None and hasattr(self.workflow, "include_cleanup"):
+            session.cleanup["include"] = bool(self.workflow.include_cleanup.get())
         session.emit("cleanup")
 
     def _save_session(self) -> None:

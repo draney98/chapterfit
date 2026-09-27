@@ -792,6 +792,10 @@ def test_finalize_gate_survives_reselect(tmp_path):
         _write_artifact(wf, WEAK_ART)
         wf._on_done(0, stage="finalize-dry", name="finalize")
         assert wf._finalize_dry_ok
+        wf.embed_var.set(not wf.embed_var.get())
+        assert not wf._finalize_dry_ok
+        wf.embed_var.set(not wf.embed_var.get())
+        assert wf._finalize_dry_ok
         wf.set_book(_book(tmp_path))
         assert wf._finalize_dry_ok
         time.sleep(0.01)

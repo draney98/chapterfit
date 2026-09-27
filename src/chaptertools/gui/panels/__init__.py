@@ -396,21 +396,46 @@ class StagePanels:
                   "fill empty book info, align this edition, and open Place")
 
     def _panel_emit(self, host):
+        """Finish summary: chapters, tags, and whether this write cleans audio."""
         p = ttk.Frame(host)
-        side = ttk.Frame(p)
-        side.pack(side="left", fill="y")
+        p.columnconfigure(0, weight=1)
+        self.include_cleanup = tk.BooleanVar(value=False)
         self.embed_var = tk.BooleanVar(value=True)
-        embed_cb = ttk.Checkbutton(side, text="Embed chapters",
+        self.bitrate_var = tk.StringVar(value="64k")
+        self.chapters_card = tk.StringVar(value="Chapters: not written")
+        self.tags_card = tk.StringVar(value="Tags: filled in on Match")
+        self.cleanup_card = tk.StringVar(value="Audio cleanup: off")
+        self.emit_result = tk.StringVar(value="")
+        cards = (
+            (self.chapters_card, "Edit in Place", "place"),
+            (self.tags_card, "Edit in Match", "match"),
+            (self.cleanup_card, "Edit cleanup", "cleanup"),
+        )
+        for row, (var, label, step) in enumerate(cards):
+            ttk.Label(p, textvariable=var, wraplength=420, justify="left").grid(
+                row=row, column=0, sticky="w", pady=2)
+            ttk.Button(p, text=label,
+                       command=lambda s=step: self.show_step(s)).grid(
+                row=row, column=1, sticky="e", padx=(8, 0))
+        embed_cb = ttk.Checkbutton(p, text="Embed chapters",
                                    variable=self.embed_var)
-        embed_cb.grid(row=0, column=0, sticky="w")
+        embed_cb.grid(row=3, column=0, sticky="w")
         self._tip(embed_cb, "also write a chaptered copy of the audio "
-                  "(<name>.chapters.<ext>) for Finalize to put in place; "
-                  "off writes only chapters.txt and chapters.json")
-        self.emit_btn = ttk.Button(side, text="Emit", command=self.cmd_emit)
-        self.emit_btn.grid(row=1, column=0, sticky="ew", pady=4)
-        self._tip(self.emit_btn, "write the supported chapters into a "
-                  "chaptered copy of the file (and the ID3 tags above)")
-        self.emit_result = self._result_line(side, row=2)
+                  "for this write to put in place; off writes only "
+                  "chapters.txt and chapters.json")
+        ttk.Checkbutton(p, text="Clean the audio in this write",
+                        variable=self.include_cleanup,
+                        command=self._sync_cleanup_choice).grid(
+            row=4, column=0, sticky="w")
+        ttk.Label(p, text="MP3").grid(row=4, column=1, sticky="e")
+        bitrates = ("48k", "64k", "96k", "128k", "160k", "192k", "256k", "320k")
+        ttk.Combobox(p, textvariable=self.bitrate_var, values=bitrates,
+                     width=6, state="readonly").grid(
+            row=5, column=1, sticky="e")
+        self.dry_log = tk.Text(
+            p, height=4, wrap="none", state="disabled",
+            font=tkfont.nametofont("TkFixedFont", root=self))
+        self.dry_log.grid(row=6, column=0, columnspan=2, sticky="nsew", pady=(6, 0))
         return p
 
     def _panel_finalize(self, host):
@@ -418,8 +443,8 @@ class StagePanels:
         p.columnconfigure(1, weight=1)
         self.finalize_btn = self._primary(p, 0, 0, "Dry run",
                                           self.cmd_finalize_dry)
-        self.apply_btn = ttk.Button(p, text="Apply", state=["disabled"],
-                                    command=self.cmd_finalize_apply)
+        self.apply_btn = ttk.Button(p, text="Apply to library", state=["disabled"],
+                                    command=self.cmd_apply_library)
         self.apply_btn.grid(row=0, column=1, sticky="w", padx=(8, 0))
         self._tip(self.finalize_btn, "preview everything finalize "
                   "would do - nothing is changed")
@@ -434,5 +459,8 @@ class StagePanels:
         self.finalize_result = self._result_line(p, row=2, colspan=2)
         self._tip(self.apply_btn, "stage the original away, rename the "
                   "chaptered file into place, write album.nfo, and "
-                  "reload Audiobookshelf")
+                  "reload Audiobookshelf. The first original is kept.")
+        ttk.Label(p, text="The first original is always kept.",
+                  foreground=palette.MUTED).grid(
+            row=3, column=0, columnspan=2, sticky="w", pady=(4, 0))
         return p

@@ -165,12 +165,16 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         self._refresh_after = None
         # audio path -> artifact mtime when its finalize dry run succeeded
         self._dry_ok: dict[str, float | None] = {}
+        self._dry_hash: dict[str, tuple] = {}
+        self._after_cleanup = None
+        self._chaptered_for_apply: str | None = None
         self._pin_autofilled = False
         self._sweep_autofilled = False
         self._busy = False
         self._tips: dict = {}
 
         self._build()
+        self._watch_finish_settings()
         style = ttk.Style(self)
         style.configure("Accent.TButton",
                         font=fonts.derived(self, weight="bold"))
@@ -470,9 +474,10 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
 
     @property
     def _finalize_dry_ok(self) -> bool:
-        """A dry run succeeded for this book and nothing changed since."""
+        """A dry run succeeded for this book and the settings still match."""
         return bool(self.audio) and self.audio in self._dry_ok \
-            and self._dry_ok[self.audio] == self._artifact_mtime()
+            and self._dry_ok[self.audio] == self._artifact_mtime() \
+            and self._dry_hash.get(self.audio) == self._finish_hash()
 
     def set_book(self, audio: str):
         self.audio = os.path.abspath(audio)
@@ -720,6 +725,7 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         self._update_resolve()
         self._update_header()
         self.timeline.redraw()
+        self._update_finish_cards()
         self._fill_asin_list()
         self._show_saved_transcripts()
         self._states = states
@@ -739,7 +745,7 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
                 self.hint_btn, self.listen_btn, self.sweep_start_entry,
                 self.sweep_end_entry, self.range_btn, self.probe_btn,
                 self.full_btn, self.pin_btn, self.unpin_btn, self.reread_btn,
-                self.emit_btn, self.finalize_btn, self.apply_btn,
+                self.finalize_btn, self.apply_btn,
                 self.asin_search_btn]
 
     def _update_controls(self):
@@ -760,8 +766,7 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
                       "resolve": [self.hint_btn, self.listen_btn,
                                   self.range_btn, self.probe_btn,
                                   self.full_btn, self.pin_btn, self.unpin_btn],
-                      "emit": [self.emit_btn],
-                      "finalize": [self.finalize_btn, self.apply_btn]}
+                      "finalize": [self.finalize_btn]}
         for key, btns in stage_btns.items():
             if states[key]["state"] == BLOCKED:
                 off(btns, f"{STAGE_LABELS[key]} is blocked: "
@@ -931,7 +936,7 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
             then()
             return
         if stage == "finalize-dry":
-            self._dry_ok[self.audio] = self._artifact_mtime()
+            self._remember_dry_run()
             self._update_controls()
             return
         if stage:
@@ -1705,18 +1710,142 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
                   then=self.cmd_align, stage="resolve")
 
     # emit / finalize -----------------------------------------------------
+    def _watch_finish_settings(self):
+        def touch(*_args):
+            self._update_controls()
+
+        for var in (self.embed_var, self.include_cleanup, self.allow_delete_var,
+                    self.bitrate_var, *self.meta_vars.values()):
+            var.trace_add("write", touch)
+
+    def _finish_hash(self) -> tuple:
+        meta = tuple((key, var.get()) for key, var in self.meta_vars.items())
+        preset = ""
+        stages = 0
+        quality = getattr(self, "quality", None)
+        if quality is not None:
+            preset = quality._preset_name
+            stages = self.app.session.cleanup.get("stages_on") or 0
+        return (meta, bool(self.embed_var.get()), bool(self.include_cleanup.get()),
+                bool(self.allow_delete_var.get()), self.bitrate_var.get(),
+                preset, stages)
+
+    def _remember_dry_run(self):
+        if not self.audio:
+            return
+        self._dry_ok[self.audio] = self._artifact_mtime()
+        digest = self._finish_hash()
+        self._dry_hash[self.audio] = digest
+        self.app.session.last_dry_run = digest
+
+    def _chapters_placed(self) -> bool:
+        proj = getattr(self, "_projection", None)
+        return bool(proj and any(row.placed is not None for row in proj.rows))
+
+    def _cleanup_only(self) -> bool:
+        return bool(self.include_cleanup.get()) and not self._chapters_placed()
+
+    def _sync_cleanup_choice(self):
+        self.app.session.cleanup["include"] = bool(self.include_cleanup.get())
+        self.app.session.emit("cleanup")
+        self._update_finish_cards()
+
+    def _update_finish_cards(self):
+        if not hasattr(self, "chapters_card"):
+            return
+        proj = getattr(self, "_projection", None)
+        if proj is None or not self._chapters_placed():
+            self.chapters_card.set("Chapters: not written")
+        else:
+            pins = sum(1 for row in proj.rows if row.pin)
+            withheld = len(proj.rows) - proj.confident_count
+            self.chapters_card.set(
+                f"Chapters: {proj.confident_count} written, "
+                f"{withheld} withheld, {pins} pins")
+        bits = [f"{key} {self.meta_vars[key].get().strip()}"
+                for key in ("title", "author", "album", "year", "genre")
+                if self.meta_vars[key].get().strip()]
+        tags = ", ".join(bits) if bits else "filled in on Match"
+        self.tags_card.set(f"Tags: {tags} · also written to album.nfo")
+        preset = "custom"
+        stages = self.app.session.cleanup.get("stages_on") or 0
+        quality = getattr(self, "quality", None)
+        if quality is not None and quality._preset_name:
+            preset = quality._preset_name
+        state = "in this write" if self.include_cleanup.get() else "off"
+        self.cleanup_card.set(
+            f"Audio cleanup: {state} · {preset} · {stages} stages · "
+            f"MP3 {self.bitrate_var.get()}")
+
+    def _clear_dry_log(self):
+        self.dry_log.configure(state="normal")
+        self.dry_log.delete("1.0", "end")
+        self.dry_log.configure(state="disabled")
+
+    def _dry_line(self, line: str):
+        self.dry_log.configure(state="normal")
+        self.dry_log.insert("end", line.rstrip() + "\n")
+        self.dry_log.configure(state="disabled")
+        self.dry_log.see("end")
+
+    def _planned_actions(self) -> list[str]:
+        lines = []
+        if self.include_cleanup.get():
+            lines.append("render cleaned audio")
+        if self._chapters_placed():
+            if self.embed_var.get():
+                lines.append("embed chapters and tags into the file")
+            else:
+                lines.append("write chapters.txt and chapters.json")
+            lines.append("move that file into the library")
+            lines.append("write album.nfo")
+            lines.append("reload Audiobookshelf")
+            lines.append("keep the first original")
+        elif self.include_cleanup.get():
+            lines.append("replace the library file with the cleaned audio")
+            lines.append("keep the first original")
+        else:
+            lines.append("chapters: not written")
+        return lines
+
+    def _library_chaptered(self) -> str:
+        root, ext = os.path.splitext(self.audio or "")
+        return f"{root}.chapters{ext}"
+
+    def _cleaned_audio(self) -> str:
+        from chaptertools.audio_quality.worker import output_mp3_path
+        return output_mp3_path(self.work_dir or "", self.audio or "")
+
     def cmd_emit(self):
+        assert self.work_dir is not None
+        self._emit_into(self.audio or "")
+
+    def _emit_into(self, audio: str, then=None):
         assert self.work_dir is not None
         meta = self._meta_overrides()
         overrides = {flag: meta.get(key, "") for flag, key in META_FLAGS.items()}
         self._run("emit", emit_argv(
-            self._cf, self.work_dir, self.audio, self.min_conf.get(),
-            self.embed_var.get(), overrides), stage="emit")
+            self._cf, self.work_dir, audio, self.min_conf.get(),
+            self.embed_var.get(), overrides), then=then, stage="emit")
 
     def cmd_finalize_dry(self):
-        self._run("finalize", self._argv("finalize"), stage="finalize-dry")
+        self._clear_dry_log()
+        for line in self._planned_actions():
+            self._dry_line(line)
+        chaptered = self._library_chaptered()
+        cleaned = os.path.splitext(self._cleaned_audio())
+        cleaned_chaptered = f"{cleaned[0]}.chapters{cleaned[1]}"
+        existing = next((path for path in (cleaned_chaptered, chaptered)
+                         if os.path.isfile(path)), None)
+        if existing and self._chapters_placed() and not self._cleanup_only():
+            extra = ["finalize", "--chaptered", existing]
+            self._run("finalize", self._argv(*extra), stage="finalize-dry",
+                      on_line=self._dry_line)
+            return
+        self._remember_dry_run()
+        self._update_controls()
 
-    def cmd_finalize_apply(self):
+    def _confirm_finalize(self) -> bool:
         nfo_path = os.path.join(os.path.dirname(self.audio or ""), "album.nfo")
         existing = read_nfo_chapters(nfo_path)
         prompt = ("Move the original aside and reload the book in "
@@ -1725,9 +1854,55 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
             prompt += (f"\n\nalbum.nfo already has {len(existing)} chapter "
                        "tracks. They will be replaced if they differ from "
                        "the chapters being written.")
-        if not messagebox.askyesno("Finalize", prompt, parent=self):
+        return messagebox.askyesno("Apply to library", prompt, parent=self)
+
+    def cmd_apply_library(self):
+        if not self.audio or not self._finalize_dry_ok:
             return
-        argv = self._argv("finalize", "--apply", "-y", "--force-nfo")
+        if self._cleanup_only():
+            if not messagebox.askyesno(
+                    "Apply to library",
+                    "Copy the cleaned audio over the library file?\n\n"
+                    "The first original stays in the work folder.",
+                    parent=self):
+                return
+            self._start_cleanup(self._replace_cleaned)
+            return
+        if not self._confirm_finalize():
+            return
+        if self.include_cleanup.get():
+            self._start_cleanup(self._emit_then_finalize)
+            return
+        self._emit_then_finalize()
+
+    def _start_cleanup(self, then):
+        self._after_cleanup = then
+        if not self.quality.cmd_process():
+            self._after_cleanup = None
+
+    def _replace_cleaned(self):
+        self.quality.cmd_replace(confirmed=True)
+
+    def _emit_then_finalize(self):
+        audio = self.audio or ""
+        self._chaptered_for_apply = None
+        if self.include_cleanup.get():
+            audio = self._cleaned_audio()
+            root, ext = os.path.splitext(audio)
+            self._chaptered_for_apply = f"{root}.chapters{ext}"
+        if not self._chapters_placed():
+            self._replace_cleaned()
+            return
+        self._emit_into(audio, then=self._run_finalize_apply)
+
+    def _run_finalize_apply(self):
+        extra = ["finalize", "--apply", "-y", "--force-nfo"]
+        if self._chaptered_for_apply:
+            extra += ["--chaptered", self._chaptered_for_apply]
         if self.allow_delete_var.get():
-            argv.append("--allow-delete")
-        self._run("finalize", argv, stage="finalize")
+            extra.append("--allow-delete")
+        self._chaptered_for_apply = None
+        self._run("finalize", self._argv(*extra), stage="finalize")
+
+    def cmd_finalize_apply(self):
+        self.cmd_apply_library()

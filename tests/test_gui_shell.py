@@ -51,6 +51,11 @@ def test_session_player_and_log_drawer(tmp_path):
         app.workflow.cmd_measure = lambda: called.append(book.name)
         app.workflow.set_book(str(book))
         assert called == ["Book.mp3"]
-        assert "Scan file" not in _button_labels(app)
+        labels = _button_labels(app)
+        assert "Scan file" not in labels
+        for gone in ("Emit", "Finalize", "Process full file", "Replace library file"):
+            assert gone not in labels
+        assert "Apply to library" in labels
+        assert "Dry run" in labels
     finally:
         app.destroy()
