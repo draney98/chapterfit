@@ -234,6 +234,10 @@ class App(tk.Tk):
 
     def _log_button_click(self, event):
         w = event.widget
+        # A combobox dropdown is a Tcl widget with no Python wrapper, so
+        # Tkinter leaves event.widget as a path string.
+        if not isinstance(w, tk.Misc):
+            return
         if w.winfo_class() not in ("TButton", "Button"):
             return
         try:
@@ -349,10 +353,14 @@ class App(tk.Tk):
             elif kind == "refused":
                 self.log(f"! {job.name} not started: {payload}")
         self.workflow.poll_facts()
+        if getattr(self.workflow, "quality", None) is not None:
+            self.workflow.quality.poll()
         t = self.player.poll()
         self._playback_time = t
         self.workflow.update_playback(t)
-        busy = self.runner.busy
+        quality_busy = getattr(getattr(self.workflow, "quality", None),
+                               "busy", False)
+        busy = self.runner.busy or quality_busy
         self.workflow.set_busy(busy)
         self.busy_var.set("busy ◌" if busy else "")
         self.after(100, self._pump)
@@ -360,6 +368,8 @@ class App(tk.Tk):
     def _cancel(self):
         self.runner.cancel()
         self.player.stop()
+        if getattr(self.workflow, "quality", None) is not None:
+            self.workflow.quality.cancel()
 
     def current_playback(self) -> float | None:
         return self._playback_time
@@ -382,6 +392,8 @@ class App(tk.Tk):
     def _quit(self):
         self.runner.cancel()
         self.player.stop()
+        if getattr(self.workflow, "quality", None) is not None:
+            self.workflow.quality.cancel()
         self.destroy()
 
 

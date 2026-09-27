@@ -5,6 +5,7 @@ import json
 import os
 
 from chaptertools import workdir
+from chaptertools.media import probe_tags
 
 AUDIO_EXTS = {".mp3", ".m4a", ".m4b", ".flac", ".ogg", ".wav"}
 SKIP_DIRS = {"__pycache__", "src", "tests", ".pytest_cache"}
@@ -37,8 +38,15 @@ def _load_asin(audio: str, work_dir: str | None) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def asin_query(audio: str, work_dir: str | None) -> dict[str, str]:
-    """Title and author last sent to Audible, else the book folder names."""
+def asin_query(audio: str, work_dir: str | None, *,
+               prefer_tags: bool = True) -> dict[str, str]:
+    """Title and author for Search.
+
+    The file's title and artist tags win when present. A missing tag
+    falls back to the last saved guess, then the book folder and the
+    author folder above it. ``prefer_tags`` is off after a search so the
+    boxes keep showing the query that was sent.
+    """
     data = _load_asin(audio, work_dir)
     title = str(data.get("guessed_title") or "").strip()
     author = str(data.get("guessed_author") or "").strip()
@@ -48,12 +56,21 @@ def asin_query(audio: str, work_dir: str | None) -> dict[str, str]:
             title = os.path.basename(folder)
         if not author:
             author = os.path.basename(os.path.dirname(folder))
+        if prefer_tags:
+            tags = probe_tags(audio)
+            tagged_title = str(tags.get("title") or "").strip()
+            tagged_author = str(tags.get("artist") or "").strip()
+            if tagged_title:
+                title = tagged_title
+            if tagged_author:
+                author = tagged_author
     return {"title": title, "author": author}
 
 
 def asin_candidates(audio: str, work_dir: str | None) -> list[dict]:
-    """Rows from a saved find_asin result: asin, title, author, runtime, score.
+    """Rows from a saved find_asin result.
 
+    Each row has asin, title, author, narrator, runtime, and score.
     Missing, unreadable, or empty files return [].
     """
     data = _load_asin(audio, work_dir)
@@ -69,12 +86,16 @@ def asin_candidates(audio: str, work_dir: str | None) -> list[dict]:
         authors = cand.get("authors") or []
         author = authors if isinstance(authors, str) else ", ".join(
             str(a) for a in authors if a)
+        narrators = cand.get("narrators") or []
+        narrator = narrators if isinstance(narrators, str) else ", ".join(
+            str(n) for n in narrators if n)
         runtime = cand.get("runtime_min")
         score = cand.get("score")
         rows.append({
             "asin": asin,
             "title": str(cand.get("title") or ""),
             "author": author,
+            "narrator": narrator,
             "runtime": "" if runtime is None else f"{runtime} min",
             "score": "" if score is None else f"{float(score):.2f}",
         })

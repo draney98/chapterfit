@@ -15,6 +15,24 @@ dependencies = []
 [project.optional-dependencies]
 dev = ["pytest>=7.4", "ruff>=0.4"]
 whisper = ["faster-whisper>=1.0"]
+# pedalboard 0.9.17+ wheels require AVX2 and abort on Ivy Bridge.
+quality = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "soundfile>=0.12",
+    "noisereduce>=3.0",
+    "pedalboard>=0.9.16,<0.9.17",
+    "pyloudnorm>=0.1",
+    "sounddevice>=0.4",
+]
+# resemble-enhance 0.0.1 requires torch==2.1.1, which has no Python 3.12
+# wheel, so it cannot be installed here. DeepFilterNet's own pin wants
+# numpy<2, which would replace the quality stack; runme.sh installs it
+# without that pin.
+neural = ["deepfilternet>=0.5"]
+
+[tool.setuptools.package-data]
+chaptertools = ["audio_quality/preset_data/*.json"]
 
 [project.scripts]
 chapterfit = "chaptertools.cli.chapterfit:main"

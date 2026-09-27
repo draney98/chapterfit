@@ -39,16 +39,29 @@ def test_asin_candidates_rows_and_empty(tmp_path):
             "asin": "B00Y18C77Q",
             "title": "Brave New World",
             "authors": ["Aldous Huxley"],
+            "narrators": ["James Adams", "Simon Jackson"],
             "runtime_min": 95,
             "score": 0.1956,
+        }, {
+            "asin": "B000000001",
+            "title": "Other",
+            "authors": ["Someone"],
         }, {"title": "no asin"}]}))
     rows = lib.asin_candidates(str(audio), str(work))
     assert rows == [{
         "asin": "B00Y18C77Q",
         "title": "Brave New World",
         "author": "Aldous Huxley",
+        "narrator": "James Adams, Simon Jackson",
         "runtime": "95 min",
         "score": "0.20",
+    }, {
+        "asin": "B000000001",
+        "title": "Other",
+        "author": "Someone",
+        "narrator": "",
+        "runtime": "",
+        "score": "",
     }]
     assert lib.asin_candidates(str(audio), str(tmp_path / "missing")) == []
     empty = work / "empty.mp3.asin.json"
@@ -86,6 +99,35 @@ def test_asin_query_uses_saved_guess_then_folders(tmp_path):
         "guessed_author": "Top 100 Sci-Fi Books",
     }))
     assert lib.asin_query(str(audio), str(work)) == {
+        "title": "16 - Brave New World",
+        "author": "Top 100 Sci-Fi Books",
+    }
+
+
+def test_asin_query_prefers_tags_then_falls_back(tmp_path, monkeypatch):
+    audio = tmp_path / "Aldous Huxley" / "Brave New World" / "book.mp3"
+    audio.parent.mkdir(parents=True)
+    audio.write_bytes(b"")
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "book.mp3.asin.json").write_text(json.dumps({
+        "guessed_title": "16 - Brave New World",
+        "guessed_author": "Top 100 Sci-Fi Books",
+    }))
+    monkeypatch.setattr(lib, "probe_tags", lambda _path: {
+        "title": "Brave New World",
+        "artist": "Aldous Huxley",
+    })
+    assert lib.asin_query(str(audio), str(work)) == {
+        "title": "Brave New World",
+        "author": "Aldous Huxley",
+    }
+    monkeypatch.setattr(lib, "probe_tags", lambda _path: {"title": "Brave New World"})
+    assert lib.asin_query(str(audio), str(work)) == {
+        "title": "Brave New World",
+        "author": "Top 100 Sci-Fi Books",
+    }
+    assert lib.asin_query(str(audio), str(work), prefer_tags=False) == {
         "title": "16 - Brave New World",
         "author": "Top 100 Sci-Fi Books",
     }
@@ -310,6 +352,17 @@ def _make_app(tmp_path):
     app.destroy = destroy
     app.update_idletasks()
     return app
+
+
+def test_click_log_ignores_a_tcl_only_widget(tmp_path):
+    app = _make_app(tmp_path)
+    try:
+        event = type("E", (), {})()
+        event.widget = ".popdown.f.l"
+        app._log_button_click(event)
+        assert "clicked" not in app.log_text.get("1.0", "end")
+    finally:
+        app.destroy()
 
 
 def test_app_builds_and_selects_book(tmp_path):

@@ -194,7 +194,9 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         self._build_chapters_tab()
         self._build_gaps_tab()
         self._build_transcripts_tab()
+        self._build_quality_tab()
         self.notebook.grid(row=4, column=0, columnspan=2, sticky="nsew")
+        self.notebook.bind("<<NotebookTabChanged>>", self._on_notebook_tab)
         self.set_stage("measure")
 
     TABLE_MIN_ROWS = 4
@@ -279,6 +281,25 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         self.transcripts_text.bind("<Double-1>", self._transcript_seek)
         self.notebook.add(tab, text="Transcripts")
 
+    def _build_quality_tab(self):
+        from chaptertools.gui.quality_tab import QualityTab
+        self.quality = QualityTab(self.notebook, app=self.app, workflow=self)
+        self.notebook.add(self.quality, text="Quality")
+        self._quality_open = False
+
+    def _on_notebook_tab(self, _event=None):
+        """The quality page takes the space the stage panels normally use."""
+        selected = self.notebook.select()
+        opening = selected == str(self.quality)
+        self._quality_open = opening
+        if opening:
+            self._panel_host.grid_remove()
+            self.banner.grid_remove()
+            return
+        self.stage_bar.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        self._panel_host.grid(row=3, column=0, sticky="ew", pady=(4, 0))
+        self.set_stage(self._stage)
+
     # -------------------------------------------------------------- state --
     def set_stage(self, key: str):
         if key not in STAGE_KEYS:
@@ -287,6 +308,9 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         states = self._compute_states()
         self.stage_bar.update(states, key)
         self._update_banner(states)
+        if getattr(self, "_quality_open", False):
+            self.banner.grid_remove()
+            return
         for k, panel in self._panels.items():
             if k == key:
                 panel.grid(row=0, column=0, sticky="nsew")
@@ -448,6 +472,8 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         self._nfo_decided = False
         self._set_harvest(placeholder_harvest(self.audio))
         self._refresh()
+        if getattr(self, "quality", None) is not None:
+            self.quality.set_book(self.audio, self.work_dir)
         self._prefill_identify()
         self._fill_asin_list()
         self._fill_asin_query()
@@ -893,11 +919,12 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
             self.identify_value.get().strip(),
             (self.analysis.get("identification") or {}).get("label") or "")
 
-    def _fill_asin_query(self, *, keep_keywords: bool = False):
+    def _fill_asin_query(self, *, keep_keywords: bool = False,
+                         prefer_tags: bool = True):
         """Show the title and author that Search will send."""
         if not hasattr(self, "asin_title"):
             return
-        query = asin_query(self.audio or "", self.work_dir)
+        query = asin_query(self.audio or "", self.work_dir, prefer_tags=prefer_tags)
         self.asin_title.set(query["title"])
         self.asin_author.set(query["author"])
         if not keep_keywords:
@@ -909,7 +936,7 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         self.asin_tree.delete(*self.asin_tree.get_children())
         for row in asin_candidates(self.audio or "", self.work_dir):
             self.asin_tree.insert("", "end", values=(
-                row["asin"], row["title"], row["author"],
+                row["asin"], row["title"], row["author"], row["narrator"],
                 row["runtime"], row["score"]))
 
     def _on_asin_select(self, _event=None):
@@ -936,7 +963,7 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
             then=self._after_asin_search)
 
     def _after_asin_search(self):
-        self._fill_asin_query(keep_keywords=True)
+        self._fill_asin_query(keep_keywords=True, prefer_tags=False)
         self._fill_asin_list()
         rows = asin_candidates(self.audio or "", self.work_dir)
         if not rows:

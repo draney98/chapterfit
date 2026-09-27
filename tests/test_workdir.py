@@ -63,6 +63,31 @@ def test_beside_audio_artifact_is_adopted(tmp_path, monkeypatch, capsys):
     assert Path(str(audio) + ".analysis.json").is_file()
 
 
+def test_mtime_only_change_keeps_measured_stages(tmp_path, monkeypatch):
+    monkeypatch.setenv("CHAPTERFIT_WORK", str(tmp_path / "root"))
+    audio = _book(tmp_path)
+    st = audio.stat()
+    art = Artifact(str(audio))
+    saved = {
+        "schema": SCHEMA,
+        "audio": str(audio),
+        "file": {"size": st.st_size, "mtime": int(st.st_mtime) - 1000},
+        "gaps": {"gaps": [{"mid": 1.0}]},
+        "envelope": {"duration": 12.0},
+    }
+    Path(art.path).write_text(json.dumps(saved))
+    loaded = Artifact(str(audio))
+    assert loaded.data["gaps"]["gaps"][0]["mid"] == 1.0
+    assert loaded.data["envelope"]["duration"] == 12.0
+    assert loaded.data["file"] == {"size": st.st_size, "mtime": int(st.st_mtime)}
+
+    saved["file"]["size"] = st.st_size + 1
+    Path(art.path).write_text(json.dumps(saved))
+    emptied = Artifact(str(audio))
+    assert "gaps" not in emptied.data
+    assert "envelope" not in emptied.data
+
+
 def test_chapterbook_uses_the_same_rule():
     script = (ROOT / "chapterbook.sh").read_text()
     assert 'WORK_ROOT="${CHAPTERFIT_WORK:-$HOME/.local/share/chapterfit}"' \

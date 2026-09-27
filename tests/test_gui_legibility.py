@@ -95,6 +95,8 @@ def _clipped(app):
     for w in _walk(app):
         if w.winfo_class() not in CHECKED or not w.winfo_viewable():
             continue
+        if _scrolled_out(w):
+            continue
         text = w.cget("text")
         if w.winfo_width() < w.winfo_reqwidth() \
                 or w.winfo_height() < w.winfo_reqheight():
@@ -105,6 +107,20 @@ def _clipped(app):
                 or w.winfo_rooty() + w.winfo_height() > bottom:
             bad.append(f"{w.winfo_class()} {text!r} outside the window")
     return bad
+
+
+def _scrolled_out(widget) -> bool:
+    """A canvas still reports scrolled-away children as viewable."""
+    parent = widget.master
+    while parent is not None:
+        if parent.winfo_class() == "Canvas":
+            top = parent.winfo_rooty()
+            bottom = top + parent.winfo_height()
+            if widget.winfo_rooty() >= bottom:
+                return True
+            return widget.winfo_rooty() + widget.winfo_height() <= top
+        parent = getattr(parent, "master", None)
+    return False
 
 
 def _settle(app, geometry):

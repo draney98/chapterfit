@@ -52,12 +52,15 @@ class Artifact:
                 self.data = {}
         if self.data.get("schema") != SCHEMA:
             self.data = {}
-        if self.data.get("file") != self.fingerprint():
-            # the audio changed underneath us; everything derived is void
+        stored = self.data.get("file")
+        current = self.fingerprint()
+        # A tag rewrite moves mtime without changing the audio. Same size
+        # keeps the measured stages; a different size still voids them.
+        if not isinstance(stored, dict) or stored.get("size") != current["size"]:
             self.data = {}
         self.data.setdefault("schema", SCHEMA)
         self.data.setdefault("audio", self.audio)
-        self.data["file"] = self.fingerprint()
+        self.data["file"] = current
 
     def save(self):
         self.data["written_by"] = f"chaptertools {__version__}"

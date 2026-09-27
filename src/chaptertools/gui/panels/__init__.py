@@ -122,15 +122,16 @@ class StagePanels:
         self._tip(self.asin_search_btn,
                   "search Audible with the title, author, keywords, and "
                   "region above")
-        cols = ("asin", "title", "author", "runtime", "score")
+        cols = ("asin", "title", "author", "narrator", "runtime", "score")
         self.asin_tree = ttk.Treeview(self.asin_frame, columns=cols,
                                       show="headings", height=4)
-        headings = (("asin", "ASIN", 110), ("title", "Title", 220),
-                    ("author", "Author", 140), ("runtime", "Runtime", 70),
-                    ("score", "Score", 50))
+        headings = (("asin", "ASIN", 110), ("title", "Title", 180),
+                    ("author", "Author", 140), ("narrator", "Narrator", 160),
+                    ("runtime", "Runtime", 70), ("score", "Score", 50))
+        stretch = {"title", "author", "narrator"}
         for col, heading, width in headings:
             self.asin_tree.heading(col, text=heading)
-            self.asin_tree.column(col, width=width, stretch=col == "title")
+            self.asin_tree.column(col, width=width, stretch=col in stretch)
         self.asin_tree.grid(row=4, column=0, columnspan=3, sticky="ew",
                             pady=(4, 0))
         self.asin_tree.bind("<<TreeviewSelect>>", self._on_asin_select)

@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>chaptertools — current layout</title>
+<style>
+  @page { size: A4; margin: 16mm 14mm 18mm; }
+  body { font: 11pt/1.45 "Liberation Sans", "Nimbus Sans", sans-serif; color: #1c1c1c; margin: 0; }
+  h1 { font-size: 22pt; line-height: 1.2; margin: 0 0 0.2em; }
+  h2 { font-size: 15pt; margin: 1.4em 0 0.4em; page-break-after: avoid; }
+  h3 { font-size: 12.5pt; margin: 1.1em 0 0.3em; page-break-after: avoid; }
+  p, li { margin: 0.35em 0; }
+  .lede { font-size: 12pt; }
+  figure { margin: 0.6em 0 1.2em; page-break-inside: avoid; }
+  img { width: 100%; height: auto; border: 1px solid #ccc; }
+  figcaption { font-size: 9.5pt; color: #333; margin-top: 0.35em; }
+  table { border-collapse: collapse; width: 100%; margin: 0.6em 0 1em; font-size: 10pt; }
+  th, td { border: 1px solid #ccc; padding: 4px 8px; text-align: left; vertical-align: top; }
+  th { background: #f3f2ef; }
+  code { font-family: "Liberation Mono", monospace; font-size: 0.92em; }
+  .note { background: #f7f6f3; padding: 8px 12px; }
+</style>
+</head>
+<body>
+
+<h1>chaptertools — current layout</h1>
+<p class="lede">A brief of the window as it is, for a layout redesign. Screenshots are the live Tkinter app (clam theme, 11&nbsp;pt) on a finished book, <em>Startide Rising</em>, unless a caption says otherwise.</p>
+<p>The job of the window is one audiobook at a time: measure its silences, pick the published chapter list, place each chapter on a silence, fix the ones that landed wrong, write the chapters into a copy of the file, then put that copy into the library.</p>
+
+<h2>Window shell</h2>
+<p>The window is a horizontal split. The left pane is the library. The right pane is the book. A status strip sits under both.</p>
+<table>
+  <tr><th>Region</th><th>What it is</th></tr>
+  <tr><td>Menu</td><td>File (open a library folder, quit), View (larger / smaller / default text), Help (shortcuts, about).</td></tr>
+  <tr><td>Library</td><td>Fixed start width, user-draggable sash. Search box, then an author tree. A book click loads that file. Search filters once the query is three characters.</td></tr>
+  <tr><td>Header</td><td>One line: title — author · duration · ASIN or source · file name. The name is elided when the line is too long. Hover shows the full path.</td></tr>
+  <tr><td>Stage strip</td><td>Measure, Identify, Align, Resolve, Emit, Finalize. One is selected. The strip chooses which control panel sits under it. It does not change the notebook tab.</td></tr>
+  <tr><td>Banner</td><td>Amber, only when the selected stage needs attention. Hidden on Resolve (that panel says the same thing itself) and while Quality is the open tab.</td></tr>
+  <tr><td>Stage panel</td><td>The controls for the selected stage. Hidden while Quality is the open tab, so Quality can use the height.</td></tr>
+  <tr><td>Notebook</td><td>Chapters, Gaps, Transcripts, Quality, Log. This is the working surface. It stays visible on every stage.</td></tr>
+  <tr><td>Status</td><td>Left: the last log line. Right: Cancel job, which stops a running command and playback.</td></tr>
+</table>
+<p>Stage marks: ✓ done, ● the stage you are on, ! needs attention, ○ not run, ✕ blocked because an earlier stage is not done. Selecting a book jumps to the first stage that is not done.</p>
+
+<h2>Measure</h2>
+<figure>
+  <img src="layout-shots/01-measure.png" alt="Measure selected, chapter table below">
+  <figcaption>Measure. The result line reports the gap count, the header check, and the decoded length.</figcaption>
+</figure>
+<p><strong>Run measure</strong> decodes the file once: loudness envelope, timeline check, noise calibration, and the silence list. The result line under the button is the only feedback in the panel. If the MP3 header timing is wrong, a <strong>Copy fix command</strong> button appears with an ffmpeg command. Measure is what Identify and Align read. A tag edit that does not change the file size does not require it again.</p>
+
+<h2>Identify</h2>
+<figure>
+  <img src="layout-shots/02-identify.png" alt="Identify panel with one search result">
+  <figcaption>Identify on a book that already has an ASIN. The result table has one matching edition.</figcaption>
+</figure>
+<figure>
+  <img src="layout-shots/10-identify-results.png" alt="Identify before a search, empty result table">
+  <figcaption>Identify on <em>Use of Weapons</em>, before Search. Title and Author are filled from the file tags. The result table is empty and the chapter table has no rows yet. Later stages are blocked.</figcaption>
+</figure>
+<p>Source is a radio: ASIN, JSON file, Embedded, or NFO. The text field and <strong>Identify</strong> check that source against the silences. <strong>Browse…</strong> is only for a JSON file.</p>
+<p>The ASIN source also has a search block. Title and Author start from the MP3 tags, then the last search, then the folder names. Keywords, if filled, replace title and author. Region is an Audible catalog. <strong>Search</strong> fills the table: ASIN, Title, Author, Narrator, Runtime, Score. Title, Author, and Narrator share extra width. Clicking a row puts that ASIN in the field above.</p>
+<p>Under the search, one line says whether the chosen edition fits (chapter count, fit score, rate spread, runtime ratio).</p>
+
+<h2>Align</h2>
+<figure>
+  <img src="layout-shots/03-align.png" alt="Align panel above the chapter table">
+  <figcaption>Align. Minimum confidence and an optional Near hint sit on one row with the Align button.</figcaption>
+</figure>
+<p><strong>Align</strong> places every published chapter on a real silence. Minimum confidence (default 0.5) is the cutoff; chapters under it stay in the table but are withheld from Emit and tinted amber. Near is an optional <code>CH=TIME</code> hint, for example <code>12=3:45:00</code>. The result line reports how many were placed, the reading rate, and how far the file’s length sits from the published length.</p>
+
+<h2>Resolve</h2>
+<figure>
+  <img src="layout-shots/04-resolve.png" alt="Resolve panel, automatic tools and pin by ear">
+  <figcaption>Resolve, with nothing left unresolved. The summary says to spot-check by ear. The next suggestion is on the right.</figcaption>
+</figure>
+<p>This is the tallest panel. On a narrow window the two boxes stack; on a wide window they sit side by side.</p>
+<p>The summary line is the unresolved count, or “nothing unresolved.” <strong>next:</strong> names the cheapest useful action.</p>
+<p><strong>Automatic</strong> is a ladder. Each row is a label, an optional field, a button, a cost, and a status.</p>
+<ul>
+  <li>Position hint — <code>CH=TIME</code>, then Align with hint. Free. Not a pin.</li>
+  <li>Listen — transcribes about 13 seconds after candidate gaps and pins the announcements it hears. About four minutes.</li>
+  <li>Sweep range — start and end times. Reads that span and pins announced chapters.</li>
+  <li>Sweep probe — ten minutes from the quarter point, to learn whether chapters are announced at all.</li>
+  <li>Full sweep — the whole book. Already-swept spans are cached.</li>
+</ul>
+<p><strong>Pin by ear</strong> follows the chapter selected in the table. Transport is −10 s, −5 s, Play, +5 s, +10 s, Stop playback, and a playback clock. Under that: a time field, Set from playback, Play from time, Pin, and Remove pin. Playback does not stop by itself.</p>
+
+<h2>Emit</h2>
+<figure>
+  <img src="layout-shots/05-emit.png" alt="Emit panel with book info fields">
+  <figcaption>Emit. Book info is a two-row form. Embed chapters and Emit sit to the right.</figcaption>
+</figure>
+<p>Six fields are written into the file as ID3 tags: title, author, album, year, genre, comment. They start from the MP3 tags, then <code>album.nfo</code>, then the folder names. After a successful Identify they are replaced by the edition that was used. <strong>Re-read</strong> loads the file and folder again. A muted line under the fields lists what was found.</p>
+<p><strong>Embed chapters</strong> (on by default) also writes a chaptered copy of the audio for Finalize. Off writes only <code>chapters.txt</code> and <code>chapters.json</code>. <strong>Emit</strong> writes the chapters that are placed and above the confidence cutoff.</p>
+
+<h2>Finalize</h2>
+<figure>
+  <img src="layout-shots/06-finalize.png" alt="Finalize panel, dry run and a disabled Apply">
+  <figcaption>Finalize. Apply stays disabled until a dry run has succeeded for this book.</figcaption>
+</figure>
+<p><strong>Dry run</strong> prints what would change and writes nothing. <strong>Apply</strong> then moves the original aside, puts the chaptered file in its place, writes <code>album.nfo</code>, and reloads Audiobookshelf. The checkbox allows a delete-and-re-add of the library entry, which clears listening progress. It is off.</p>
+
+<h2>Chapters tab</h2>
+<p>The table in the screenshots above is this tab. It is the default tab and stays up under every stage except when another tab is chosen.</p>
+<p>Columns: #, Title, Published, Placed, Gap, Conf, Pin. Title takes the spare width. A row can be tinted grey (no placement, and the number shows as ?N because it will not be written), amber (under the confidence cutoff, withheld from Emit), or red (a pin that conflicts; the Pin cell reads <code>! pin</code>). The footer is the color key, the ?N note, and the keys: Space play/pause, arrows ±5 s, Shift+arrows ±10 s, Enter pin, Delete remove pin. Double-click plays from that chapter. Selecting a row fills Resolve’s pin-by-ear title and the sweep range.</p>
+<p>The tab label is <code>Chapters N/M</code>: placed count over published count.</p>
+
+<h2>Gaps tab</h2>
+<figure>
+  <img src="layout-shots/07-gaps.png" alt="Gaps tab with purple chapter marks on a timeline">
+  <figcaption>Gaps, while Align is still the selected stage. The stage panel does not change when the tab changes.</figcaption>
+</figure>
+<p>A timeline of the file. Purple bars are pinned chapters, drawn as tall as the silence they sit on. Blue bars are the silences most like those pins. The radio switches the likeness: chapter cadence (where the pin spacing predicts the next chapter) or silence length. The caption counts both and says hover for detail. Times mark the start, middle, and end.</p>
+
+<h2>Transcripts tab</h2>
+<figure>
+  <img src="layout-shots/08-transcripts.png" alt="Transcripts tab with one heard line">
+  <figcaption>Transcripts. The filter is prefilled with “chapter”. This book has one saved line.</figcaption>
+</figure>
+<p>A regex filter (case insensitive; empty shows everything) and <strong>Show transcripts</strong>. The text is what Listen and Sweep heard, each line starting with a time. Double-click seeks playback to that time. The filter also applies to lines already saved on the book.</p>
+
+<h2>Log tab</h2>
+<figure>
+  <img src="layout-shots/09-log.png" alt="Log tab with the book name printed between rules">
+  <figcaption>Log. Selecting a book writes a ruled header. Commands and their output append under it.</figcaption>
+</figure>
+<p>Read-only, selectable, monospace. <strong>Save log…</strong>, <strong>Clear log</strong>, and <strong>Copy all</strong> sit at the top right. A right-click menu copies the selection or everything. The same text’s last line is the status strip. Button clicks anywhere in the window are also written here. The tab title gains an error count when a command fails.</p>
+
+<h2>Quality tab</h2>
+<figure>
+  <img src="layout-shots/11-quality.png" alt="Quality tab with waveform, chain, and high-pass detail">
+  <figcaption>Quality on <em>The Stainless Steel Rat</em>, which already has a scan. The stage strip stays. The stage panel and the amber banner are removed so this tab gets that height.</figcaption>
+</figure>
+<p>Audio cleanup, separate from chapter placement. Three rows inside the tab.</p>
+<p><strong>Analysis.</strong> File name, duration, sample rate, channels, and <strong>Scan file</strong>. The waveform is the whole file: black level, orange clipping, a band where the noise floor jumps. Click-drag selects a span and sets the preview start. Four tiles: integrated loudness against the target, true peak (warning style when it is over 0&nbsp;dBTP), noise floor, dynamic range. An advice line can offer <strong>Turn it on</strong> for per-segment denoise.</p>
+<p><strong>Chain and detail,</strong> side by side. The chain is a preset menu (applied as soon as you pick it), Save as…, a menu for restore / rename / delete, then ten stages in order. Each row is an index, a name, a one-line summary, a modified dot, and an Enabled check. The detail pane is the selected stage: a description, Enabled, Reset to preset, and that stage’s knobs. High-pass is one cutoff. Denoise is spectral or neural, plus strength. EQ is four bands in a two-by-two grid. A stage whose model is missing explains that and does not pretend to run.</p>
+<p><strong>Footer.</strong> Play, Stop, a start time, “for 30&nbsp;s”, and Hear original (the preview bypass). Output is MP3 at a bitrate. <strong>Process full file</strong> writes a cleaned MP3 in the work folder; while it runs the button becomes Cancel. <strong>Replace library file</strong> swaps it into the library only after a confirm, and keeps the first original.</p>
+
+<h2>What a redesign has to keep working</h2>
+<ul>
+  <li>Two different selections: the stage strip picks the command panel; the notebook picks the evidence. They are independent, except Quality, which hides the command panel.</li>
+  <li>The chapter table is the shared object. Align, Resolve, and Emit all read the same rows, colors, and pins.</li>
+  <li>Nothing in the panels should assume a tall monitor. Resolve is already the panel that wraps. Identify’s search table and Quality’s detail pane are the other tall regions.</li>
+  <li>Playback, Cancel job, and the log are global. They are not owned by one tab.</li>
+  <li>Quality must not be visually folded into “another pipeline stage.” It does not block Measure through Finalize, and those stages do not block it.</li>
+</ul>
+
+</body>
+</html>

@@ -1,0 +1,87 @@
+{
+  "Gentle cleanup": {
+    "stages": {
+      "highpass": {"bypass": false, "params": {"cutoff_hz": 60}},
+      "denoise": {"bypass": false, "params": {"mode": "spectral", "strength": 0.25, "per_segment": false}},
+      "enhance": {"bypass": true},
+      "declick": {"bypass": true},
+      "deesser": {"bypass": true},
+      "compressor": {"bypass": false, "params": {"threshold_db": -22, "ratio": 1.5, "attack_ms": 20, "release_ms": 180, "makeup_db": 0}},
+      "gate": {"bypass": true},
+      "loudness": {"bypass": false, "params": {"target_lufs": -19, "true_peak_db": -3}}
+    }
+  },
+  "Noisy room": {
+    "stages": {
+      "highpass": {"bypass": false, "params": {"cutoff_hz": 90}},
+      "denoise": {"bypass": false, "params": {"mode": "spectral", "strength": 0.85, "per_segment": false}},
+      "enhance": {"bypass": true},
+      "gate": {"bypass": false, "params": {"threshold_db": -42, "hold_ms": 200}}
+    }
+  },
+  "Muffled / dull": {
+    "stages": {
+      "denoise": {"bypass": false, "params": {"mode": "spectral", "strength": 0.2}},
+      "enhance": {"bypass": false, "params": {"strength": 0.7}},
+      "eq": {
+        "bypass": false,
+        "params": {
+          "box_freq": 300,
+          "box_gain": -3,
+          "box_q": 1.0,
+          "presence_freq": 3000,
+          "presence_gain": 4,
+          "presence_q": 1.0
+        }
+      }
+    }
+  },
+  "Boomy / proximity": {
+    "stages": {
+      "highpass": {"bypass": false, "params": {"cutoff_hz": 110}},
+      "eq": {"bypass": false, "params": {"box_freq": 250, "box_gain": -4, "box_q": 1.0}},
+      "deesser": {"bypass": false, "params": {"frequency_hz": 6500, "threshold_db": -24}}
+    }
+  },
+  "Harsh / sibilant": {
+    "stages": {
+      "eq": {
+        "bypass": false,
+        "params": {"air_freq": 7000, "air_gain": -2, "air_q": 0.7, "air_shape": "shelf"}
+      },
+      "deesser": {"bypass": false, "params": {"frequency_hz": 7000, "threshold_db": -32}}
+    }
+  },
+  "Old / archival": {
+    "stages": {
+      "denoise": {"bypass": false, "params": {"mode": "deepfilter", "strength": 0.85}},
+      "enhance": {"bypass": true},
+      "declick": {"bypass": false, "params": {"threshold": 0.2, "sensitivity": 0.8}},
+      "eq": {
+        "bypass": false,
+        "params": {
+          "box_freq": 300,
+          "box_gain": -2,
+          "presence_freq": 3000,
+          "presence_gain": 3,
+          "air_freq": 8000,
+          "air_gain": 2,
+          "air_shape": "shelf"
+        }
+      },
+      "gate": {"bypass": false, "params": {"threshold_db": -50, "hold_ms": 120}},
+      "limiter": {"bypass": false, "params": {"ceiling_db": -2, "release_ms": 40}}
+    }
+  },
+  "Podcast / broadcast": {
+    "stages": {
+      "compressor": {
+        "bypass": false,
+        "params": {"threshold_db": -18, "ratio": 3, "attack_ms": 8, "release_ms": 120, "makeup_db": 1}
+      },
+      "gate": {"bypass": true},
+      "loudness": {"bypass": false, "params": {"target_lufs": -16, "true_peak_db": -1.5}},
+      "limiter": {"bypass": false, "params": {"ceiling_db": -1.5, "release_ms": 50}}
+    }
+  }
+}
