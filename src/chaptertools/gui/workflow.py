@@ -452,6 +452,10 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
     def set_book(self, audio: str):
         self.audio = os.path.abspath(audio)
         self.work_dir = work_dir_for(self.audio)
+        self.app.session.book = self.audio
+        self.app.session.playhead = 0.0
+        self.app.session.selection = None
+        self.app.session.emit("book")
         self.book_var.set(self.audio)
         folder = os.path.dirname(self.audio)
         title = os.path.basename(folder) or os.path.basename(self.audio)
@@ -623,6 +627,12 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         self.analysis = {}
         if self.audio:
             self.analysis = load_analysis(self.audio, self.work_dir)
+        session = self.app.session
+        session.scan = self.analysis or None
+        env = (self.analysis or {}).get("envelope") or {}
+        session.duration = float(env.get("duration") or 0.0)
+        session.chapters = list((self.analysis or {}).get("chapters") or [])
+        session.emit("scan")
         self._apply_book_info()
 
         proj = WorkflowProjection(

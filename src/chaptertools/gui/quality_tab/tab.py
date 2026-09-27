@@ -482,6 +482,17 @@ class QualityTab(ttk.Frame):
         self._refresh_advice()
         self.analysis.set_target(self._loudness_target())
         self._refresh_status()
+        self._publish_cleanup()
+
+    def _publish_cleanup(self) -> None:
+        app = self.winfo_toplevel()
+        session = getattr(app, "session", None)
+        if session is None or self.chain is None:
+            return
+        on = sum(1 for stage in self.chain.stages if not stage.bypass)
+        session.cleanup["stages_on"] = on
+        session.cleanup["preset"] = self._preset_name
+        session.emit("cleanup")
 
     def _save_session(self) -> None:
         self._save_after = None

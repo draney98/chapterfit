@@ -10,11 +10,14 @@ from tkinter import filedialog, messagebox, ttk
 
 from chaptertools.util import clock
 
-from . import fonts, tips
+from . import fonts
 from .library import library_root as resolve_library_root
 from .library import scan_library
+from .log_drawer import LogDrawer
 from .mpv import Player
+from .player_bar import PlayerBar
 from .runner import Runner
+from .session import BookSession
 from .table import SHORTCUTS
 from .workflow import WorkflowPanel
 
@@ -29,6 +32,7 @@ class App(tk.Tk):
         self.library_root = resolve_library_root(library_root)
         self.runner = Runner()
         self.player = Player()
+        self.session = BookSession()
         self._playback_time: float | None = None
         self._library: dict[str, list[str]] = {}
         self.log_errors = 0
@@ -113,7 +117,10 @@ class App(tk.Tk):
             "Keyboard shortcuts",
             "In the chapter table:\n\n" + SHORTCUTS.replace(" · ", "\n")
             + "\n\nAnywhere:\n\nCtrl++ / Ctrl+- larger / smaller text\n"
-              "Ctrl+0 default text size", parent=self)
+              "Ctrl+0 default text size\n"
+              "Ctrl+Shift+L log\n"
+              "Space play or pause · ←/→ ±5 s · Shift+←/→ ±10 s",
+            parent=self)
 
     def _show_about(self):
         from chaptertools import __version__
@@ -155,15 +162,15 @@ class App(tk.Tk):
         self.lib_tree.bind("<<TreeviewSelect>>", self._on_select)
         self._pane = pane
 
-        # ---- status bar (packed before the pane so it never gets squeezed)
-        status = ttk.Frame(self, padding=(8, 1))
-        status.pack(side="bottom", fill="x", before=pane)
+        # ---- player bar (the one transport; packed before the pane) ------
         self.busy_var = tk.StringVar(value="")
-        ttk.Label(status, textvariable=self.busy_var).pack(side="right")
-        cancel = ttk.Button(status, text="Cancel job", command=self._cancel,
-                            padding=(8, 0))
-        cancel.pack(side="right", padx=(0, 6))
-        tips.tooltip(cancel, "stop the running job and any playback")
+        self.status_var = tk.StringVar(value="")
+        self.player_bar = PlayerBar(self, self)
+        self.player_bar.pack(side="bottom", fill="x", before=pane)
+        self.log_drawer = LogDrawer(self)
+        self.log_text = self.log_drawer.text
+        self.bind_all("<Control-Shift-L>", lambda e: self.toggle_log())
+        self.bind_all("<Button-1>", self._log_button_click, add="+")
 
         # ---- main area: workflow (owns the notebook) ----------------------
         main = ttk.Frame(pane)
@@ -171,66 +178,19 @@ class App(tk.Tk):
         self.workflow = WorkflowPanel(main, app=self)
         self.workflow.pack(fill="both", expand=True)
         self.notebook = self.workflow.notebook
-        self._build_log_tab()
-        self.status_var = tk.StringVar(value="")
-        ttk.Label(status, textvariable=self.status_var,
-                  anchor="w").pack(side="left", fill="x", expand=True)
 
-    def _build_log_tab(self):
-        tab = ttk.Frame(self.notebook)
-        bar = ttk.Frame(tab)
-        bar.pack(side="top", fill="x")
-        copy = ttk.Button(bar, text="Copy all", command=self.copy_log)
-        copy.pack(side="right", padx=(0, 2))
-        tips.tooltip(copy, "copy the whole log to the clipboard")
-        clear = ttk.Button(bar, text="Clear log", command=self.clear_log)
-        clear.pack(side="right", padx=(0, 8))
-        tips.tooltip(clear, "empty the log")
-        save = ttk.Button(bar, text="Save log…", command=self.save_log)
-        save.pack(side="right", padx=(0, 8))
-        tips.tooltip(save, "write the log to a file")
-        self.log_text = tk.Text(tab, height=8, wrap="none",
-                                font=tkfont.nametofont("TkFixedFont", root=self))
-        self.log_text.pack(side="top", fill="both", expand=True)
-        lsb = ttk.Scrollbar(tab, orient="vertical",
-                            command=self.log_text.yview)
-        lsb.pack(side="right", fill="y")
-        self.log_text.configure(yscrollcommand=lsb.set)
-        self._make_log_readonly()
-        menu = tk.Menu(self.log_text, tearoff=0)
-        menu.add_command(label="Copy", command=self._copy_selection)
-        menu.add_command(label="Select all",
-                         command=lambda: self.log_text.tag_add(
-                             "sel", "1.0", "end"))
-        menu.add_command(label="Copy everything", command=self.copy_log)
-        menu.add_command(label="Save log…", command=self.save_log)
-        self.log_text.bind("<Button-3>",
-                           lambda e: menu.tk_popup(e.x_root, e.y_root))
-        self._log_tab = tab
-        self.notebook.add(tab, text="Log")
-        self.bind_all("<Button-1>", self._log_button_click, add="+")
-
-    # ------------------------------------------------------------ log pane --
-    def _make_log_readonly(self):
-        """Selectable and copyable, but keystrokes cannot modify it."""
-        self.log_text.bind("<Key>", self._log_key)
-        self.log_text.bind("<Button-2>", lambda e: "break")  # no middle paste
-        self.log_text.bind("<ButtonRelease-2>", lambda e: "break")
+    def toggle_log(self):
+        self.log_drawer.toggle()
 
     def _log_key(self, event):
-        ctrl = event.state & 0x0004
-        if ctrl and event.keysym in ("c", "C", "a", "A"):
-            return None
-        return "break"
+        return self.log_drawer._key(event)
 
+    # ------------------------------------------------------------ log pane --
     def _copy_selection(self):
-        if self.log_text.tag_ranges("sel"):
-            self.log_text.event_generate("<<Copy>>")
+        self.log_drawer._copy_selection()
 
     def clear_log(self):
-        self.log_text.delete("1.0", "end")
-        self.log_errors = 0
-        self.notebook.tab(self._log_tab, text="Log")
+        self.log_drawer.clear()
 
     def _log_button_click(self, event):
         w = event.widget
@@ -250,26 +210,16 @@ class App(tk.Tk):
             self.log(f"clicked {label}")
 
     def copy_log(self):
-        self.clipboard_clear()
-        self.clipboard_append(self.log_text.get("1.0", "end-1c"))
+        self.log_drawer.copy_all()
 
     def save_log(self):
-        path = filedialog.asksaveasfilename(
-            parent=self, title="Save log",
-            initialfile="chaptergui.log",
-            filetypes=[("Log files", "*.log"), ("All files", "*")])
-        if not path:
-            return
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(self.log_text.get("1.0", "end-1c"))
+        self.log_drawer.save()
 
     def log(self, line: str):
-        self.log_text.insert("end", line + "\n")
-        if int(self.log_text.index("end-1c").split(".")[0]) > 5000:
-            self.log_text.delete("1.0", "2.0")
-        if not self.log_text.tag_ranges("sel"):
-            self.log_text.see("end")
+        self.log_drawer.append(line)
         self.status_var.set(line)
+        if hasattr(self, "player_bar"):
+            self.player_bar.show_status(line)
 
     # ------------------------------------------------------------ library --
     def _open_library(self):
@@ -345,9 +295,7 @@ class App(tk.Tk):
             elif kind == "done":
                 if payload != 0 and not job.cancelled:
                     self.log_errors += 1
-                    self.notebook.tab(
-                        self._log_tab, text=f"Log • {self.log_errors} "
-                        f"error{'s' if self.log_errors != 1 else ''}")
+                    self.player_bar.set_log_errors(self.log_errors)
                 if job.on_done:
                     job.on_done(job, payload)
             elif kind == "refused":
@@ -357,12 +305,17 @@ class App(tk.Tk):
             self.workflow.quality.poll()
         t = self.player.poll()
         self._playback_time = t
+        if t is not None:
+            self.session.playhead = t
+        self.player_bar.update_time(t)
         self.workflow.update_playback(t)
         quality_busy = getattr(getattr(self.workflow, "quality", None),
                                "busy", False)
         busy = self.runner.busy or quality_busy
         self.workflow.set_busy(busy)
         self.busy_var.set("busy ◌" if busy else "")
+        if self.session.job.running != busy:
+            self.session.set_job(busy, "busy" if busy else "")
         self.after(100, self._pump)
 
     def _cancel(self):
@@ -386,8 +339,13 @@ class App(tk.Tk):
 
     def stop_audio(self):
         self.player.stop()
+        quality = getattr(self.workflow, "quality", None)
+        player = getattr(quality, "_player", None)
+        if player is not None:
+            player.stop()
         self._playback_time = None
         self.workflow.update_playback(None)
+        self.player_bar.update_time(None)
 
     def _quit(self):
         self.runner.cancel()

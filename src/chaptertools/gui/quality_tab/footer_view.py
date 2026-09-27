@@ -21,10 +21,9 @@ class FooterBar(ttk.Frame):
         preview = ttk.Frame(self, style="Quality.TFrame")
         preview.grid(row=0, column=0, sticky="ew")
         ttk.Label(preview, text="Preview", style="GroundMuted.TLabel").pack(side="left")
+        # Playback lives on the window player bar.
         self.play_btn = ttk.Button(preview, text="Play", command=on_play)
-        self.play_btn.pack(side="left", padx=(8, 0))
         self.stop_btn = ttk.Button(preview, text="Stop", command=on_stop)
-        self.stop_btn.pack(side="left", padx=4)
         ttk.Label(preview, text="from", style="Ground.TLabel").pack(side="left")
         self.start_var = tk.StringVar(value="0:00:00")
         ttk.Entry(preview, textvariable=self.start_var, width=12).pack(side="left", padx=4)
@@ -33,7 +32,6 @@ class FooterBar(ttk.Frame):
             preview, text="Hear original", variable=hear_var, style="Hear.Toolbutton",
             command=on_hear,
         )
-        hear.pack(side="left", padx=(8, 0))
         tips.tooltip(hear, "play the unprocessed 30 seconds")
 
         output = ttk.Frame(self, style="Quality.TFrame")
