@@ -27,5 +27,12 @@ def test_session_player_and_log_drawer(tmp_path):
         assert app.log_drawer.visible
         app.toggle_log()
         assert not app.log_drawer.visible
+        names = [app.notebook.tab(t, "text") for t in app.notebook.tabs()]
+        assert "Gaps" not in names
+        assert app.workflow.timeline is not None
+        assert not hasattr(app.workflow.quality.analysis, "plot")
+        app.workflow.apply_timeline_selection((12.0, 40.0))
+        assert app.session.selection == (12.0, 40.0)
+        assert app.workflow.sweep_start.get()
     finally:
         app.destroy()

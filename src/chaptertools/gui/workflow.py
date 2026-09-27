@@ -64,6 +64,7 @@ from .stages import (
     stage_states,
 )
 from .table import CHAPTER_COLUMNS, TableViews
+from .timeline import Timeline
 
 
 def resolve_chapterfit(python: str | None = None) -> list[str]:
@@ -148,7 +149,7 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
     # ------------------------------------------------------------ widgets --
     def _build(self):
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(4, weight=1)
+        self.rowconfigure(5, weight=1)
 
         head = ttk.Frame(self)
         head.grid(row=0, column=0, sticky="ew")
@@ -165,8 +166,12 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         book_lbl.bind("<Leave>", self._hide_tip)
         self.found_var = tk.StringVar(value="")
 
+        self.timeline = Timeline(self, self.app)
+        self.timeline.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        self.gap_mode_var = self.timeline.mode
+
         self.stage_bar = StageBar(self, self._pick_stage)
-        self.stage_bar.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        self.stage_bar.grid(row=2, column=0, sticky="ew", pady=(4, 0))
 
         # amber explainer strip: shown when the SELECTED stage needs attention
         self.banner_var = tk.StringVar(value="")
@@ -177,7 +182,7 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
 
         # panel host sizes to the tallest visible panel (nothing clips)
         self._panel_host = ttk.Frame(self)
-        self._panel_host.grid(row=3, column=0, sticky="ew", pady=(4, 0))
+        self._panel_host.grid(row=4, column=0, sticky="ew", pady=(4, 0))
         self._panel_host.columnconfigure(0, weight=1)
         self._panel_host.rowconfigure(0, weight=1)
         self._wrap_labels = [self.banner]
@@ -192,10 +197,9 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         }
 
         self._build_chapters_tab()
-        self._build_gaps_tab()
         self._build_transcripts_tab()
         self._build_quality_tab()
-        self.notebook.grid(row=4, column=0, columnspan=2, sticky="nsew")
+        self.notebook.grid(row=5, column=0, columnspan=2, sticky="nsew")
         self.notebook.bind("<<NotebookTabChanged>>", self._on_notebook_tab)
         self.set_stage("measure")
 
@@ -228,8 +232,8 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         rowh = int(ttk.Style(self).lookup("Chapter.Treeview", "rowheight")
                    or 24)
         chrome = sum(w.winfo_reqheight() for w in
-                     (self.grid_slaves(row=0)[0], self.stage_bar,
-                      self.banner))
+                     (self.grid_slaves(row=0)[0], self.timeline,
+                      self.stage_bar, self.banner))
         tab_extra = sum(w.winfo_reqheight() for w in
                         self._chapters_tab.grid_slaves()
                         if w is not self.tree)
@@ -296,8 +300,8 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
             self._panel_host.grid_remove()
             self.banner.grid_remove()
             return
-        self.stage_bar.grid(row=1, column=0, sticky="ew", pady=(4, 0))
-        self._panel_host.grid(row=3, column=0, sticky="ew", pady=(4, 0))
+        self.stage_bar.grid(row=2, column=0, sticky="ew", pady=(4, 0))
+        self._panel_host.grid(row=4, column=0, sticky="ew", pady=(4, 0))
         self.set_stage(self._stage)
 
     # -------------------------------------------------------------- state --
@@ -334,7 +338,7 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
             detail = st.get("detail") or "needs attention"
             self.banner_var.set(f"{STAGE_LABELS[self._stage]}: {detail} — "
                                 f"{REMEDY.get(self._stage, '')}")
-            self.banner.grid(row=2, column=0, sticky="ew")
+            self.banner.grid(row=3, column=0, sticky="ew")
         else:
             self.banner_var.set("")
             self.banner.grid_remove()
@@ -455,7 +459,10 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         self.app.session.book = self.audio
         self.app.session.playhead = 0.0
         self.app.session.selection = None
+        self.app.session.preview_marks = []
         self.app.session.emit("book")
+        if hasattr(self, "timeline"):
+            self.timeline.view = None
         self.book_var.set(self.audio)
         folder = os.path.dirname(self.audio)
         title = os.path.basename(folder) or os.path.basename(self.audio)
@@ -676,7 +683,7 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         self._update_panel_results(states)
         self._update_resolve()
         self._update_header()
-        self.gap_canvas.after_idle(self._draw_gap_graph)
+        self.timeline.redraw()
         self._show_saved_transcripts()
         self._states = states
         self._update_controls()
@@ -1153,15 +1160,35 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         start = dur * 0.25
         self.cmd_sweep(start=start, end=start + 600)
 
+    def apply_timeline_selection(self, span: tuple[float, float] | None) -> None:
+        """The timeline selection is the sweep range, the learn span, and
+        the preview start."""
+        self.app.session.set_selection(span)
+        if span and hasattr(self, "sweep_start"):
+            start, end = span
+            self.sweep_start.set(clock(start))
+            self.sweep_end.set(clock(end))
+            self._sweep_autofilled = True
+        quality = getattr(self, "quality", None)
+        if quality is not None and getattr(quality, "footer", None) is not None:
+            if span:
+                quality._on_range(span[0], span[1])
+            else:
+                quality._on_range(0.0, None)
+
     def _sweep_range(self):
-        try:
-            s = parse_time(self.sweep_start.get().strip() or "0")
-            e = parse_time(self.sweep_end.get().strip() or "0")
-        except ValueError:
-            messagebox.showinfo("Sweep range",
-                                "range needs S–E times like 0:44:54",
-                                parent=self)
-            return
+        span = self.app.session.selection
+        if span:
+            s, e = span
+        else:
+            try:
+                s = parse_time(self.sweep_start.get().strip() or "0")
+                e = parse_time(self.sweep_end.get().strip() or "0")
+            except ValueError:
+                messagebox.showinfo("Sweep range",
+                                    "range needs S–E times like 0:44:54",
+                                    parent=self)
+                return
         if e <= s:
             messagebox.showinfo("Sweep range", "end must be after start",
                                 parent=self)

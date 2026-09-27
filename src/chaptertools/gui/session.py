@@ -48,6 +48,7 @@ class BookSession:
         self.last_dry_run = None
         self.job = JobState()
         self.chapter_index: int | None = None
+        self.preview_marks: list[float] = []
         self._subs: dict[str, list] = {}
 
     def subscribe(self, topic: str, fn) -> None:

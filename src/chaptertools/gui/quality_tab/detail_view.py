@@ -141,7 +141,7 @@ class DetailPanel(ttk.Frame):
         self._rows.append(row)
         self._bool(body, stage, per_seg, 1, recommend=self.recommend,
                    baseline=base.get("per_segment", per_seg.default))
-        note = "Select a quiet stretch in the waveform first"
+        note = "Select a quiet stretch on the timeline first"
         learn_state = "normal" if self.selection else "disabled"
         block = ttk.Frame(body, style="Panel.TFrame")
         block.grid(row=2, column=0, sticky="ew", pady=2)

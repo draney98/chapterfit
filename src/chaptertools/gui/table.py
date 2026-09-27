@@ -1,12 +1,10 @@
-"""Chapter table, Gaps tab, and similar-gap ranking."""
+"""Chapter table and similar-gap ranking. The timeline draws the marks."""
 from __future__ import annotations
 
 import statistics
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk
-
-from chaptertools.util import hms
 
 from . import fonts, palette
 
@@ -156,7 +154,7 @@ def gap_marks(gaps: list[dict], rows, mode: str = "cadence",
 
 
 class TableViews:
-    """Chapters tab, Gaps tab, and the gap strip. Mixed into WorkflowPanel."""
+    """Chapters tab. Mixed into WorkflowPanel."""
 
     def size_table(self):
         row_font = fonts.derived(self, grow=2)
@@ -237,111 +235,3 @@ class TableViews:
         else:
             keys.grid(row=0, column=1, sticky="e", padx=(24, 0))
             legend.master.columnconfigure(1, weight=1)
-
-    def _build_gaps_tab(self):
-        p = ttk.Frame(self.notebook, padding=4)
-        p.columnconfigure(0, weight=1)
-        p.rowconfigure(1, weight=1)
-        controls = ttk.Frame(p)
-        controls.grid(row=0, column=0, sticky="ew")
-        ttk.Label(controls, text="Similar gaps by:").pack(side="left")
-        self.gap_mode_var = tk.StringVar(value="cadence")
-        for text, mode in (("chapter cadence", "cadence"),
-                           ("silence length", "duration")):
-            ttk.Radiobutton(controls, text=text, value=mode,
-                            variable=self.gap_mode_var,
-                            command=self._draw_gap_graph).pack(
-                side="left", padx=(6, 0))
-        self._tip(controls.winfo_children()[1],
-                  "silences nearest where the pin spacing predicts the "
-                  "unpinned chapters should fall")
-        self._tip(controls.winfo_children()[2],
-                  "silences whose duration matches the ones your pins "
-                  "sit on")
-        self.gap_canvas = tk.Canvas(p, height=120, highlightthickness=0,
-                                    background=palette.FIELD)
-        self.gap_canvas.grid(row=1, column=0, sticky="nsew", pady=(4, 0))
-        self.gap_canvas.bind("<Configure>",
-                             lambda e: self._draw_gap_graph())
-        self.gap_legend = tk.StringVar(value="")
-        ttk.Label(p, textvariable=self.gap_legend,
-                  foreground=palette.MUTED).grid(
-            row=2, column=0, sticky="w")
-        self.notebook.add(p, text="Gaps")
-        self._gaps_tab = p
-
-    def _draw_gap_graph(self):
-        c = self.gap_canvas
-        c.delete("all")
-        gaps = (self.analysis.get("gaps") or {}).get("gaps") or []
-        dur = (self.analysis.get("envelope") or {}).get("duration") or 0.0
-        if not gaps or not dur:
-            self.gap_legend.set("")
-            return
-        rows = getattr(getattr(self, "_projection", None), "rows", None) or []
-        mode = self.gap_mode_var.get()
-        chapters, extras = gap_marks(gaps, rows, mode)
-        durs = [b["gap"]["dur"] for b in chapters if b.get("gap")] \
-            + [s["gap"]["dur"] for s in extras if s.get("gap")]
-        maxdur = max(durs) if durs else 1.0
-        width = max(c.winfo_width(), 400)
-        height = max(c.winfo_height(), int(c["height"]))
-        axis_h = tkfont.nametofont("TkDefaultFont", root=self).metrics("linespace") + 4
-        mid_y = height - axis_h
-
-        def bar(x_seconds, d, color, tip):
-            x = 4 + (x_seconds / dur) * (width - 8)
-            h = 6 + (d / maxdur) * (mid_y - 10) if d else 8
-            tag = f"g{round(x_seconds, 3)}"
-            c.create_rectangle(x - 2, mid_y - h, x + 2, mid_y,
-                               fill=color, width=0, tags=(tag,))
-            if tip:
-                c.tag_bind(tag, "<Enter>",
-                           lambda e, t=tip: self._gap_tip(t))
-                c.tag_bind(tag, "<Leave>", lambda e: self._gap_tip(None))
-
-        for b in chapters:
-            g = b.get("gap")
-            tip = (f"{hms(b['time'])} · {b['title']} (#{b['n']})"
-                   + (f" · on a {g['dur']:.2f} s silence" if g
-                      else " · off-gap"))
-            bar(b["time"], g["dur"] if g else None, palette.PIN_BAR, tip)
-        for s in extras:
-            g = s["gap"]
-            note = ""
-            if mode == "cadence" and s.get("pred") is not None:
-                note = (f" · near {s['chapter_title']}"
-                        f" (predicted {hms(s['pred'])})")
-            elif mode == "duration" and s.get("ref") is not None:
-                note = f" · chapter silences run ~{s['ref']:.2f} s"
-            bar(g["mid"], g["dur"], palette.GAP_BAR,
-                f"{hms(g['mid'])} · {g['dur']:.2f} s{note or ' · candidate'}")
-        c.create_line(0, mid_y, width, mid_y, fill=palette.MUTED)
-        for frac, anchor in ((0, "w"), (0.5, "center"), (1, "e")):
-            c.create_text(4 + frac * (width - 8), height - axis_h // 2,
-                          text=hms(dur * frac), anchor=anchor,
-                          font="TkDefaultFont", fill=palette.MUTED)
-        if chapters:
-            by = "cadence" if mode == "cadence" else "silence length"
-            self.gap_legend.set(
-                f"{len(chapters)} chapters (purple) · "
-                f"{len(extras)} candidate gaps by {by} (blue) · "
-                "hover for detail")
-        else:
-            self.gap_legend.set(
-                f"{len(extras)} longest silences (blue) · hover for detail")
-
-    _gap_tipwin = None
-
-    def _gap_tip(self, text):
-        if self._gap_tipwin is not None:
-            self._gap_tipwin.destroy()
-            self._gap_tipwin = None
-        if text:
-            c = self.gap_canvas
-            self._gap_tipwin = tw = tk.Toplevel(self)
-            tw.wm_overrideredirect(True)
-            tw.wm_geometry(f"+{c.winfo_pointerx()}+{c.winfo_rooty() - 24}")
-            tk.Label(tw, text=text, background=palette.TIP,
-                     foreground=palette.TEXT, font="TkDefaultFont",
-                     relief="solid", borderwidth=1, padx=4, pady=1).pack()
