@@ -8,6 +8,16 @@ import pytest
 pytest.importorskip("tkinter")
 
 
+def _button_labels(widget):
+    import tkinter as tk
+    labels = []
+    for child in widget.winfo_children():
+        if isinstance(child, tk.Misc) and child.winfo_class() in ("TButton", "Button"):
+            labels.append(str(child.cget("text")))
+        labels.extend(_button_labels(child))
+    return labels
+
+
 def test_session_player_and_log_drawer(tmp_path):
     if not os.environ.get("DISPLAY"):
         pytest.skip("no display")
@@ -33,5 +43,14 @@ def test_session_player_and_log_drawer(tmp_path):
         app.workflow.apply_timeline_selection((12.0, 40.0))
         assert app.session.selection == (12.0, 40.0)
         assert app.workflow.sweep_start.get()
+        audio = tmp_path / "Author" / "Book"
+        audio.mkdir(parents=True)
+        book = audio / "Book.mp3"
+        book.write_bytes(b"x" * 5000)
+        called = []
+        app.workflow.cmd_measure = lambda: called.append(book.name)
+        app.workflow.set_book(str(book))
+        assert called == ["Book.mp3"]
+        assert "Scan file" not in _button_labels(app)
     finally:
         app.destroy()

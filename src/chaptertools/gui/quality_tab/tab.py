@@ -168,7 +168,7 @@ class QualityTab(ttk.Frame):
     def _build(self) -> None:
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
-        self.analysis = AnalysisFrame(self, self.cmd_scan, self._turn_on_denoise,
+        self.analysis = AnalysisFrame(self, self.cmd_rescan, self._turn_on_denoise,
                                       self._on_range)
         self.analysis.grid(row=0, column=0, sticky="ew", padx=4, pady=(4, 2))
         body = ttk.Panedwindow(self, orient="horizontal")
@@ -228,6 +228,13 @@ class QualityTab(ttk.Frame):
                 parent=self.winfo_toplevel())
             return False
         return True
+
+    def cmd_rescan(self) -> None:
+        workflow = getattr(self, "workflow", None)
+        if workflow is not None:
+            workflow.cmd_rescan()
+            return
+        self.cmd_scan()
 
     def cmd_scan(self) -> None:
         if not self._guard():
@@ -299,6 +306,8 @@ class QualityTab(ttk.Frame):
 
         wav = ensure_decoded(audio, work, cancel, progress)
         report = scan_wav(wav, cancel=cancel, progress=progress)
+        if os.path.isfile(audio):
+            report["source_size"] = os.path.getsize(audio)
         save_report(quality_json_path(work, audio), report)
         return report
 

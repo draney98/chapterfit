@@ -35,6 +35,11 @@ class StagePanels:
         ttk.Label(row, text="analyzes the audio: loudness envelope, timeline "
                             "check, noise calibration, gaps").grid(
             row=0, column=1, sticky="w", padx=8)
+        menu = tk.Menu(row, tearoff=0)
+        menu.add_command(label="Re-scan", command=self.cmd_rescan)
+        more = ttk.Menubutton(row, text="\u22ef", menu=menu, direction="below")
+        more.grid(row=0, column=2, sticky="e", padx=(8, 0))
+        self._tip(more, "measure this file again, including loudness and noise")
         self.measure_result = self._result_line(p, row=1, colspan=1)
         self._tip(self.measure_btn, "decode the whole file once: envelope, "
                   "timeline check, calibration, and the gap list")

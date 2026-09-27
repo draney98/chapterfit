@@ -19,7 +19,7 @@ _ADVICE = (
 class AnalysisFrame(ttk.Frame):
     """The top strip. The legend is a row under the canvas, never drawn on it."""
 
-    def __init__(self, master, on_scan, on_turn_on, on_range):
+    def __init__(self, master, on_rescan, on_turn_on, on_range):
         super().__init__(master, style="Quality.TFrame")
         self.columnconfigure(0, weight=1)
         self.selection = None
@@ -33,9 +33,11 @@ class AnalysisFrame(ttk.Frame):
         self.source_var = tk.StringVar(value="No book selected")
         ttk.Label(header, textvariable=self.source_var, style="GroundMuted.TLabel").grid(
             row=0, column=1, sticky="w", padx=8)
-        self.scan_btn = ttk.Button(header, text="Scan file", command=on_scan)
-        self.scan_btn.grid(row=0, column=2, sticky="e")
-        tips.tooltip(self.scan_btn, "measure loudness, noise, and clipping")
+        menu = tk.Menu(header, tearoff=0)
+        menu.add_command(label="Re-scan", command=on_rescan)
+        more = ttk.Menubutton(header, text="\u22ef", menu=menu, direction="below")
+        more.grid(row=0, column=2, sticky="e")
+        tips.tooltip(more, "measure the file again")
 
         tiles = ttk.Frame(self, style="Quality.TFrame")
         tiles.grid(row=1, column=0, sticky="w", pady=(4, 0))

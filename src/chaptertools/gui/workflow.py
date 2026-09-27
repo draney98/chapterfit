@@ -163,6 +163,7 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(2, weight=1)
         self._step = "scan"
+        self._rescan_quality = False
         self.chapters_var = tk.StringVar(value="Chapters")
 
         head = ttk.Frame(self)
@@ -489,6 +490,7 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         # user picks one first
         self._auto_stage = True
         self._request_facts(harvest=True)
+        self._maybe_autoscan()
 
     def _pick_stage(self, key: str):
         """A stage chosen by the user: no automatic re-choice after that."""
@@ -899,10 +901,68 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
             self._auto_stage = True  # again once fresh disk facts land
         if stage == "measure" and code == 0:
             self._maybe_identify_from_nfo()
+            if self._rescan_quality:
+                self._rescan_quality = False
+                self._scan_quality()
 
     # ------------------------------------------------------------- actions --
     def cmd_measure(self):
         self._run("measure", self._argv("measure"), stage="measure")
+
+    def cmd_rescan(self):
+        """Measure again, then refresh the loudness tiles from that file."""
+        if not self.audio:
+            return
+        self._rescan_quality = True
+        self._run("measure", self._argv("measure", "--redo", "envelope"),
+                  stage="measure")
+
+    def _large_audio(self) -> bool:
+        try:
+            return bool(self.audio) and os.path.getsize(self.audio) >= 4096
+        except OSError:
+            return False
+
+    def _measure_current(self) -> bool:
+        env = (self.analysis or {}).get("envelope") or {}
+        if not env.get("duration"):
+            return False
+        stored = (self.analysis.get("file") or {}).get("size")
+        try:
+            return stored == os.path.getsize(self.audio or "")
+        except OSError:
+            return False
+
+    def _quality_current(self) -> bool:
+        quality = getattr(self, "quality", None)
+        report = getattr(quality, "report", None) or {}
+        if not report.get("chunks") and report.get("integrated_lufs") is None:
+            return False
+        size = report.get("source_size")
+        if size is None:
+            return True
+        try:
+            return size == os.path.getsize(self.audio or "")
+        except OSError:
+            return False
+
+    def _maybe_autoscan(self) -> None:
+        """Measure when this file size has no envelope. The mtime-only
+        rule stays in the artifact: a tag rewrite does not count as new."""
+        if not self._large_audio() or self.app.runner.busy:
+            return
+        if not self._measure_current():
+            self._rescan_quality = not self._quality_current()
+            self.cmd_measure()
+            return
+        if not self._quality_current():
+            self._scan_quality()
+
+    def _scan_quality(self) -> None:
+        quality = getattr(self, "quality", None)
+        if quality is None or not getattr(quality, "available", False):
+            return
+        quality.cmd_scan()
 
     # identify ----------------------------------------------------------
     def _identify_mode_changed(self):
