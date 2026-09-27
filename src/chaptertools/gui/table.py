@@ -18,10 +18,12 @@ CHAPTER_COLUMNS = (
     ("gap", "Gap", "12.34 s", "e"),
     ("confidence", "Conf", "0.00", "e"),
     ("pinned", "Pin", "! pin", "center"),
+    ("heard", "Heard", None, "w"),
+    ("status", "Status", "unplaced", "w"),
 )
 CELL_PAD = 24
 SHORTCUTS = ("Space play/pause · ←/→ ±5 s · Shift+←/→ ±10 s · "
-             "Enter pin · Delete remove pin")
+             "Enter opens a problem · Delete removes a pin")
 TITLE_MIN = "An Average Chapter Title"
 
 
@@ -164,8 +166,9 @@ class TableViews:
             rowheight=row_font.metrics("linespace") + 2)
         self.table_font = row_font
         for col, heading, sample, _anchor in CHAPTER_COLUMNS:
+            text = TITLE_MIN if col == "title" else (sample or heading)
             need = max(head_font.measure(heading),
-                       row_font.measure(sample or TITLE_MIN)) + CELL_PAD
+                       row_font.measure(text)) + CELL_PAD
             self.tree.column(col, minwidth=need, width=need)
 
     def _build_chapters_tab(self, parent):
@@ -193,13 +196,19 @@ class TableViews:
                         ("Right", lambda e: self._key_seek(5)),
                         ("Shift-Left", lambda e: self._key_seek(-10)),
                         ("Shift-Right", lambda e: self._key_seek(10)),
-                        ("Return", lambda e: self.cmd_pin()),
-                        ("KP_Enter", lambda e: self.cmd_pin()),
+                        ("Return", self._toggle_open_row),
+                        ("KP_Enter", self._toggle_open_row),
                         ("Delete", lambda e: self.cmd_unpin())):
             self.tree.bind(seq, fn)
         foot = ttk.Frame(tab)
         foot.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(2, 0))
         legend = ttk.Frame(foot)
+        self.chapter_filter = tk.StringVar(value="all")
+        self.filter_box = ttk.Combobox(
+            legend, width=14, state="readonly", textvariable=self.chapter_filter,
+            values=("all", "problems", "lowconf", "unplaced"))
+        self.filter_box.pack(side="left", padx=(0, 8))
+        self.filter_box.bind("<<ComboboxSelected>>", lambda _e: self._refresh())
         for color, text in ((palette.ROW_UNPLACED, "unplaced"),
                             (palette.ROW_LOWCONF,
                              "below minimum confidence (withheld)"),
@@ -219,6 +228,7 @@ class TableViews:
         self.conflict_note = tk.StringVar(value="")
         self.conflict_label = ttk.Label(tab, textvariable=self.conflict_note,
                                         foreground=palette.WARN)
+        self.problem_var = tk.StringVar(value="")
         tab.grid(row=0, column=0, sticky="nsew")
         self._chapters_tab = tab
 

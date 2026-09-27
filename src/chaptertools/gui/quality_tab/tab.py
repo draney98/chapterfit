@@ -619,8 +619,6 @@ class QualityTab(ttk.Frame):
     def _set_running(self, running: bool) -> None:
         if hasattr(self, "footer"):
             self.footer.set_running(running)
-        if hasattr(self, "analysis"):
-            self.analysis.scan_btn.configure(state="disabled" if running else "normal")
 
     def _is_modified(self) -> bool:
         if self._baseline is None or self.chain is None:

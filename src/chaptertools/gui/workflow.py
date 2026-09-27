@@ -234,7 +234,6 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         place.add(self._panels["align"], weight=1)
         place.add(self._panels["resolve"], weight=2)
         self._build_chapters_tab(self._main_frames["place"])
-        self._build_transcripts_tab(place)
         self._build_quality_tab(self._main_frames["cleanup"])
         self._bind_step_keys()
         self.show_step("scan")
@@ -678,13 +677,28 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
             self.tree.delete(i)
         self._conflicts_unknown = proj.conflicts_unknown
         self._row_data = {}
+        open_indexes = getattr(self, "_open_indexes", set())
+        opened = False
         for r in proj.rows:
+            if not self._row_visible(r):
+                continue
             iid = self.tree.insert("", "end", tags=r.tags, values=(
                 r.mark, r.title, hms(r.published), _t(r.placed),
                 r.gap,
                 "" if r.confidence is None else f"{r.confidence:.2f}",
-                r.pin))
+                r.pin, self._heard_of(r), self._status_of(r)))
             self._row_data[iid] = r.source
+            problem = bool(set(r.tags) & {"conflict", "unplaced", "lowconf"})
+            if problem and r.index in open_indexes:
+                self._show_problem_actions(r)
+                opened = True
+            elif problem and not open_indexes and not getattr(self, "_did_auto_open", False):
+                self._open_indexes = {r.index}
+                self._did_auto_open = True
+                self._show_problem_actions(r)
+                opened = True
+        if not opened:
+            self.problem_var.set("")
         if sel and self.tree.exists(sel[0]):
             self.tree.selection_set(sel[0])
         self.tree.yview_moveto(scroll[0] if scroll else 0)
@@ -693,7 +707,7 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
             "pins from an older Align: re-run Align to detect conflicting "
             "pins" if proj.conflicts_unknown else "")
         if proj.conflicts_unknown:
-            self.conflict_label.grid(row=2, column=0, columnspan=2,
+            self.conflict_label.grid(row=4, column=0, columnspan=2,
                                      sticky="w")
         else:
             self.conflict_label.grid_remove()
@@ -721,7 +735,7 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         """Everything that starts a job or edits what the next job reads."""
         return [self.measure_btn, self.identify_btn, self.identify_entry,
                 self.identify_browse, *self.identify_radios, self.align_btn,
-                self.near_entry, self.min_conf_spin, self.hint_entry,
+                self.min_conf_spin,
                 self.hint_btn, self.listen_btn, self.sweep_start_entry,
                 self.sweep_end_entry, self.range_btn, self.probe_btn,
                 self.full_btn, self.pin_btn, self.unpin_btn, self.reread_btn,
@@ -1262,7 +1276,124 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
     def _near_spec(self, raw: str) -> str | None:
         return near_spec(raw, self.analysis)
 
+    def _row_visible(self, row) -> bool:
+        mode = self.chapter_filter.get() if hasattr(self, "chapter_filter") else "all"
+        tags = set(row.tags)
+        if mode == "problems":
+            return bool(tags & {"conflict", "unplaced", "lowconf"})
+        if mode == "lowconf":
+            return "lowconf" in tags
+        if mode == "unplaced":
+            return "unplaced" in tags
+        return True
+
+    def _status_of(self, row) -> str:
+        if "conflict" in row.tags:
+            return "conflict"
+        if "unplaced" in row.tags:
+            return "unplaced"
+        if "lowconf" in row.tags:
+            return "low"
+        return "placed" if row.placed is not None else ""
+
+    # "low" fits the Status column; the amber row already says why.
+
+    def _heard_of(self, row) -> str:
+        import re
+        pattern = self.grep_var.get() if hasattr(self, "grep_var") else ""
+        try:
+            rx = re.compile(pattern, re.I) if pattern else None
+        except re.error:
+            rx = None
+        best = ""
+        best_d = 45.0
+        target = row.placed
+        for pos in (self.analysis.get("heard") or {}).get("positions") or []:
+            if not isinstance(pos, dict):
+                continue
+            text = str(pos.get("heading") or pos.get("text") or "")
+            if not text or (rx and not rx.search(text)):
+                continue
+            moment = pos.get("time")
+            if target is None or not isinstance(moment, (int, float)):
+                best = best or text
+                continue
+            delta = abs(moment - target)
+            if delta < best_d:
+                best, best_d = text, delta
+        return best
+
+    def _problem_sentence(self, row) -> str:
+        if "conflict" in row.tags:
+            return "This pin disagrees with the published time."
+        if "unplaced" in row.tags:
+            return "Not placed yet."
+        return "Below the minimum confidence, so it would be withheld."
+
+    def _candidate_times(self, row) -> list[float]:
+        gaps = (self.analysis.get("gaps") or {}).get("gaps") or []
+        anchor = row.placed if row.placed is not None else row.published
+        if anchor is None:
+            return []
+        ranked = sorted(
+            (g for g in gaps if isinstance(g, dict) and g.get("mid") is not None),
+            key=lambda g: abs(g["mid"] - anchor))
+        return [float(g["mid"]) for g in ranked[:3]]
+
+    def _show_problem_actions(self, row) -> None:
+        times = self._candidate_times(row)
+        sentence = self._problem_sentence(row)
+        if times:
+            sentence += " Nearest " + clock(times[0])
+        self.problem_var.set(sentence)
+        self._nearest_pin = (row.index + 1, times[0]) if times else None
+        if hasattr(self, "conflict_note"):
+            self.conflict_note.set(sentence)
+
+    def _pin_nearest(self) -> None:
+        pin = getattr(self, "_nearest_pin", None)
+        if pin:
+            self._pin_at(*pin)
+
+    def _pin_at(self, chapter: int, seconds: float) -> None:
+        self.pin_ch.set(str(chapter))
+        self.pin_time.set(clock(seconds))
+        self.cmd_pin()
+
+    def _toggle_open_row(self, _event=None):
+        sel = self.tree.selection()
+        if not sel:
+            return "break"
+        iid = sel[0]
+        parent = self.tree.parent(iid)
+        if parent:
+            iid = parent
+        row = self._row_data.get(iid) or {}
+        index = row.get("index")
+        if index is None:
+            return "break"
+        open_indexes = set(getattr(self, "_open_indexes", set()))
+        if index in open_indexes:
+            open_indexes.discard(index)
+        else:
+            open_indexes.add(index)
+        self._open_indexes = open_indexes
+        self._did_auto_open = True
+        self._refresh()
+        return "break"
+
+    def _sync_hint_box(self) -> None:
+        if not hasattr(self, "hints_box"):
+            return
+        lines = [line.strip() for line in
+                 self.hints_box.get("1.0", "end").splitlines() if line.strip()]
+        if not lines:
+            return
+        self.near_var.set(lines[0])
+        self.hint_var.set(lines[0])
+
     def cmd_align(self):
+        self._sync_hint_box()
         near = self.near_var.get().strip()
         spec = None
         if near:
@@ -1279,6 +1410,7 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
 
     # resolve -----------------------------------------------------------
     def _resolve_hint(self):
+        self._sync_hint_box()
         near = self.hint_var.get().strip()
         if not near:
             near = simpledialog.askstring(
@@ -1365,7 +1497,7 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
                   stage="resolve", then=self.cmd_align)
 
     def _show_saved_transcripts(self):
-        """Fill the Transcripts tab from the artifact, or clear it."""
+        """Heard lines are filtered in the chapter table."""
         if not hasattr(self, "transcripts_text"):
             return
         pattern = self.grep_var.get() if hasattr(self, "grep_var") else ""
@@ -1375,6 +1507,8 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
             self.transcripts_text.insert("1.0", body + "\n")
 
     def cmd_transcripts(self):
+        if not hasattr(self, "transcripts_text"):
+            return
         argv = self._argv("transcripts")
         grep = self.grep_var.get().strip()
         if grep:

@@ -51,7 +51,7 @@ class App(tk.Tk):
         need (Resolve counted stacked, as it stacks when narrow) plus
         the library pane."""
         self.update_idletasks()
-        need_w = self.workflow.min_width() + LIBRARY_WIDTH + 16
+        need_w = self.workflow.min_width() + LIBRARY_WIDTH + 8
         need_h = self.workflow.min_height() + 60  # menu + status bar
         self.minsize(max(need_w, 1024), max(need_h, 600))
 

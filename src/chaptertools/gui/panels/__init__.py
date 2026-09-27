@@ -140,11 +140,12 @@ class StagePanels:
         self.min_conf_spin = ttk.Spinbox(p, from_=0.0, to=1.0, increment=0.05,
                                          width=5, textvariable=self.min_conf)
         self.min_conf_spin.grid(row=0, column=1, sticky="w")
-        ttk.Label(p, text="Near (CH=TIME):").grid(row=0, column=2, sticky="e",
-                                                  padx=(10, 2))
+        ttk.Label(p, text="Hints:").grid(row=0, column=2, sticky="ne",
+                                        padx=(10, 2))
         self.near_var = tk.StringVar()
-        self.near_entry = ttk.Entry(p, textvariable=self.near_var, width=12)
-        self.near_entry.grid(row=0, column=3, sticky="w")
+        self.hints_box = tk.Text(p, height=3, width=18, wrap="none")
+        self.hints_box.grid(row=0, column=3, sticky="ew")
+        self._tip(self.hints_box, "one CH=TIME per line, for example 12=3:45:00")
         self.align_btn = self._primary(p, 0, 4, "Align", self.cmd_align)
         ttk.Label(p, text="places every published chapter on a real gap").grid(
             row=1, column=0, columnspan=5, sticky="w")
@@ -152,9 +153,7 @@ class StagePanels:
         self._tip(self.align_btn, "place every published chapter on a "
                   "real gap, keeping local reading rate consistent")
         self._tip(self.min_conf_spin, "chapters below this confidence are "
-                  "withheld from Emit (shaded amber in the table)")
-        self._tip(self.near_entry, "optional CH=TIME hint, e.g. 12=3:45:00, "
-                  "that aims the alignment near a known position")
+                  "withheld from Finish (shaded amber in the table)")
         return p
 
     def _panel_resolve(self, host):
@@ -162,12 +161,12 @@ class StagePanels:
         summary = ttk.Frame(p)
         summary.grid(row=0, column=0, columnspan=2, sticky="ew")
         self.unresolved_frame = ttk.Frame(summary)
-        self.unresolved_frame.pack(side="left")
+        self.unresolved_frame.pack(side="top", anchor="w", fill="x")
         self.next_var = tk.StringVar(value="")
         self.next_label = ttk.Label(summary, textvariable=self.next_var,
                                     foreground=palette.OK,
                                     font=fonts.derived(self, weight="bold"))
-        self.next_label.pack(side="right")
+        self.next_label.pack(side="top", anchor="w")
 
         left = ttk.LabelFrame(p, text="Automatic", padding=4)
         self._resolve_left = left
@@ -186,9 +185,7 @@ class StagePanels:
             return b
 
         self.hint_var = tk.StringVar()
-        self.hint_entry = ttk.Entry(left, textvariable=self.hint_var, width=12)
-        self.hint_entry.grid(row=0, column=1, sticky="ew")
-        self._tip(self.hint_entry, "CH=TIME, e.g. 12=3:45:00")
+        ttk.Label(left, text="uses the Hints box").grid(row=0, column=1, sticky="w")
         self.hint_status = tk.StringVar(value="")
         self.hint_btn = option(
             0, "Position hint:", "Align with hint", self._resolve_hint,
@@ -323,28 +320,27 @@ class StagePanels:
         self.unpin_btn.pack(side="left")
         self._tip(self.unpin_btn, "drop this chapter's pin and re-align "
                   "(Delete in the table)")
+        heard = ttk.Frame(left)
+        heard.grid(row=5, column=0, columnspan=5, sticky="ew", pady=(6, 0))
+        ttk.Label(heard, text="Heard lines:").pack(side="left")
+        self.grep_var = tk.StringVar(value="chapter")
+        heard_entry = ttk.Entry(heard, textvariable=self.grep_var, width=16)
+        heard_entry.pack(side="left", padx=4)
+        self.grep_var.trace_add("write", lambda *_: self._refresh_soon())
+        self._tip(heard_entry, "only heard lines matching this regular expression")
+        self.pin_nearest_btn = ttk.Button(heard, text="Pin nearest",
+                                          command=self._pin_nearest)
+        self.pin_nearest_btn.pack(side="left", padx=(8, 0))
+        self._tip(self.pin_nearest_btn, "pin the open chapter at the nearest silence")
         self._resolve_stacked = None
         self._layout_resolve(side_by_side=True)
         return p
 
     def _layout_resolve(self, side_by_side: bool):
-        if self._resolve_stacked is (not side_by_side):
-            return
-        self._resolve_stacked = not side_by_side
-        left, right = self._resolve_left, self._resolve_right
-        p = left.master
-        if side_by_side:
-            p.columnconfigure(0, weight=3)
-            p.columnconfigure(1, weight=2)
-            left.grid(row=1, column=0, columnspan=1, sticky="nsew")
-            right.grid(row=1, column=1, columnspan=1, sticky="nsew",
-                       padx=(8, 0), pady=0)
-        else:
-            p.columnconfigure(0, weight=1)
-            p.columnconfigure(1, weight=0)
-            left.grid(row=1, column=0, columnspan=2, sticky="nsew")
-            right.grid(row=2, column=0, columnspan=2, sticky="nsew",
-                       padx=0, pady=(6, 0))
+        del side_by_side
+        left = self._resolve_left
+        left.master.columnconfigure(0, weight=1)
+        left.grid(row=1, column=0, sticky="nsew")
 
     def _build_book_info(self, parent):
         info = ttk.LabelFrame(parent, text="Book info (written at Finish)",

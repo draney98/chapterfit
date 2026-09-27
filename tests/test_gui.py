@@ -750,7 +750,7 @@ def test_busy_locks_job_controls(tmp_path):
         wf._fill_from_selection()
         assert "disabled" not in wf.pin_btn.state()
         wf.set_busy(True)
-        for w in (wf.pin_btn, wf.unpin_btn, wf.measure_btn, wf.hint_entry,
+        for w in (wf.pin_btn, wf.unpin_btn, wf.measure_btn, wf.hint_btn,
                   wf.sweep_start_entry, wf.reread_btn):
             assert "disabled" in w.state()
         assert "job is running" in wf._tips[wf.pin_btn].reason
