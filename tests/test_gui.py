@@ -564,8 +564,7 @@ def test_table_shows_identified_chapters_before_align(tmp_path):
                 for i in app.workflow.tree.get_children()]
         assert rows[1][3] == "0:01:35.000"
         assert rows[1][0] == "?2"
-        assert app.notebook.tab(app.workflow._chapters_tab, "text") == \
-            "Chapters 2/3"
+        assert app.workflow.chapters_var.get() == "Chapters 2/3"
     finally:
         app.destroy()
 
@@ -632,8 +631,7 @@ def test_table_shows_pins_before_align(tmp_path):
         assert rows[3][3] == "0:34:31.400"
         assert rows[3][6] == "pin"
         # tab label counts pins as placed
-        assert app.notebook.tab(app.workflow._chapters_tab, "text") == \
-            "Chapters 2/4"
+        assert app.workflow.chapters_var.get() == "Chapters 2/4"
     finally:
         app.destroy()
 

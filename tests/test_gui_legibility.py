@@ -137,13 +137,10 @@ def test_nothing_clips(app, size):
     _settle(app, f"{w}x{h}+0+0")
     wf = app.workflow
     problems = []
-    for tab in app.notebook.tabs():
-        app.notebook.select(tab)
-        for stage in wf._panels:
-            wf.set_stage(stage)
-            app.update()
-            problems += [f"{stage}/{app.notebook.tab(tab, 'text')}: {p}"
-                         for p in _clipped(app)]
+    for step in ("scan", "match", "place", "finish", "cleanup"):
+        wf.show_step(step)
+        app.update()
+        problems += [f"{step}: {p}" for p in _clipped(app)]
     assert not problems, "\n".join(problems)
 
 
@@ -191,13 +188,11 @@ def test_font_size_change_keeps_columns_and_fonts_in_step(app):
 def test_table_shows_25_rows_at_1080p(app):
     _settle(app, "1920x1080+0+0")
     wf = app.workflow
-    app.notebook.select(wf._chapters_tab)
-    for stage in wf._panels:
-        wf.set_stage(stage)
-        app.update()
-        full = 0
-        for iid in wf.tree.get_children():
-            box = wf.tree.bbox(iid)
-            if box and box[1] + box[3] <= wf.tree.winfo_height():
-                full += 1
-        assert full >= 25, (stage, full)
+    wf.show_step("place")
+    app.update()
+    full = 0
+    for iid in wf.tree.get_children():
+        box = wf.tree.bbox(iid)
+        if box and box[1] + box[3] <= wf.tree.winfo_height():
+            full += 1
+    assert full >= 25, full

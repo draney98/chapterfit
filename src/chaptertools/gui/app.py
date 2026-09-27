@@ -172,12 +172,11 @@ class App(tk.Tk):
         self.bind_all("<Control-Shift-L>", lambda e: self.toggle_log())
         self.bind_all("<Button-1>", self._log_button_click, add="+")
 
-        # ---- main area: workflow (owns the notebook) ----------------------
+        # ---- main area ----------------------------------------------------
         main = ttk.Frame(pane)
         pane.add(main, weight=1)
         self.workflow = WorkflowPanel(main, app=self)
         self.workflow.pack(fill="both", expand=True)
-        self.notebook = self.workflow.notebook
 
     def toggle_log(self):
         self.log_drawer.toggle()

@@ -1,9 +1,8 @@
-"""Main-area controller and stage panels: measure → … → finalize.
+"""Main-area controller: step rail, timeline, and the two stacks.
 
 WorkflowPanel owns the command plumbing (one method per chapterfit
-subcommand, all subprocess-driven via app.runner) and builds the main
-area: header, stage bar, one visible stage panel, and the notebook tabs
-(Chapters, Transcripts). The Log tab and the status bar belong to the app.
+subcommand, all subprocess-driven via app.runner). The log lives in the
+app's drawer.
 """
 from __future__ import annotations
 
@@ -52,17 +51,15 @@ from .projection import (
 )
 from .runner import Job
 from .stages import (
-    ATTENTION,
     BLOCKED,
-    STAGE_KEYS,
     STAGE_LABELS,
     DiskFacts,
-    StageBar,
     identify_verdict,
     next_stage,
     resolve_evidence,
     stage_states,
 )
+from .step_rail import STAGE_STEP, STEPS, StepRail, Workspace
 from .table import CHAPTER_COLUMNS, TableViews
 from .timeline import Timeline
 
@@ -102,6 +99,22 @@ def _elide(text: str, font, room: int) -> str:
     return text[:(lo + 1) // 2] + "…" + text[len(text) - lo // 2:]
 
 
+def _stack(parent):
+    """One frame per step, stacked in the same cell."""
+    host = ttk.Frame(parent)
+    host.pack(fill="both", expand=True)
+    host.rowconfigure(0, weight=1)
+    host.columnconfigure(0, weight=1)
+    frames = {}
+    for key in STEPS:
+        frame = ttk.Frame(host)
+        frame.grid(row=0, column=0, sticky="nsew")
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+        frames[key] = frame
+    return frames
+
+
 def _t(v) -> str:
     """No empty time cells: a zero clock instead of '-' or blank."""
     if v is None or v == "" or v == "-":
@@ -110,12 +123,11 @@ def _t(v) -> str:
 
 
 class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
-    """Coordinator: header, stage bar, projection refresh, command jobs."""
+    """Coordinator: header, step rail, timeline, and the two stacks."""
 
     def __init__(self, master, app):
         super().__init__(master, padding=(8, 4))
         self.app = app
-        self.notebook = ttk.Notebook(self)
         self.audio: str | None = None
         self.work_dir: str | None = None
         self.analysis: dict = {}
@@ -149,7 +161,9 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
     # ------------------------------------------------------------ widgets --
     def _build(self):
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(5, weight=1)
+        self.rowconfigure(2, weight=1)
+        self._step = "scan"
+        self.chapters_var = tk.StringVar(value="Chapters")
 
         head = ttk.Frame(self)
         head.grid(row=0, column=0, sticky="ew")
@@ -166,42 +180,38 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         book_lbl.bind("<Leave>", self._hide_tip)
         self.found_var = tk.StringVar(value="")
 
+        self.rail = StepRail(head, self.show_step)
+        self.rail.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+
         self.timeline = Timeline(self, self.app)
         self.timeline.grid(row=1, column=0, sticky="ew", pady=(4, 0))
         self.gap_mode_var = self.timeline.mode
 
-        self.stage_bar = StageBar(self, self._pick_stage)
-        self.stage_bar.grid(row=2, column=0, sticky="ew", pady=(4, 0))
-
-        # amber explainer strip: shown when the SELECTED stage needs attention
-        self.banner_var = tk.StringVar(value="")
-        self.banner = ttk.Label(self, textvariable=self.banner_var,
-                                background=palette.BANNER,
-                                foreground=palette.WARN,
-                                padding=(8, 3))
-
-        # panel host sizes to the tallest visible panel (nothing clips)
-        self._panel_host = ttk.Frame(self)
-        self._panel_host.grid(row=4, column=0, sticky="ew", pady=(4, 0))
-        self._panel_host.columnconfigure(0, weight=1)
-        self._panel_host.rowconfigure(0, weight=1)
-        self._wrap_labels = [self.banner]
-        self._panel_host.bind("<Configure>", self._on_host_resize)
+        self.workspace = Workspace(self)
+        self.workspace.grid(row=2, column=0, sticky="nsew", pady=(4, 0))
+        self._main_frames = _stack(self.workspace.main)
+        self._insp_frames = _stack(self.workspace.inspector)
+        self._wrap_labels = []
+        self.workspace.inspector.bind("<Configure>", self._on_host_resize)
+        place = ttk.Panedwindow(self._insp_frames["place"], orient="vertical")
+        place.grid(row=0, column=0, sticky="nsew")
         self._panels = {
-            "measure": self._panel_measure(self._panel_host),
-            "identify": self._panel_identify(self._panel_host),
-            "align": self._panel_align(self._panel_host),
-            "resolve": self._panel_resolve(self._panel_host),
-            "emit": self._panel_emit(self._panel_host),
-            "finalize": self._panel_finalize(self._panel_host),
+            "measure": self._panel_measure(self._main_frames["scan"]),
+            "identify": self._panel_identify(self._main_frames["match"]),
+            "align": self._panel_align(place),
+            "resolve": self._panel_resolve(place),
+            "emit": self._panel_emit(self._main_frames["finish"]),
+            "finalize": self._panel_finalize(self._insp_frames["finish"]),
         }
-
-        self._build_chapters_tab()
-        self._build_transcripts_tab()
-        self._build_quality_tab()
-        self.notebook.grid(row=5, column=0, columnspan=2, sticky="nsew")
-        self.notebook.bind("<<NotebookTabChanged>>", self._on_notebook_tab)
-        self.set_stage("measure")
+        for key in ("measure", "identify", "emit", "finalize"):
+            self._panels[key].grid(row=0, column=0, sticky="nsew")
+        place.add(self._panels["align"], weight=1)
+        place.add(self._panels["resolve"], weight=2)
+        self._build_chapters_tab(self._main_frames["place"])
+        self._build_transcripts_tab(place)
+        self._build_quality_tab(self._main_frames["cleanup"])
+        self._bind_step_keys()
+        self.show_step("scan")
 
     TABLE_MIN_ROWS = 4
 
@@ -223,26 +233,21 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         table = sum(int(self.tree.column(c, "minwidth"))
                     for c, *_ in CHAPTER_COLUMNS) + 24
         return max([self._panel_need(k)[0] for k in self._panels]
-                   + [self.stage_bar.winfo_reqwidth(), table]) + 16
+                   + [self.rail.winfo_reqwidth(), table]) + 16
 
     def min_height(self) -> int:
-        """Header, stage bar, banner, the tallest panel, and a table that
-        still shows a few rows."""
+        """Header, timeline, and enough rows that the table is usable."""
         self.update_idletasks()
         rowh = int(ttk.Style(self).lookup("Chapter.Treeview", "rowheight")
                    or 24)
-        chrome = sum(w.winfo_reqheight() for w in
-                     (self.grid_slaves(row=0)[0], self.timeline,
-                      self.stage_bar, self.banner))
-        tab_extra = sum(w.winfo_reqheight() for w in
-                        self._chapters_tab.grid_slaves()
-                        if w is not self.tree)
-        tallest = max(self._panel_need(k)[1] for k in self._panels)
-        return (chrome + tallest + tab_extra + 40
-                + rowh * (self.TABLE_MIN_ROWS + 1) + 24)
+        chrome = self.grid_slaves(row=0)[0].winfo_reqheight()
+        chrome += self.timeline.winfo_reqheight()
+        return chrome + rowh * (self.TABLE_MIN_ROWS + 1) + 80
 
     def _on_host_resize(self, event):
         """Long text wraps to the panel width instead of widening it."""
+        if not hasattr(self, "_resolve_left"):
+            return
         width = event.width
         for lbl in self._wrap_labels:
             lbl.configure(wraplength=max(width - 24, 200))
@@ -259,8 +264,8 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
             self.app.log("copied: " + fix)
 
     # ------------------------------------------------------------- tabs --
-    def _build_transcripts_tab(self):
-        tab = ttk.Frame(self.notebook)
+    def _build_transcripts_tab(self, parent):
+        tab = ttk.Frame(parent)
         tab.columnconfigure(1, weight=1)
         tab.rowconfigure(1, weight=1)
         ttk.Label(tab, text="Filter (regex):").grid(row=0, column=0,
@@ -283,65 +288,56 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         self.transcripts_text.grid(row=1, column=0, columnspan=3,
                                    sticky="nsew")
         self.transcripts_text.bind("<Double-1>", self._transcript_seek)
-        self.notebook.add(tab, text="Transcripts")
+        parent.add(tab, weight=1)
 
-    def _build_quality_tab(self):
+    def _build_quality_tab(self, parent):
         from chaptertools.gui.quality_tab import QualityTab
-        self.quality = QualityTab(self.notebook, app=self.app, workflow=self)
-        self.notebook.add(self.quality, text="Quality")
-        self._quality_open = False
+        self.quality = QualityTab(parent, app=self.app, workflow=self)
+        self.quality.grid(row=0, column=0, sticky="nsew")
 
-    def _on_notebook_tab(self, _event=None):
-        """The quality page takes the space the stage panels normally use."""
-        selected = self.notebook.select()
-        opening = selected == str(self.quality)
-        self._quality_open = opening
-        if opening:
-            self._panel_host.grid_remove()
-            self.banner.grid_remove()
-            return
-        self.stage_bar.grid(row=2, column=0, sticky="ew", pady=(4, 0))
-        self._panel_host.grid(row=4, column=0, sticky="ew", pady=(4, 0))
-        self.set_stage(self._stage)
+    def _bind_step_keys(self) -> None:
+        root = self.winfo_toplevel()
+        for index, key in enumerate(STEPS, start=1):
+            root.bind_all(f"<Control-Key-{index}>",
+                          lambda _e, step=key: self.show_step(step))
 
     # -------------------------------------------------------------- state --
-    def set_stage(self, key: str):
-        if key not in STAGE_KEYS:
+    def show_step(self, step: str) -> None:
+        if step not in STEPS:
             return
-        self._stage = key
-        states = self._compute_states()
-        self.stage_bar.update(states, key)
-        self._update_banner(states)
-        if getattr(self, "_quality_open", False):
-            self.banner.grid_remove()
-            return
-        for k, panel in self._panels.items():
-            if k == key:
-                panel.grid(row=0, column=0, sticky="nsew")
+        self._auto_stage = False
+        self._step = step
+        for key, frame in self._main_frames.items():
+            if key == step:
+                frame.grid()
             else:
-                panel.grid_remove()
-
-    def _update_banner(self, states: dict | None = None):
-        """Amber strip: why the stage we're ON needs attention."""
-        states = states or self._compute_states()
-        st = states.get(self._stage) or {}
-        REMEDY = {
-            "measure": "rewrite the Xing header before trusting timestamps",
-            "identify": "pick a different edition and identify again",
-            "align": "use Resolve to place them: Listen, Sweep, or pin by ear",
-            "resolve": "use Listen, Sweep, or pin by ear to place them",
-            "emit": "run Emit to write the supported chapters",
-            "finalize": "run the dry run first",
-        }
-        # Resolve's own summary line already says what is unresolved
-        if st.get("state") == ATTENTION and self._stage != "resolve":
-            detail = st.get("detail") or "needs attention"
-            self.banner_var.set(f"{STAGE_LABELS[self._stage]}: {detail} — "
-                                f"{REMEDY.get(self._stage, '')}")
-            self.banner.grid(row=3, column=0, sticky="ew")
+                frame.grid_remove()
+        for key, frame in self._insp_frames.items():
+            if key == step:
+                frame.grid()
+            else:
+                frame.grid_remove()
+        self.workspace.set_inspector(step in ("place", "finish"))
+        if step == "finish":
+            self.timeline.grid_remove()
         else:
-            self.banner_var.set("")
-            self.banner.grid_remove()
+            self.timeline.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        self._sync_rail()
+
+    def set_stage(self, key: str):
+        if key in STAGE_STEP:
+            self._stage = key
+            self.show_step(STAGE_STEP[key])
+            return
+        if key in STEPS:
+            self.show_step(key)
+
+    def _sync_rail(self, states: dict | None = None) -> None:
+        states = states or self._compute_states()
+        preset = self.app.session.cleanup.get("preset") or "off"
+        on = int(self.app.session.cleanup.get("stages_on") or 0)
+        cleanup = f"{preset} · {on} stages" if on else "off"
+        self.rail.update(states, self._step, cleanup)
 
     # ------------------------------------------------------ media facts --
     def _request_facts(self, harvest: bool = False):
@@ -674,12 +670,11 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
                                      sticky="w")
         else:
             self.conflict_label.grid_remove()
-        self.notebook.tab(self._chapters_tab,
-                          text=f"Chapters {proj.confident_count}/{len(proj.rows)}")
+        self.chapters_var.set(
+            f"Chapters {proj.confident_count}/{len(proj.rows)}")
 
         states = proj.states
-        self.stage_bar.update(states, self._stage)
-        self._update_banner(states)
+        self._sync_rail(states)
         self._update_panel_results(states)
         self._update_resolve()
         self._update_header()
@@ -887,7 +882,7 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         if code != 0:
             why = "could not start" if code is None else f"exited with {code}"
             messagebox.showwarning(
-                "chapterfit", f"{name} {why} - see the Log tab for details",
+                "chapterfit", f"{name} {why} - see the Log for details",
                 parent=self)
             return
         if then:

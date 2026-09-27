@@ -19,16 +19,15 @@ def test_session_player_and_log_drawer(tmp_path):
         assert app.player_bar is not None
         assert app.log_text is app.log_drawer.text
         assert not app.log_drawer.visible
-        names = [app.notebook.tab(t, "text") for t in app.notebook.tabs()]
-        assert "Log" not in names
+        assert not hasattr(app, "notebook")
+        assert app.workflow.rail is not None
         app.log("hello")
         assert "hello" in app.log_text.get("1.0", "end")
         app.toggle_log()
         assert app.log_drawer.visible
         app.toggle_log()
         assert not app.log_drawer.visible
-        names = [app.notebook.tab(t, "text") for t in app.notebook.tabs()]
-        assert "Gaps" not in names
+        assert not hasattr(app.workflow, "notebook")
         assert app.workflow.timeline is not None
         assert not hasattr(app.workflow.quality.analysis, "plot")
         app.workflow.apply_timeline_selection((12.0, 40.0))

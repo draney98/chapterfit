@@ -168,8 +168,8 @@ class TableViews:
                        row_font.measure(sample or TITLE_MIN)) + CELL_PAD
             self.tree.column(col, minwidth=need, width=need)
 
-    def _build_chapters_tab(self):
-        tab = ttk.Frame(self.notebook)
+    def _build_chapters_tab(self, parent):
+        tab = ttk.Frame(parent)
         tab.columnconfigure(0, weight=1)
         tab.rowconfigure(0, weight=1)
         cols = [c[0] for c in CHAPTER_COLUMNS]
@@ -219,7 +219,7 @@ class TableViews:
         self.conflict_note = tk.StringVar(value="")
         self.conflict_label = ttk.Label(tab, textvariable=self.conflict_note,
                                         foreground=palette.WARN)
-        self.notebook.add(tab, text="Chapters")
+        tab.grid(row=0, column=0, sticky="nsew")
         self._chapters_tab = tab
 
     def _layout_foot(self, event=None):

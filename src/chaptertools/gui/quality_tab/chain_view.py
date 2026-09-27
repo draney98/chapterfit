@@ -45,10 +45,28 @@ class ChainPanel(ttk.Frame):
         ttk.Label(self, text="Signal chain", style="Muted.TLabel").grid(
             row=2, column=0, sticky="w")
 
+        host = ttk.Frame(self, style="Panel.TFrame")
+        host.grid(row=3, column=0, sticky="nsew")
+        self.rowconfigure(3, weight=1)
+        self.canvas = tk.Canvas(
+            host, height=80, highlightthickness=0, background=palette.Q_PANEL)
+        scroll = ttk.Scrollbar(host, orient="vertical", command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=scroll.set)
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        scroll.grid(row=0, column=1, sticky="ns")
+        host.rowconfigure(0, weight=1)
+        host.columnconfigure(0, weight=1)
+        self.inner = ttk.Frame(self.canvas, style="Panel.TFrame")
+        self.inner.columnconfigure(0, weight=1)
+        self._window = self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
+        self.inner.bind("<Configure>", self._fit_scroll)
+        self.canvas.bind("<Configure>", self._fit_width)
+
         self.rows = []
         for index, stage in enumerate(chain.stages):
-            row = ChainRow(self, index, stage, enabled_vars[stage.name], self._click)
-            row.frame.grid(row=3 + index, column=0, sticky="ew", pady=1)
+            row = ChainRow(self.inner, index, stage, enabled_vars[stage.name],
+                           self._click, keys=self)
+            row.frame.grid(row=index, column=0, sticky="ew", pady=1)
             self.rows.append(row)
         self.refresh()
         self._paint_selection()
@@ -72,7 +90,17 @@ class ChainPanel(ttk.Frame):
     def select(self, index: int) -> None:
         self._selected = max(0, min(index, len(self.rows) - 1))
         self._paint_selection()
-        self.rows[self._selected].frame.focus_set()
+        frame = self.rows[self._selected].frame
+        frame.focus_set()
+        self.canvas.update_idletasks()
+        height = max(self.inner.winfo_reqheight(), 1)
+        self.canvas.yview_moveto(frame.winfo_y() / height)
+
+    def _fit_scroll(self, _event=None) -> None:
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    def _fit_width(self, event) -> None:
+        self.canvas.itemconfigure(self._window, width=event.width)
 
     def move(self, delta: int) -> None:
         self.select(self._selected + delta)
@@ -111,11 +139,12 @@ class ChainPanel(ttk.Frame):
 class ChainRow:
     """Index, name, summary, modified dot, and the Enabled checkbox."""
 
-    def __init__(self, master, index: int, stage, enabled_var, on_click):
+    def __init__(self, master, index: int, stage, enabled_var, on_click, keys=None):
         self.index = index
         self.stage = stage
         self.enabled = enabled_var
         self.on_click = on_click
+        keys = keys or master
         self._selected = False
         self._modified = False
         self.frame = ttk.Frame(master, style="Panel.TFrame", padding=(2, 1))
@@ -143,11 +172,11 @@ class ChainRow:
             self.check.configure(state="disabled")
         for widget in (self.frame, self.index_label, self.name_label, self.summary):
             widget.bind("<Button-1>", self._click)
-            widget.bind("<Up>", master._keys)
-            widget.bind("<Down>", master._keys)
-            widget.bind("<space>", master._keys)
-        self.check.bind("<Up>", master._keys)
-        self.check.bind("<Down>", master._keys)
+            widget.bind("<Up>", keys._keys)
+            widget.bind("<Down>", keys._keys)
+            widget.bind("<space>", keys._keys)
+        self.check.bind("<Up>", keys._keys)
+        self.check.bind("<Down>", keys._keys)
 
     def refresh(self, summary: str) -> None:
         self.summary_var.set(summary)
