@@ -122,8 +122,8 @@ class StagePanels:
         self._tip(self.asin_region_box, "Audible catalog region")
         self.asin_search_btn = ttk.Button(self.asin_frame, text="Search",
                                           command=self.cmd_search_asin)
-        self.asin_search_btn.grid(row=3, column=2, sticky="w", padx=(8, 0),
-                                  pady=(2, 0))
+        self.asin_search_btn.grid(row=4, column=0, columnspan=2, sticky="w",
+                                  pady=(4, 0))
         self._tip(self.asin_search_btn,
                   "search Audible with the title, author, keywords, and "
                   "region above")
@@ -235,91 +235,9 @@ class StagePanels:
             "sweeps the whole book; already-swept spans are cached and "
             "cost nothing to redo")
 
-        right = ttk.LabelFrame(p, text="Pin by ear", padding=4)
-        self._resolve_right = right
-        right.columnconfigure(0, weight=1)
-        what = ttk.Frame(right)
-        what.grid(row=0, column=0, sticky="w")
-        self.byear_title = tk.StringVar(value="Select a chapter in the table")
-        ttk.Label(what, textvariable=self.byear_title,
-                  font=fonts.derived(self, weight="bold")).pack(side="left")
-        self.byear_info = tk.StringVar(value="")
-        ttk.Label(what, textvariable=self.byear_info).pack(
-            side="left", padx=(8, 0))
-        transport = ttk.Frame(right)
-        transport.grid(row=1, column=0, sticky="w", pady=(4, 0))
-        self.seek_btns = []
-        ttk.Style(self).configure("Transport.TButton", width=0)
-
-        def seek(delta):
-            b = ttk.Button(transport, text=f"{delta:+d} s",
-                           style="Transport.TButton",
-                           command=lambda d=delta: self._key_seek(d),
-                           state=["disabled"])
-            b.pack(side="left", padx=1)
-            self.seek_btns.append(b)
-            self._tip(b, f"skip {'back' if delta < 0 else 'forward'} "
-                         f"{abs(delta)} s ({'Shift+' if abs(delta) == 10 else ''}"
-                         f"{'←' if delta < 0 else '→'} in the table)")
-
-        seek(-10)
-        seek(-5)
-        self.play_btn = ttk.Button(transport, text="▶ Play",
-                                   command=self._key_playpause,
-                                   state=["disabled"])
-        self.play_btn.pack(side="left", padx=1)
-        self._tip(self.play_btn, "play from the selected chapter "
-                  "(double-click a row or Space does the same); "
-                  "pauses/resumes while playing")
-        seek(5)
-        seek(10)
-        self.stop_btn = ttk.Button(transport, text="■ Stop playback",
-                                   command=self.app.stop_audio,
-                                   state=["disabled"])
-        self.stop_btn.pack(side="left", padx=(6, 0))
-        self._tip(self.stop_btn, "stop playback")
-        ttk.Label(transport, text="Playback:").pack(side="left",
-                                                    padx=(12, 0))
-        self.playback_var = tk.StringVar(value="0:00:00.000")
-        ttk.Label(transport, textvariable=self.playback_var,
-                  font=tkfont.nametofont("TkFixedFont", root=self)).pack(
-            side="left", padx=(4, 0))
-        time_row = ttk.Frame(right)
-        time_row.grid(row=2, column=0, sticky="w", pady=(4, 0))
-        ttk.Label(time_row, text="Time (H:MM:SS):").pack(side="left")
         self.pin_time = tk.StringVar(value="0:00:00.000")
-        pin_time_entry = ttk.Entry(time_row, textvariable=self.pin_time,
-                                   width=12)
-        pin_time_entry.pack(side="left", padx=(4, 6))
-        pin_time_entry.bind("<Return>",
-                            lambda e: self.play_from_time() or "break")
-        self._tip(pin_time_entry, "the time Pin will mark and Play from "
-                  "time will start at (H:MM:SS); Enter plays from it")
-        self._set_btn = ttk.Button(time_row, text="Set from playback",
-                                   command=self.set_from_playback,
-                                   state=["disabled"])
-        self._set_btn.pack(side="left", padx=(0, 4))
-        self._tip(self._set_btn, "copy the current (frozen) playback "
-                  "clock into the time field")
-        self.playfrom_btn = ttk.Button(time_row, text="▶ Play from time",
-                                       command=self.play_from_time,
-                                       state=["disabled"])
-        self.playfrom_btn.pack(side="left")
-        self._tip(self.playfrom_btn, "start playback (no time limit) at "
-                  "the time in the field")
         self.pin_ch = tk.StringVar()
         self._pin_autofilled = False
-        pin_row = ttk.Frame(right)
-        pin_row.grid(row=3, column=0, sticky="w", pady=(4, 0))
-        self.pin_btn = ttk.Button(pin_row, text="Pin", command=self.cmd_pin)
-        self.pin_btn.pack(side="left", padx=(0, 4))
-        self._tip(self.pin_btn, "fix the selected chapter at the time in "
-                  "the field, then re-align (Enter in the table)")
-        self.unpin_btn = ttk.Button(pin_row, text="Remove pin",
-                                    command=self.cmd_unpin)
-        self.unpin_btn.pack(side="left")
-        self._tip(self.unpin_btn, "drop this chapter's pin and re-align "
-                  "(Delete in the table)")
         heard = ttk.Frame(left)
         heard.grid(row=5, column=0, columnspan=5, sticky="ew", pady=(6, 0))
         ttk.Label(heard, text="Heard lines:").pack(side="left")
@@ -328,10 +246,6 @@ class StagePanels:
         heard_entry.pack(side="left", padx=4)
         self.grep_var.trace_add("write", lambda *_: self._refresh_soon())
         self._tip(heard_entry, "only heard lines matching this regular expression")
-        self.pin_nearest_btn = ttk.Button(heard, text="Pin nearest",
-                                          command=self._pin_nearest)
-        self.pin_nearest_btn.pack(side="left", padx=(8, 0))
-        self._tip(self.pin_nearest_btn, "pin the open chapter at the nearest silence")
         self._resolve_stacked = None
         self._layout_resolve(side_by_side=True)
         return p

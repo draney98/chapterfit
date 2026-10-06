@@ -39,6 +39,9 @@ def stage_summary(stage) -> str:
         return f"{level} {DOT} {hold}"
     if name == "eq":
         active = sum(abs(float(params[key])) >= 0.05 for key in _GAIN_KEYS)
+        trim = abs(float(params.get("trim_db", 0.0))) >= 0.05
+        if active == 0 and trim:
+            return _with_unit(params["trim_db"], "dB", _decimals(stage, "trim_db"))
         if active == 0:
             return "flat"
         word = "band" if active == 1 else "bands"

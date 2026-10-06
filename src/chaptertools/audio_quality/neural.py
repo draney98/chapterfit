@@ -7,16 +7,23 @@ hold one child open with :class:`NeuralSession` and the stages will use it.
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import importlib.util
 import json
 import os
+import select
 import subprocess
 import sys
 import tempfile
+import threading
+
+from chaptertools import file_log
 
 _SESSION: contextvars.ContextVar[NeuralSession | None] = contextvars.ContextVar(
     "neural_session", default=None)
+_live_lock = threading.Lock()
+_live: NeuralSession | None = None
 
 
 class NeuralUnavailable(RuntimeError):
@@ -106,17 +113,35 @@ class NeuralSession:
     """One long-lived child. The model loads once for the whole file."""
 
     def __init__(self) -> None:
+        self.user_cancelled = False
+        self.log_paused = False
+        self._stderr = None
+        self._token = None
+        self.proc = None
+        self._spawn()
+        _register(self)
+
+    def _spawn(self) -> None:
+        from chaptertools.file_log import LOG_PATH
         from chaptertools.util import package_env
 
+        self._close_stderr()
+        self._stderr = open(LOG_PATH, "ab", buffering=0)  # noqa: SIM115
         self.proc = subprocess.Popen(
             [sys.executable, "-m", "chaptertools.audio_quality.neural", "--serve"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=self._stderr,
             text=True,
             env=package_env(),
         )
-        self._token = None
+        self.log_paused = False
+
+    def _close_stderr(self) -> None:
+        handle = self._stderr
+        self._stderr = None
+        if handle is not None:
+            handle.close()
 
     def __enter__(self):
         self._token = _SESSION.set(self)
@@ -131,42 +156,145 @@ class NeuralSession:
     def apply(self, kind: str, audio, sr: int, strength: float):
         import soundfile as sf
 
-        if self.proc.poll() is not None:
-            err = ""
-            if self.proc.stderr is not None:
-                err = self.proc.stderr.read().strip()
-            raise NeuralUnavailable(err or "neural process exited")
+        from .analysis import Cancelled, LogPaused
+
+        if self.user_cancelled:
+            raise Cancelled()
+        self._ensure_running()
         with tempfile.TemporaryDirectory(prefix="chapterfit-neural-") as folder:
             src = os.path.join(folder, "in.wav")
             dest = os.path.join(folder, "out.wav")
             sf.write(src, audio, int(sr))
-            assert self.proc.stdin is not None
-            assert self.proc.stdout is not None
-            self.proc.stdin.write(json.dumps({
-                "kind": kind,
-                "in": src,
-                "out": dest,
-                "strength": float(strength),
-            }) + "\n")
-            self.proc.stdin.flush()
-            line = self.proc.stdout.readline()
-            if not line:
-                raise NeuralUnavailable("neural process returned nothing")
+            if self.user_cancelled:
+                raise Cancelled()
+            if self.log_paused:
+                raise LogPaused()
+            assert self.proc is not None and self.proc.stdin is not None
+            try:
+                self.proc.stdin.write(json.dumps({
+                    "kind": kind,
+                    "in": src,
+                    "out": dest,
+                    "strength": float(strength),
+                }) + "\n")
+                self.proc.stdin.flush()
+            except OSError:
+                if self.user_cancelled:
+                    raise Cancelled() from None
+                if self.log_paused:
+                    raise LogPaused() from None
+                raise NeuralUnavailable("neural process exited") from None
+            line = self._read_reply()
             reply = json.loads(line)
             if not reply.get("ok"):
                 raise NeuralUnavailable(str(reply.get("error") or "neural stage failed"))
             processed, _ = sf.read(dest, dtype="float32", always_2d=True)
             return processed
 
-    def close(self) -> None:
-        if self.proc.poll() is not None:
+    def _ensure_running(self) -> None:
+        from .analysis import Cancelled
+
+        if self.proc is not None and self.proc.poll() is None:
             return
-        if self.proc.stdin is not None:
-            self.proc.stdin.close()
-        try:
-            self.proc.wait(timeout=30)
-        except subprocess.TimeoutExpired:
-            self.proc.terminate()
+        if self.user_cancelled:
+            raise Cancelled()
+        if self.log_paused:
+            self._spawn()
+            return
+        raise NeuralUnavailable("neural process exited")
+
+    def _read_reply(self) -> str:
+        from .analysis import Cancelled, LogPaused
+
+        stdout = self.proc.stdout
+        if stdout is None:
+            raise NeuralUnavailable("neural process returned nothing")
+        while True:
+            if self.user_cancelled:
+                raise Cancelled()
+            try:
+                file_log.wait_turn()
+            except Cancelled:
+                raise
+            if self.user_cancelled:
+                raise Cancelled()
+            if self.log_paused:
+                raise LogPaused()
+            try:
+                ready, _, _ = select.select([stdout], [], [], 0.2)
+            except (OSError, ValueError):
+                ready = []
+            if self.user_cancelled:
+                raise Cancelled()
+            if self.log_paused:
+                if file_log.prompt_pending():
+                    file_log.wait_turn()
+                if self.user_cancelled:
+                    raise Cancelled()
+                raise LogPaused()
+            if not ready:
+                if self.proc.poll() is not None:
+                    raise NeuralUnavailable("neural process exited")
+                continue
+            line = stdout.readline()
+            if line:
+                return line
+            if self.user_cancelled:
+                raise Cancelled()
+            if self.log_paused:
+                raise LogPaused()
+            raise NeuralUnavailable("neural process returned nothing")
+
+    def abort(self, *, for_log: bool = False) -> None:
+        """Kill the child. ``for_log`` retries the chunk after the user agrees."""
+        if for_log:
+            self.log_paused = True
+        else:
+            self.user_cancelled = True
+        proc = self.proc
+        if proc is not None and proc.poll() is None:
+            proc.kill()
+
+    def close(self) -> None:
+        _unregister(self)
+        proc = self.proc
+        if proc is not None and proc.poll() is None:
+            if proc.stdin is not None:
+                with contextlib.suppress(OSError):
+                    proc.stdin.close()
+            try:
+                proc.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        self._close_stderr()
+
+
+def abort_active(*, for_log: bool = False) -> None:
+    """Kill the session a cleanup job is waiting on, from any thread."""
+    with _live_lock:
+        session = _live
+    if session is not None:
+        session.abort(for_log=for_log)
+
+
+def _register(session: NeuralSession) -> None:
+    global _live
+    with _live_lock:
+        _live = session
+
+
+def _unregister(session: NeuralSession) -> None:
+    global _live
+    with _live_lock:
+        if _live is session:
+            _live = None
+
+
+def _pause_for_log() -> None:
+    abort_active(for_log=True)
+
+
+file_log.add_pause_hook(_pause_for_log)
 
 
 def _one_shot(kind: str, audio, sr: int, strength: float):
@@ -245,16 +373,44 @@ def _resemble(audio, sr: int, strength: float):
 
 
 def _serve() -> None:
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            req = json.loads(line)
-            _serve_one(req)
-            print(json.dumps({"ok": True}), flush=True)
-        except Exception as exc:
-            print(json.dumps({"ok": False, "error": str(exc)}), flush=True)
+    """Read requests from stdin and write one JSON reply per request.
+
+    DeepFilterNet's logger writes to ``sys.stdout``. That stream is moved
+    to stderr before the model is imported, and replies go out on a copy
+    of the original stdout. A log line that starts with the year would
+    otherwise parse as a JSON number and raise ``Extra data``.
+    """
+    protocol = os.fdopen(
+        os.dup(sys.stdout.fileno()), "w", encoding="utf-8", buffering=1)
+    sys.stdout = sys.stderr
+    _use_cpu_threads()
+    try:
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                req = json.loads(line)
+                _serve_one(req)
+                _reply(protocol, {"ok": True})
+            except Exception as exc:
+                _reply(protocol, {"ok": False, "error": str(exc)})
+    finally:
+        protocol.close()
+
+
+def _use_cpu_threads() -> None:
+    """Use the cores this CPU actually has. The default can stay at one."""
+    try:
+        import torch
+    except ImportError:
+        return
+    torch.set_num_threads(max(1, os.cpu_count() or 1))
+
+
+def _reply(protocol, payload: dict) -> None:
+    protocol.write(json.dumps(payload) + "\n")
+    protocol.flush()
 
 
 def _serve_one(req: dict) -> None:

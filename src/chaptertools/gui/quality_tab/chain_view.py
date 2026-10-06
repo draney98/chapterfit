@@ -100,7 +100,12 @@ class ChainPanel(ttk.Frame):
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
     def _fit_width(self, event) -> None:
-        self.canvas.itemconfigure(self._window, width=event.width)
+        need = event.width
+        for row in self.rows:
+            need = max(need, row.frame.winfo_reqwidth())
+        self.canvas.itemconfigure(self._window, width=need)
+        if need > self.canvas.winfo_width():
+            self.canvas.configure(width=need)
 
     def move(self, delta: int) -> None:
         self.select(self._selected + delta)

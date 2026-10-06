@@ -23,6 +23,9 @@ class Job:
         self.on_done = on_done
         self.on_line = on_line
         self.cancelled = False
+        self.log_hold = False
+        self.log_keep = False
+        self.log_ready: threading.Event | None = None
 
 
 class Runner:
@@ -56,23 +59,60 @@ class Runner:
         if proc is not None and proc.poll() is None:
             proc.terminate()
 
+    def pause_for_log(self) -> None:
+        """Stop the live process and hold the job until ``release_log_hold``."""
+        with self._lock:
+            job, proc = self._job, self._proc
+            if job is None or job.log_hold:
+                return
+            job.log_hold = True
+            job.log_keep = False
+            job.log_ready = threading.Event()
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
+
+    def release_log_hold(self, keep: bool) -> None:
+        """Yes runs the same command again. No marks the held job cancelled."""
+        with self._lock:
+            job = self._job
+        if job is None or job.log_ready is None:
+            return
+        job.log_keep = keep
+        job.log_ready.set()
+
+    def _execute(self, job: Job):
+        with self._lock:
+            self._proc = subprocess.Popen(
+                job.argv,
+                env=job.env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+        proc = self._proc
+        assert proc is not None and proc.stdout is not None
+        for line in proc.stdout:
+            self.events.put(("line", job, line.rstrip("\n")))
+        return proc.wait()
+
     def _work(self, job: Job):
         code = None
         try:
-            with self._lock:
-                self._proc = subprocess.Popen(
-                    job.argv,
-                    env=job.env,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,
-                )
-            proc = self._proc
-            assert proc is not None and proc.stdout is not None
-            for line in proc.stdout:
-                self.events.put(("line", job, line.rstrip("\n")))
-            code = proc.wait()
+            while True:
+                code = self._execute(job)
+                if not job.log_hold:
+                    break
+                ready = job.log_ready
+                if ready is None:
+                    break
+                ready.wait()
+                keep = job.log_keep
+                job.log_hold = False
+                job.log_ready = None
+                if not keep:
+                    job.cancelled = True
+                    break
         except OSError as e:
             self.events.put(("line", job, str(e)))
         finally:

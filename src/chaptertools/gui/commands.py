@@ -91,13 +91,16 @@ def align_argv(prefix: list[str], work_dir: str, audio: str,
 
 
 def emit_argv(prefix: list[str], work_dir: str, audio: str,
-              min_conf: float, embed: bool, overrides: dict[str, str]) -> list[str]:
+              min_conf: float, embed: bool, overrides: dict[str, str],
+              source: str | None = None) -> list[str]:
     extra = ["emit", "--min-confidence", str(min_conf),
              "--chapters-txt", os.path.join(work_dir, "chapters.txt"),
              "--abs-json", os.path.join(work_dir, "chapters.json")]
     for flag, value in overrides.items():
         if value:
             extra += [flag, value]
+    if source and os.path.abspath(source) != os.path.abspath(audio):
+        extra += ["--source", source]
     if embed:
         extra.append("--embed")
     return job_argv(prefix, work_dir, *extra, audio=audio)

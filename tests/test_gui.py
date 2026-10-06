@@ -312,6 +312,34 @@ def test_runner_reports_missing_binary():
     assert done[0] is None
 
 
+def test_log_hold_restarts_the_same_command():
+    import queue
+
+    runner = Runner()
+    job = Job("sleep", [sys.executable, "-c",
+                        "import time; print('start', flush=True); time.sleep(30)"])
+    runner.run(job)
+    kind, _job, payload = runner.events.get(timeout=10)
+    assert kind == "line" and payload == "start"
+    runner.pause_for_log()
+    time.sleep(0.3)
+    assert runner.busy
+    runner.release_log_hold(True)
+    kind, _job, payload = runner.events.get(timeout=10)
+    assert kind == "line" and payload == "start"
+    runner.release_log_hold(False)
+    runner.cancel()
+    while True:
+        try:
+            kind, _job, payload = runner.events.get(timeout=10)
+        except queue.Empty:
+            break
+        if kind == "done":
+            break
+    assert job.cancelled
+    assert not runner.busy
+
+
 def test_runner_cancel_marks_job_and_frees_runner(tmp_path):
     runner = Runner()
     job = Job("sleep", [sys.executable, "-c", "import time; time.sleep(30)"])
@@ -374,6 +402,72 @@ def _make_app(tmp_path):
     return app
 
 
+def _walk(widget):
+    yield widget
+    for child in widget.winfo_children():
+        yield from _walk(child)
+
+
+def test_every_enabled_press_adds_a_log_line(tmp_path):
+    import tkinter as tk
+
+    app = _make_app(tmp_path)
+    try:
+        app.workflow.show_step("cleanup")
+        quality = app.workflow.quality
+        denoise = next(
+            index for index, stage in enumerate(quality.chain.stages)
+            if stage.name == "denoise")
+        quality.select_stage(denoise)
+        app.update_idletasks()
+        widgets = list(_walk(app))
+        presses = []
+        values = []
+        for widget in widgets:
+            kind = widget.winfo_class()
+            if kind in (
+                "TButton", "Button", "TCheckbutton", "Checkbutton",
+                "TRadiobutton", "Radiobutton", "TMenubutton", "Menubutton",
+            ):
+                presses.append((widget, "<Button-1>"))
+            elif kind in ("TSpinbox", "Spinbox", "TScale", "Scale"):
+                values.append((widget, "<ButtonRelease-1>"))
+            elif kind in ("TCombobox", "Combobox"):
+                values.append((widget, "<<ComboboxSelected>>"))
+        missed = []
+        saw_chain = False
+        saw_segment = False
+        for widget, sequence in presses + values:
+            try:
+                if app._control_disabled(widget):
+                    continue
+            except tk.TclError:
+                continue
+            try:
+                text = str(widget.cget("text") or "")
+            except tk.TclError:
+                text = ""
+            before = app.log_text.index("end-1c")
+            try:
+                widget.event_generate(sequence)
+                app.update_idletasks()
+            except tk.TclError:
+                missed.append(f"{widget.winfo_class()} {text}")
+                continue
+            if app.log_text.index("end-1c") == before:
+                missed.append(f"{widget.winfo_class()} {text!r}")
+                continue
+            if widget.winfo_class() == "TCheckbutton" and not text.strip():
+                saw_chain = True
+            if "Re-estimate" in text:
+                saw_segment = True
+        assert missed == []
+        assert saw_chain
+        assert saw_segment
+    finally:
+        app.destroy()
+
+
 def test_click_log_ignores_a_tcl_only_widget(tmp_path):
     app = _make_app(tmp_path)
     try:
@@ -381,6 +475,148 @@ def test_click_log_ignores_a_tcl_only_widget(tmp_path):
         event.widget = ".popdown.f.l"
         app._log_button_click(event)
         assert "clicked" not in app.log_text.get("1.0", "end")
+    finally:
+        app.destroy()
+
+
+def _click(app, widget):
+    event = type("E", (), {})()
+    event.widget = widget
+    app._log_button_click(event)
+
+
+def test_click_log_names_the_action_and_the_preset(tmp_path):
+    import tkinter as tk
+    from tkinter import ttk
+
+    app = _make_app(tmp_path)
+    try:
+        app.session.book_info.title = "Revelation Space"
+        app.workflow._step = "cleanup"
+        quality = app.workflow.quality
+        quality._preset_name = "Audiobook"
+        quality._baseline = quality.chain.snapshot()
+        quality.chain.stage("denoise").params["strength"] = 0.1
+        app.session.playhead = 12 * 60 + 4
+        app.player_bar.play_btn.configure(text="▶")
+        _click(app, app.player_bar.play_btn)
+        logged = app.log_text.get("1.0", "end")
+        assert (
+            "Play a 30 s preview from 0:12:04, preset Audiobook, edited, "
+            "modified: denoise — Revelation Space — Audio cleanup"
+        ) in logged
+        assert "clicked" not in logged
+
+        app.player_bar.play_btn.configure(text="❚❚")
+        _click(app, app.player_bar.play_btn)
+        assert "Stop the preview — Revelation Space — Audio cleanup" in (
+            app.log_text.get("1.0", "end"))
+
+        app.workflow._step = "place"
+        app.player_bar.play_btn.configure(text="▶")
+        _click(app, app.player_bar.play_btn)
+        assert "Play from 0:12:04 — Revelation Space — Place" in (
+            app.log_text.get("1.0", "end"))
+
+        button = ttk.Button(app, text="Identify")
+        _click(app, button)
+        assert "Identify: asin — Revelation Space — Place" in app.log_text.get("1.0", "end")
+
+        chosen = tk.BooleanVar(value=False)
+        check = ttk.Checkbutton(app, text="Embed chapters", variable=chosen)
+        _click(app, check)
+        assert "Embed chapters: on — Revelation Space — Place" in (
+            app.log_text.get("1.0", "end"))
+
+        menu = tk.Menu(app, tearoff=0)
+        menu.add_command(label="Play from 5 s before", command=lambda: None)
+        menu.activate(0)
+        event = type("E", (), {})()
+        event.widget = menu
+        app._log_menu_click(event)
+        assert "Play from 5 s before — Revelation Space — Place" in (
+            app.log_text.get("1.0", "end"))
+
+        button.configure(state="disabled")
+        before = app.log_text.get("1.0", "end")
+        _click(app, button)
+        assert app.log_text.get("1.0", "end") == before
+    finally:
+        app.destroy()
+
+
+def test_source_radios_switch_bypass_and_log_the_stream(tmp_path):
+    from tkinter import ttk
+
+    app = _make_app(tmp_path)
+    try:
+        app.session.book_info.title = "Revelation Space"
+        app.workflow._step = "cleanup"
+        quality = app.workflow.quality
+        bar = app.player_bar
+        assert bar.source_var.get() == "edited"
+        assert app._control_disabled(bar.original_btn)
+        before = app.log_text.get("1.0", "end")
+        _click(app, bar.original_btn)
+        assert app.log_text.get("1.0", "end") == before
+
+        stuck = ttk.Checkbutton(app, text="Stuck", state="disabled")
+        stuck.state(["!disabled"])
+        assert "disabled" in str(stuck.cget("state"))
+        assert not app._control_disabled(stuck)
+        stuck.destroy()
+
+        quality._preview = {"ready": True}
+        bar._show_hear()
+        assert not app._control_disabled(bar.edited_btn)
+        assert not app._control_disabled(bar.original_btn)
+        assert bar.source_var.get() == "edited"
+
+        played = []
+        quality._player.play = lambda *args, **kwargs: played.append("play")
+        _click(app, bar.original_btn)
+        bar.original_btn.invoke()
+        assert quality.hear_var.get()
+        assert quality._player.bypass is True
+        assert played == []
+        logged = app.log_text.get("1.0", "end")
+        assert "Hear original — Revelation Space — Audio cleanup" in logged
+
+        _click(app, bar.edited_btn)
+        bar.edited_btn.invoke()
+        assert not quality.hear_var.get()
+        assert quality._player.bypass is False
+        assert "Hear edited — Revelation Space — Audio cleanup" in (
+            app.log_text.get("1.0", "end"))
+
+        quality._finish("preview", {"dry": None, "wet": None, "sr": 44100})
+        assert played == ["play"]
+        assert "Playing edited audio" in app.log_text.get("1.0", "end")
+        quality.hear_var.set(True)
+        quality._finish("preview", {"dry": None, "wet": None, "sr": 44100})
+        assert "Playing original" in app.log_text.get("1.0", "end")
+        assert played == ["play", "play"]
+    finally:
+        app.destroy()
+
+
+def test_busy_logs_when_it_starts_and_when_it_ends(tmp_path):
+    app = _make_app(tmp_path)
+    try:
+        app.session.set_job(True, "preview", "Preparing a 30 s preview", False)
+        app.session.set_job_detail("Decoding 40%")
+        text = app.log_text.get("1.0", "end")
+        assert text.count("busy: Preparing a 30 s preview") == 1
+        assert "Decoding" not in text
+        assert app.player_bar.status_var.get() == "busy: Preparing a 30 s preview"
+        app.session.set_job(True, "process", "Rendering cleaned audio", True)
+        text = app.log_text.get("1.0", "end")
+        assert "idle: Preparing a 30 s preview" in text
+        assert "busy: Rendering cleaned audio" in text
+        app.session.set_job(False)
+        text = app.log_text.get("1.0", "end")
+        assert "idle: Rendering cleaned audio" in text
+        assert app.player_bar.status_var.get() == "idle: Rendering cleaned audio"
     finally:
         app.destroy()
 
@@ -686,6 +922,32 @@ def _write_artifact(wf, art):
         json.dump({"schema": 3, **art}, f)
 
 
+def test_blocked_step_hover_says_what_to_do(tmp_path):
+    app = _make_app(tmp_path)
+    try:
+        wf = app.workflow
+        wf.set_book(_book(tmp_path))
+        _write_artifact(wf, {
+            "envelope": {"duration": 3600.0}, "calibration": {"x": 1},
+            "gaps": {"gaps": []}, "fingerprint": {"x": 1},
+        })
+        wf._refresh()
+        app.update()
+        place = "On Match, Search for the book, then choose an edition."
+        assert [tip.text for tip in wf.rail._tips["place"]] == [place, place]
+        assert wf.rail._subs["place"].get() == "blocked"
+        wf.show_step("match")
+        app.update()
+        assert wf.asin_search_btn.winfo_viewable()
+        _write_artifact(wf, WEAK_ART)
+        wf._refresh()
+        finish = "Dry-run on Finish, then Apply, to write the chapters."
+        assert wf.rail._tips["finish"][0].text == finish
+        assert wf.rail._tips["place"][0].text == ""
+    finally:
+        app.destroy()
+
+
 WEAK_ART = {
     "envelope": {"duration": 3600.0}, "calibration": {"x": 1},
     "gaps": {"gaps": [{"mid": 600.0, "dur": 2.0}]}, "fingerprint": {"x": 1},
@@ -736,10 +998,42 @@ def test_auto_advance_follows_next_stage(tmp_path):
                       "identification": WEAK_ART["identification"]}
         _write_artifact(wf, identified)
         wf._on_done(0, stage="identify", name="identify")
-        assert wf._stage == "align"
+        assert wf._step == "match"  # stay put so an edition can be chosen
+        assert not wf._auto_stage
         _write_artifact(wf, WEAK_ART)
         wf._on_done(0, stage="align", name="align")
         assert wf._stage == "resolve"  # weak chapters skip past Align
+    finally:
+        app.destroy()
+
+
+def test_dry_run_stays_enabled_after_align(tmp_path):
+    app = _make_app(tmp_path)
+    try:
+        wf = app.workflow
+        wf.set_book(_book(tmp_path))
+        _write_artifact(wf, WEAK_ART)
+        wf._refresh()
+        app.update()
+        assert "disabled" not in wf.finalize_btn.state()
+        assert "disabled" in wf.apply_btn.state()
+    finally:
+        app.destroy()
+
+
+def test_search_is_on_screen_at_default_size(tmp_path):
+    app = _make_app(tmp_path)
+    try:
+        app.geometry("1600x960+0+0")
+        app.workflow.set_book(_book(tmp_path))
+        app.workflow.show_step("match")
+        app.update()
+        button = app.workflow.asin_search_btn
+        assert button.winfo_viewable()
+        right = app.winfo_rootx() + app.winfo_width()
+        bottom = app.winfo_rooty() + app.winfo_height()
+        assert button.winfo_rootx() + button.winfo_width() <= right
+        assert button.winfo_rooty() + button.winfo_height() <= bottom
     finally:
         app.destroy()
 
@@ -768,14 +1062,14 @@ def test_busy_locks_job_controls(tmp_path):
         wf._refresh()
         wf.tree.selection_set(wf.tree.get_children()[2])
         wf._fill_from_selection()
-        assert "disabled" not in wf.pin_btn.state()
+        assert "disabled" not in wf.hint_btn.state()
         wf.set_busy(True)
-        for w in (wf.pin_btn, wf.unpin_btn, wf.measure_btn, wf.hint_btn,
-                  wf.sweep_start_entry, wf.reread_btn):
+        for w in (wf.measure_btn, wf.hint_btn, wf.sweep_start_entry,
+                  wf.reread_btn):
             assert "disabled" in w.state()
-        assert "job is running" in wf._tips[wf.pin_btn].reason
+        assert "job is running" in wf._tips[wf.hint_btn].reason
         wf.set_busy(False)
-        assert "disabled" not in wf.pin_btn.state()
+        assert "disabled" not in wf.hint_btn.state()
     finally:
         app.destroy()
 
@@ -1032,33 +1326,54 @@ def test_table_tint_and_font_pins(tmp_path):
         app.destroy()
 
 
-def test_play_from_time_button_and_call(tmp_path, monkeypatch):
+def test_busy_sentence_is_a_hover_unless_the_job_is_modal(tmp_path):
+    app = _make_app(tmp_path)
+    try:
+        app.session.set_job(True, "measure", "Measuring the audio", False)
+        assert app.job_window.win is None
+        assert app.player_bar._busy_tip.text == "Measuring the audio"
+        app.session.set_job(True, "align", "Placing chapters", True)
+        assert app.job_window.win is not None
+        assert "Placing chapters" in app.job_window.var.get()
+        app.session.set_job(False)
+        assert app.job_window.win is None
+    finally:
+        app.destroy()
+
+
+def test_open_problem_row_shows_use_this(tmp_path):
     app = _make_app(tmp_path)
     try:
         wf = app.workflow
-        # disabled with no book selected
-        app.workflow._refresh()
-        assert "disabled" in wf.playfrom_btn.state()
-        # enabled once a book is loaded (no row selection required)
-        wf.set_book(str(tmp_path / "library" / "Author" / "Book" / "Book.mp3"))
-        assert "disabled" not in wf.playfrom_btn.state()
+        wf.set_book(_book(tmp_path))
+        _write_artifact(wf, WEAK_ART)
+        wf._refresh()
+        labels = [
+            str(w.cget("text")) for w in wf.problem_bar.winfo_children()
+            if w.winfo_class() in ("TLabel", "TButton", "TMenubutton")
+        ]
+        assert any("withheld" in text for text in labels)
+        assert "Use this" in labels
+        menu = wf._problem_menu
+        entries = [menu.entrycget(i, "label") for i in range(menu.index("end") + 1)]
+        assert "Play from 5 s before" in entries
+        for iid in wf.tree.get_children():
+            assert not wf.tree.get_children(iid)
+    finally:
+        app.destroy()
 
-        # the call itself: parsed field time, uncapped playback
+
+def test_play_from_five_seconds_before(tmp_path, monkeypatch):
+    app = _make_app(tmp_path)
+    try:
+        wf = app.workflow
+        wf.set_book(str(tmp_path / "library" / "Author" / "Book" / "Book.mp3"))
         played = []
         monkeypatch.setattr(wf.app, "play",
                             lambda path, start=None, length=None:
                             played.append((path, start, length)))
-        wf.pin_time.set("2:40:05")
-        wf.play_from_time()
-        assert played == [(wf.audio, 2 * 3600 + 40 * 60 + 5, 0)]
-
-        # garbage time -> message box, no playback
-        played.clear()
-        wf.pin_time.set("not a time")
-        wf.play_from_time()
-        assert played == []
-        assert any("cannot read time" in (m or "")
-                   for _, m in app.dialogs)
+        wf._play_before(2 * 3600 + 40 * 60 + 5)
+        assert played == [(wf.audio, 2 * 3600 + 40 * 60, 0)]
     finally:
         app.destroy()
 
@@ -1067,7 +1382,10 @@ def test_log_is_selectable_but_readonly(tmp_path):
     app = _make_app(tmp_path)
     try:
         app.log("hello log line")
-        assert "hello log line" in app.log_text.get("1.0", "end-1c")
+        logged = app.log_text.get("1.0", "end-1c")
+        assert "hello log line" in logged
+        assert logged.split()[0].count(":") == 2
+        assert app.player_bar.status_var.get() == "hello log line"
         assert str(app.log_text.cget("state")) == "normal"
 
         class FakeEvent:
@@ -1190,6 +1508,66 @@ def test_emit_preserves_and_overrides_tags(tmp_path):
     assert got["album"] == "Original Album"      # preserved
     assert got["artist"] == "GUI Author"         # overridden
     assert len(j["chapters"]) == 2
+
+
+@pytest.mark.integration
+def test_emit_uses_library_alignment_on_cleaned_audio(tmp_path):
+    """Chapters belong to the analyzed book, even when the file is cleaned."""
+    work = tmp_path / "work"
+    work.mkdir()
+    src = tmp_path / "book.mp3"
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi",
+                    "-i", "sine=frequency=440:duration=5", "-t", "5",
+                    str(src), "-y"], check=True, capture_output=True)
+    cleaned = work / "book.quality.mp3"
+    cleaned.write_bytes(src.read_bytes())
+    art = {
+        "schema": 3, "file": {"size": src.stat().st_size,
+                              "mtime": int(src.stat().st_mtime)},
+        "audio": str(src),
+        "envelope": {"hz": 20, "frames": 100, "duration": 5.0},
+        "alignment": {"rate": 1.0, "min_confidence": 0.5, "results": [
+            {"index": 0, "title": "Part One", "published": 0.0, "time": 0.0,
+             "confidence": 1.0, "pinned": False, "spread": None,
+             "n_options": 1, "residual": None},
+        ]},
+    }
+    with open(work / "book.mp3.analysis.json", "w") as f:
+        json.dump(art, f)
+    subprocess.run(
+        [sys.executable, os.path.join(PROJECT_ROOT, "chapterfit.py"),
+         "--work-dir", str(work), "emit", "--embed",
+         "--source", str(src), str(cleaned)],
+        check=True, capture_output=True, text=True)
+    out = work / "book.quality.chapters.mp3"
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_chapters", "-of", "json", str(out)],
+        check=True, capture_output=True, text=True)
+    chapters = json.loads(probe.stdout)["chapters"]
+    assert chapters[0]["tags"]["title"] == "Part One"
+
+
+def test_cleanup_apply_emits_the_cleaned_file_from_the_library(tmp_path, monkeypatch):
+    import chaptertools.gui.workflow as wf
+
+    app = _make_app(tmp_path)
+    try:
+        audio = str(tmp_path / "library" / "Author" / "Book" / "Book.mp3")
+        app.workflow.set_book(audio)
+        app.workflow.include_cleanup.set(True)
+        app.workflow._chapters_placed = lambda: True
+        ran = []
+        monkeypatch.setattr(
+            wf.WorkflowPanel, "_run",
+            lambda self, name, argv, then=None, stage=None, on_line=None:
+            ran.append((name, argv)))
+        app.workflow._emit_then_finalize()
+        name, argv = ran[0]
+        assert name == "emit"
+        assert argv[-1].endswith("Book.quality.mp3")
+        assert argv[argv.index("--source") + 1] == audio
+    finally:
+        app.destroy()
 
 
 def test_book_info_prefill_and_emit_flags(tmp_path, monkeypatch):

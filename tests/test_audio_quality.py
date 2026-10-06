@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -129,11 +131,10 @@ def test_one_gain_keeps_the_relative_level(tmp_path):
         stage.bypass = True
     chain.stage("loudness").bypass = False
     chain.stage("limiter").bypass = False
-    from chaptertools.audio_quality.signal import StreamingLoudness, lin_to_db, true_peak
+    from chaptertools.audio_quality.signal import StreamingLoudness
     meter = StreamingLoudness(sr)
     meter.add(audio)
-    gain = gain_for_target(
-        meter.integrated(), lin_to_db(true_peak(audio, sr)), -19.0, -3.0)
+    gain = gain_for_target(meter.integrated(), -19.0)
     chain.stage("loudness").extra["fixed_gain"] = gain
     pieces = [
         emit[:, 0]
@@ -149,6 +150,39 @@ def test_one_gain_keeps_the_relative_level(tmp_path):
         rendered[sr + sr // 4:sr + sr // 2])
     assert ratio_in > 5
     assert abs(ratio_out - ratio_in) / ratio_in < 0.25
+
+
+def test_hot_peak_does_not_cancel_the_loudness_gain():
+    sr = 8000
+    speech = _sine(sr, 1.0, amp=0.02).copy()
+    speech[sr // 2:sr // 2 + int(0.02 * sr)] = 0.99
+    from chaptertools.audio_quality.signal import StreamingLoudness
+    meter = StreamingLoudness(sr)
+    meter.add(speech[:, None] if speech.ndim == 1 else speech)
+    integrated = meter.integrated()
+    gain = gain_for_target(integrated, -18.0)
+    assert gain > 0
+    assert gain == pytest.approx(-18.0 - integrated, abs=0.05)
+
+
+def test_limiter_holds_the_ceiling_while_speech_gets_louder():
+    sr = 8000
+    speech = _sine(sr, 1.0, amp=0.02).copy()
+    speech[sr // 2:sr // 2 + int(0.02 * sr)] = 0.99
+    chain = default_chain()
+    for stage in chain.stages:
+        stage.bypass = True
+    chain.stage("loudness").bypass = False
+    chain.stage("limiter").bypass = False
+    chain.stage("loudness").params["target_lufs"] = -18.0
+    out = chain.process(speech, sr)
+    out = np.asarray(out).reshape(-1)
+    body = slice(sr // 10, sr // 3)
+    in_rms = float(np.sqrt(np.mean(np.square(speech[body]))))
+    out_rms = float(np.sqrt(np.mean(np.square(out[body]))))
+    assert out_rms > in_rms * 2
+    ceiling = 10 ** (-3.0 / 20.0)
+    assert float(np.max(np.abs(out))) <= ceiling * 1.05
 
 
 def test_cancel_stops_before_encode(tmp_path, monkeypatch):
@@ -171,7 +205,21 @@ def test_presets_round_trip_and_gentle_cleanup(tmp_path, monkeypatch):
     monkeypatch.setenv("CHAPTERFIT_CONFIG", str(tmp_path / "config"))
     shipped = load_shipped()
     assert "Gentle cleanup" in shipped
-    assert "Podcast / broadcast" in shipped
+    assert "Audiobook master" in shipped
+    assert "Podcast / broadcast" not in shipped
+    fresh = default_chain()
+    for name in ("denoise", "declick", "eq", "deesser", "enhance", "gate"):
+        assert fresh.stage(name).bypass is True
+    assert fresh.stage("highpass").params["cutoff_hz"] == 70
+    assert fresh.stage("compressor").params["attack_ms"] == 25
+    assert fresh.stage("limiter").params["ceiling_db"] == -3
+    assert fresh.stage("loudness").params["target_lufs"] == -18
+    assert shipped["Audiobook master"]["stages"]["loudness"]["params"]["target_lufs"] == -18
+    harsh = default_chain()
+    harsh.apply(shipped["Harsh / sibilant"])
+    assert harsh.stage("declick").bypass is True
+    assert harsh.stage("deesser").bypass is False
+    assert harsh.stage("deesser").params["threshold_db"] == -9
     chain = default_chain()
     chain.apply(shipped["Gentle cleanup"])
     assert chain.stage("highpass").params["cutoff_hz"] == 60
@@ -194,6 +242,7 @@ def test_stage_summary_for_the_chain_row():
     assert stage_summary(chain.stage("enhance")) == "not installed"
     chain.stage("highpass").params["cutoff_hz"] = 90
     assert stage_summary(chain.stage("highpass")) == "90 Hz"
+    chain.stage("eq").bypass = False
     chain.stage("eq").params["presence_gain"] = 3
     assert stage_summary(chain.stage("eq")) == "1 band active"
 
@@ -276,6 +325,120 @@ def test_neural_stages_are_optional(monkeypatch):
             "chaptertools.audio_quality.neural", fromlist=["neural"]))
 
 
+def test_serve_keeps_model_logs_off_the_json_reply():
+    code = (
+        "import json, sys\n"
+        "from chaptertools.audio_quality import neural\n"
+        "def noisy(req):\n"
+        "    print('2026-09-29 | INFO | DF | Running on torch', flush=True)\n"
+        "neural._serve_one = noisy\n"
+        "neural._serve()\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        input='{"kind": "deepfilter"}\n',
+        text=True, capture_output=True, check=False,
+    )
+    assert json.loads(proc.stdout) == {"ok": True}
+    assert "2026-09-29" in proc.stderr
+    assert "2026-09-29" not in proc.stdout
+
+
+def test_log_lines_flush_to_the_file(tmp_path, monkeypatch):
+    import chaptertools.file_log as fl
+
+    assert fl.LOG_PATH == "/tmp/chapterfit.log"
+    assert fl.STEP == 50 * 1024 * 1024
+    path = tmp_path / "chapterfit.log"
+    monkeypatch.setattr(fl, "LOG_PATH", str(path))
+    fl.write("12:00:00 hello\n")
+    assert path.read_text(encoding="utf-8") == "12:00:00 hello\n"
+
+
+def test_log_step_aborts_and_waits_for_an_answer(tmp_path, monkeypatch):
+    import chaptertools.file_log as fl
+    from chaptertools.audio_quality.analysis import Cancelled
+
+    monkeypatch.setattr(fl, "LOG_PATH", str(tmp_path / "chapterfit.log"))
+    monkeypatch.setattr(fl, "STEP", 50)
+    fl.reset_for_tests()
+    tripped = []
+
+    def stop():
+        tripped.append("stop")
+
+    fl.add_pause_hook(stop)
+    try:
+        fl.write("x" * 60)
+        answer = threading.Thread(target=lambda: _answer_log(fl, True), daemon=True)
+        answer.start()
+        fl.wait_turn()
+        assert tripped == ["stop"]
+        assert fl.consider() == 0
+
+        fl.write("y" * 50)
+        answer = threading.Thread(target=lambda: _answer_log(fl, False), daemon=True)
+        answer.start()
+        with pytest.raises(Cancelled):
+            fl.wait_turn()
+    finally:
+        fl._hooks.remove(stop)
+        fl.reset_for_tests()
+
+
+def _answer_log(fl, keep: bool) -> None:
+    import time
+    deadline = time.time() + 5
+    while not fl.prompt_pending() and time.time() < deadline:
+        time.sleep(0.01)
+    fl.resolve(keep)
+
+
+def test_abort_unblocks_a_neural_call(tmp_path, monkeypatch):
+    import time
+
+    import chaptertools.audio_quality.neural as neural
+    import chaptertools.file_log as fl
+
+    monkeypatch.setattr(fl, "LOG_PATH", str(tmp_path / "chapterfit.log"))
+    real = subprocess.Popen
+
+    def sleeping(*_args, **_kwargs):
+        return real(
+            [sys.executable, "-c", "import time; time.sleep(60)"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+
+    monkeypatch.setattr(neural.subprocess, "Popen", sleeping)
+    session = neural.NeuralSession()
+    found = []
+
+    def run():
+        try:
+            session.apply("deepfilter", np.zeros(8, dtype=np.float32), 8000, 0.5)
+            found.append("returned")
+        except Cancelled:
+            found.append("cancelled")
+        except Exception as exc:
+            found.append(type(exc).__name__)
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    try:
+        deadline = time.time() + 5
+        while not found and time.time() < deadline:
+            neural.abort_active()
+            thread.join(0.2)
+        assert found == ["cancelled"]
+    finally:
+        session.abort()
+        session.close()
+        thread.join(2)
+
+
 def test_snapshot_skips_unknown_stage():
     chain = default_chain()
     chain.apply({"stages": {"not-a-stage": {"bypass": True},
@@ -329,7 +492,7 @@ def test_preset_apply_starts_from_defaults(tmp_path, monkeypatch):
         tab.apply_named("Gentle cleanup")
         assert tab.chain.stage("highpass").params["cutoff_hz"] == 60
         assert tab.chain.stage("declick").bypass is True
-        assert tab.chain.stage("limiter").params["ceiling_db"] == -1.0
+        assert tab.chain.stage("limiter").params["ceiling_db"] == -3.0
         assert tab.chain_panel.preset_var.get() == "Gentle cleanup"
         assert tab.chain_panel.status_var.get() == ""
     finally:
@@ -411,3 +574,71 @@ def test_decode_and_encode_a_short_file(tmp_path):
         cancel, chunk_seconds=0.3, overlap_seconds=0.02)
     assert os.path.isfile(result["mp3"])
     assert "gain_db" in result
+
+
+def test_deepfilter_uses_short_chunks():
+    chain = default_chain()
+    denoise = chain.stage("denoise")
+    denoise.bypass = False
+    denoise.params["mode"] = "deepfilter"
+    assert worker.render_chunk_seconds(chain, 0.2) == 0.2
+    assert (
+        worker.render_chunk_seconds(chain, worker.CHUNK_SECONDS)
+        == worker.NEURAL_CHUNK_SECONDS
+    )
+    denoise.bypass = True
+    assert worker.render_chunk_seconds(chain, worker.CHUNK_SECONDS) == worker.CHUNK_SECONDS
+
+
+def test_chunk_progress_is_reported_before_processing(tmp_path):
+    sr = 8000
+    wav = tmp_path / "a.wav"
+    _write(wav, _sine(sr, 1.0), sr)
+    chain = default_chain()
+    for stage in chain.stages:
+        stage.bypass = True
+    order = []
+
+    def process(audio, sample_rate, *, skip=None, only=None):
+        order.append("process")
+        return audio
+
+    chain.process = process
+
+    def on_chunk(start, end, duration):
+        order.append(start)
+
+    list(worker.render_chunked(
+        str(wav), chain, chunk_seconds=0.4, overlap_seconds=0.0,
+        cancel=threading.Event(), on_chunk=on_chunk,
+    ))
+    assert order[0] == 0.0
+    assert order[1] == "process"
+
+
+def test_progress_sentences_are_logged_when_they_change(tmp_path, monkeypatch):
+    tab, root = _quality_tab(tmp_path, monkeypatch)
+    lines = []
+
+    class _Session:
+        def set_job_detail(self, text):
+            return None
+
+    class _App:
+        session = _Session()
+
+        def log(self, text):
+            lines.append(text)
+
+    tab.app = _App()
+    try:
+        tab._show_progress(0.1, 30, "processing 0:00:00 / 0:10:00")
+        tab._show_progress(0.1, 30, "processing 0:00:00 / 0:10:00")
+        tab._show_progress(0.2, 20, "processing 0:00:15 / 0:10:00")
+        tab._show_progress(1, 0, "done")
+    finally:
+        root.destroy()
+    assert len(lines) == 2
+    assert lines[0].startswith("Processing 0:00:00 / 0:10:00")
+    assert "10%" in lines[0]
+    assert "0:00:15" in lines[1]

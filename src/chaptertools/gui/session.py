@@ -27,6 +27,8 @@ class BookInfo:
 class JobState:
     running: bool = False
     name: str = ""
+    detail: str = ""
+    modal: bool = False
 
 
 class BookSession:
@@ -69,6 +71,15 @@ class BookSession:
         self.selection = span
         self.emit("selection")
 
-    def set_job(self, running: bool, name: str = "") -> None:
-        self.job = JobState(running=running, name=name)
+    def set_job(self, running: bool, name: str = "", detail: str = "",
+                modal: bool = False) -> None:
+        self.job = JobState(running=running, name=name, detail=detail, modal=modal)
+        self.emit("job")
+
+    def set_job_detail(self, detail: str) -> None:
+        """Replace the sentence without changing which job is running."""
+        if not self.job.running or not detail or detail == self.job.detail:
+            return
+        self.job = JobState(
+            running=True, name=self.job.name, detail=detail, modal=self.job.modal)
         self.emit("job")

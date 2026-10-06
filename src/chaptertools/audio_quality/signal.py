@@ -59,19 +59,16 @@ def true_peak_db(audio, sr: int) -> float:
     return lin_to_db(true_peak(audio, sr))
 
 
-def gain_for_target(integrated_lufs: float, true_peak_dbfs: float,
-                    target_lufs: float, ceiling_db: float,
+def gain_for_target(integrated_lufs: float, target_lufs: float,
                     max_gain_db: float = 24.0) -> float:
-    """One gain for a whole file: hit the LUFS target, then back off so the
-    true peak stays under the ceiling. Silence is left alone."""
+    """One gain for a whole file so it lands on the LUFS target.
+
+    The limiter holds the peak ceiling. Silence is left alone.
+    """
     if not math.isfinite(integrated_lufs) or integrated_lufs < -70.0:
-        gain = 0.0
-    else:
-        gain = float(target_lufs) - float(integrated_lufs)
-    gain = min(gain, max_gain_db)
-    if math.isfinite(true_peak_dbfs) and true_peak_dbfs + gain > ceiling_db:
-        gain = float(ceiling_db) - float(true_peak_dbfs)
-    return float(gain)
+        return 0.0
+    gain = float(target_lufs) - float(integrated_lufs)
+    return float(min(gain, max_gain_db))
 
 
 def crossfade(previous, following) -> np.ndarray:

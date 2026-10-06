@@ -19,6 +19,7 @@ class PlayerBar(ttk.Frame):
         session = app.session
         session.subscribe("playhead", self._show_time)
         session.subscribe("cleanup", self._show_hear)
+        session.subscribe("job", self._show_job)
         self._bind_keys()
 
     def _build(self) -> None:
@@ -38,17 +39,27 @@ class PlayerBar(ttk.Frame):
             row=0, column=5, padx=(8, 4))
         self.chapter_var = tk.StringVar(value="")
         ttk.Label(self, textvariable=self.chapter_var).grid(row=0, column=6)
-        self.hear_var = tk.BooleanVar(value=False)
-        self.hear = ttk.Checkbutton(
-            self, text="Hear original", variable=self.hear_var,
+        self.source_var = tk.StringVar(self, value="edited")
+        source = ttk.Frame(self)
+        source.grid(row=0, column=8, padx=(8, 4))
+        self.edited_btn = ttk.Radiobutton(
+            source, text="Edited", value="edited", variable=self.source_var,
             command=self._hear, state="disabled")
-        self.hear.grid(row=0, column=8, padx=(8, 4))
-        tips.tooltip(self.hear, "play the file without the cleanup chain")
+        self.original_btn = ttk.Radiobutton(
+            source, text="Original", value="original", variable=self.source_var,
+            command=self._hear, state="disabled")
+        self.edited_btn.pack(side="left")
+        self.original_btn.pack(side="left", padx=(6, 0))
+        self.source_buttons = (self.edited_btn, self.original_btn)
+        tip = "switch the preview between edited and original audio"
+        for button in self.source_buttons:
+            tips.tooltip(button, tip)
         self.status_var = tk.StringVar(value="")
         ttk.Label(self, textvariable=self.status_var, anchor="e").grid(
             row=0, column=9, sticky="ew", padx=4)
-        ttk.Label(self, textvariable=self.app.busy_var).grid(
-            row=0, column=12, padx=(6, 0))
+        self.busy_label = ttk.Label(self, textvariable=self.app.busy_var)
+        self.busy_label.grid(row=0, column=12, padx=(6, 0))
+        self._busy_tip = tips.tooltip(self.busy_label, "")
         self.log_btn = ttk.Button(self, text="Log", command=self.app.toggle_log)
         self.log_btn.grid(row=0, column=10, padx=2)
         tips.tooltip(self.log_btn, "open the log (Ctrl+Shift+L)")
@@ -83,12 +94,26 @@ class PlayerBar(ttk.Frame):
         return "break"
 
     def toggle(self) -> None:
+        workflow = self._workflow()
+        quality = getattr(workflow, "quality", None)
+        if getattr(workflow, "_step", "") == "cleanup" and quality is not None:
+            preview = getattr(quality, "_player", None)
+            if preview is not None and preview.alive:
+                preview.stop()
+                self._sync_button()
+                return
+            if workflow.audio:
+                span = self.app.session.selection
+                start = span[0] if span else (self.app.session.playhead or 0.0)
+                quality.cmd_play(start)
+            self._sync_button()
+            return
         player = self.app.player
         if player.alive:
             player.toggle_pause()
-        elif self.app.workflow.audio:
+        elif workflow is not None and workflow.audio:
             start = self.app.session.playhead or None
-            self.app.play(self.app.workflow.audio, start=start or None, length=0)
+            self.app.play(workflow.audio, start=start or None, length=0)
         self._sync_button()
 
     def _seek(self, delta: float) -> None:
@@ -97,10 +122,11 @@ class PlayerBar(ttk.Frame):
 
     def _hear(self) -> None:
         quality = getattr(self.app.workflow, "quality", None)
-        if quality is not None and hasattr(quality, "hear_var"):
-            quality.hear_var.set(self.hear_var.get())
-            if hasattr(quality, "_toggle_hear"):
-                quality._toggle_hear()
+        if quality is None or not hasattr(quality, "hear_var"):
+            return
+        quality.hear_var.set(self.source_var.get() == "original")
+        if hasattr(quality, "_toggle_hear"):
+            quality._toggle_hear()
 
     def show_status(self, line: str) -> None:
         self.status_var.set(line)
@@ -124,10 +150,41 @@ class PlayerBar(ttk.Frame):
     def _show_time(self) -> None:
         self.update_time(None)
 
+    def _show_job(self) -> None:
+        job = self.app.session.job
+        self._busy_tip.text = job.detail if job.running else ""
+
+    def _workflow(self):
+        try:
+            return self.app.workflow
+        except AttributeError:
+            return None
+
+    def _preview_player(self):
+        workflow = self._workflow()
+        quality = getattr(workflow, "quality", None)
+        return getattr(quality, "_player", None)
+
     def _show_hear(self) -> None:
-        on = int(self.app.session.cleanup.get("stages_on") or 0) > 0
-        self.hear.state(["!disabled"] if on else ["disabled"])
+        workflow = self._workflow()
+        quality = getattr(workflow, "quality", None)
+        loaded = (
+            getattr(workflow, "_step", "") == "cleanup"
+            and quality is not None
+            and getattr(quality, "_preview", None) is not None
+        )
+        state = "normal" if loaded else "disabled"
+        flag = ["!disabled"] if loaded else ["disabled"]
+        for button in self.source_buttons:
+            button.configure(state=state)
+            button.state(flag)
 
     def _sync_button(self) -> None:
-        playing = self.app.player.alive and not self.app.player.paused
+        preview = self._preview_player()
+        previewing = (
+            getattr(self._workflow(), "_step", "") == "cleanup"
+            and preview is not None and preview.alive
+        )
+        playing = previewing or (
+            self.app.player.alive and not self.app.player.paused)
         self.play_btn.configure(text="❚❚" if playing else "▶")

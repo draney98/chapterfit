@@ -9,7 +9,7 @@ import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 
 from chaptertools.audio_quality import quality_status
-from chaptertools.util import hms, parse_time
+from chaptertools.util import hms
 
 from .analysis_view import AnalysisFrame
 from .chain_view import ChainPanel
@@ -84,7 +84,9 @@ class QualityTab(ttk.Frame):
         self.audio = audio
         self.work_dir = work_dir
         self._player.stop()
+        self._preview = None
         self.selection = None
+        self._note_preview()
         if not self.available:
             return
         self._show_source()
@@ -122,6 +124,8 @@ class QualityTab(ttk.Frame):
 
     def cancel(self) -> None:
         self.jobs.cancel()
+        from chaptertools.audio_quality import neural
+        neural.abort_active()
         self._player.stop()
 
     def select_stage(self, index: int) -> None:
@@ -214,9 +218,35 @@ class QualityTab(ttk.Frame):
 
     def _on_range(self, start: float, end: float | None) -> None:
         self.selection = (start, end) if end is not None else None
-        self.footer.start_var.set(_clock(start))
         if self.detail.stage is not None and self.detail.stage.name == "denoise":
             self._show_stage(self.chain_panel._selected)
+
+    def _begin_job(self, name: str) -> None:
+        app = getattr(self, "app", None)
+        if app is None:
+            return
+        from chaptertools.gui.busy import job_is_modal, opening_sentence
+        app.session.set_job(True, name, opening_sentence(name), job_is_modal(name))
+
+    def _end_job(self) -> None:
+        app = getattr(self, "app", None)
+        if app is not None:
+            app.session.set_job(False)
+
+    def _note_preview(self) -> None:
+        bar = getattr(getattr(self, "app", None), "player_bar", None)
+        if bar is not None:
+            bar._show_hear()
+
+    def _remember_render(self) -> None:
+        started = getattr(self, "_render_started", None)
+        app = getattr(self, "app", None)
+        duration = float(getattr(getattr(app, "session", None), "duration", 0) or 0)
+        if started is None or duration <= 0:
+            return
+        elapsed = time.monotonic() - started
+        if elapsed > 0:
+            self._render_factor = elapsed / duration
 
     def _turn_on_denoise(self) -> None:
         stage = self.chain.stage("denoise")
@@ -252,25 +282,26 @@ class QualityTab(ttk.Frame):
             return
         audio, work = self.audio, self.work_dir
         self._set_running(True)
-        self.jobs.start("scan", lambda cancel, progress: self._scan(audio, work, cancel, progress))
+        self._begin_job("scan")
+        if not self.jobs.start(
+            "scan", lambda cancel, progress: self._scan(audio, work, cancel, progress),
+        ):
+            self._end_job()
 
-    def cmd_play(self) -> None:
+    def cmd_play(self, start: float = 0.0) -> None:
         if not self._guard():
             return
-        try:
-            start = max(0.0, parse_time(self.footer.start_var.get()))
-        except ValueError:
-            messagebox.showerror("Preview", "Start time is not a time.",
-                                 parent=self.winfo_toplevel())
-            return
+        start = max(0.0, float(start))
         audio, work = self.audio, self.work_dir
         snapshot = self.chain.snapshot()
         self._set_running(True)
-        self.jobs.start(
+        self._begin_job("preview")
+        if not self.jobs.start(
             "preview",
             lambda cancel, progress: self._preview_job(
                 audio, work, snapshot, start, cancel, progress),
-        )
+        ):
+            self._end_job()
 
     def cmd_process(self) -> bool:
         if not self._guard():
@@ -280,11 +311,15 @@ class QualityTab(ttk.Frame):
         self._inflight_snapshot = snapshot
         bitrate = self.footer.bitrate_var.get()
         self._set_running(True)
-        self.jobs.start(
+        self._render_started = time.monotonic()
+        self._begin_job("process")
+        if not self.jobs.start(
             "process",
             lambda cancel, progress: self._process_job(
                 audio, work, snapshot, bitrate, cancel, progress),
-        )
+        ):
+            self._end_job()
+            return False
         return True
 
     def cmd_replace(self, confirmed: bool = False) -> None:
@@ -304,10 +339,12 @@ class QualityTab(ttk.Frame):
             if not ok:
                 return
         audio, work = self.audio, self.work_dir
-        self.jobs.start(
+        self._begin_job("replace")
+        if not self.jobs.start(
             "replace",
             lambda cancel, progress: self._replace_job(audio, cleaned, work),
-        )
+        ):
+            self._end_job()
 
     def _scan(self, audio, work, cancel, progress):
         from chaptertools.audio_quality.analysis import (
@@ -335,7 +372,13 @@ class QualityTab(ttk.Frame):
         chain.apply(snapshot)
         chain.stage("loudness").extra.pop("fixed_gain", None)
         progress(0.4, None, "preview")
-        wet = chain.process(dry, sr)
+        from chaptertools.audio_quality.analysis import LogPaused
+        while True:
+            try:
+                wet = chain.process(dry, sr)
+                break
+            except LogPaused:
+                continue
         progress(1.0, 0.0, "preview ready")
         return {"dry": dry, "wet": wet, "sr": sr}
 
@@ -354,17 +397,29 @@ class QualityTab(ttk.Frame):
             self._log("quality scan finished")
         elif name == "preview":
             self._preview = payload
+            self._note_preview()
             try:
                 self._player.play(payload["dry"], payload["wet"], payload["sr"])
-                self._player.bypass = self.hear_var.get()
+                self._player.bypass = bool(self.hear_var.get())
+                source = "original" if self.hear_var.get() else "edited"
+                self._log(f"Playing {source} audio")
             except Exception as exc:
                 messagebox.showerror("Preview", str(exc), parent=self.winfo_toplevel())
         elif name == "process":
+            self._remember_render()
             self._processed_snapshot = self._inflight_snapshot
             self._processed_at = time.time()
             gain = payload.get("gain_db")
-            self._log(f"quality wrote {payload.get('mp3')} (gain {gain:.1f} dB)"
-                      if isinstance(gain, float) else "quality wrote the MP3")
+            level = payload.get("integrated_lufs")
+            if isinstance(gain, float) and isinstance(level, float):
+                target = float(self._loudness_target())
+                shown = f"{target:.0f}" if target == round(target) else f"{target:.1f}"
+                self._log(
+                    f"quality wrote {payload.get('mp3')} "
+                    f"(gain {gain:+.1f} dB, {level:.1f} LUFS toward {shown})"
+                )
+            else:
+                self._log("quality wrote the MP3")
             follow = getattr(self.workflow, "_after_cleanup", None)
             if self.workflow is not None:
                 self.workflow._after_cleanup = None
@@ -383,11 +438,13 @@ class QualityTab(ttk.Frame):
             return
         start, end = self.selection
         audio, work = self.audio, self.work_dir
-        self.jobs.start(
+        self._begin_job("learn")
+        if not self.jobs.start(
             "learn",
             lambda cancel, progress: self._learn_job(
                 audio, work, start, max(0.05, end - start), cancel, progress),
-        )
+        ):
+            self._end_job()
 
     def _learn_job(self, audio, work, start, duration, cancel, progress):
         import numpy as np
@@ -622,9 +679,6 @@ class QualityTab(ttk.Frame):
         )
 
     def _show_progress(self, fraction, eta, message: str) -> None:
-        if not hasattr(self, "footer"):
-            return
-        self.footer.set_progress(fraction)
         extra = ""
         if isinstance(eta, (int, float)) and eta > 1:
             extra = f" \u00b7 about {_eta(eta)} left"
@@ -632,9 +686,23 @@ class QualityTab(ttk.Frame):
         if message in {"scanning", "decoding", "preview", "processing"} or (
             isinstance(fraction, (int, float)) and 0 < fraction < 1
         ):
-            self.footer.set_status(f"Processing\u2026 {percent}%{extra}")
+            sentence = f"{message.capitalize()}\u2026 {percent}%{extra}"
         else:
-            self.footer.set_status(f"{message}{extra}")
+            sentence = f"{message}{extra}"
+        app = getattr(self, "app", None)
+        if app is not None:
+            app.session.set_job_detail(sentence)
+            if (
+                message not in {"done", "playing", "cancelled", "failed"}
+                and sentence != getattr(self, "_logged_progress", None)
+            ):
+                self._logged_progress = sentence
+                log = getattr(app, "log", None)
+                if log is not None:
+                    log(sentence)
+        if hasattr(self, "footer"):
+            self.footer.set_progress(fraction)
+            self.footer.set_status(sentence)
 
     def _set_running(self, running: bool) -> None:
         if hasattr(self, "footer"):
@@ -712,6 +780,10 @@ class _ABPlayer:
         outdata[:] = chunk
         self._pos = end
 
+    @property
+    def alive(self) -> bool:
+        return self._stream is not None
+
     def stop(self) -> None:
         stream = self._stream
         self._stream = None
@@ -786,13 +858,6 @@ def _stage_view(snapshot: dict, name: str) -> dict:
         "params": params,
         "extra": {key: value for key, value in extra.items()},
     }
-
-
-def _clock(seconds: float) -> str:
-    seconds = max(0, int(seconds))
-    hours, rem = divmod(seconds, 3600)
-    minutes, secs = divmod(rem, 60)
-    return f"{hours}:{minutes:02d}:{secs:02d}"
 
 
 def _ago(seconds: int) -> str:

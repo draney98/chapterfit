@@ -19,7 +19,7 @@ from scipy.ndimage import median_filter
 from scipy.signal import butter, sosfiltfilt
 
 from .chain import ParamSpec, ProcessingChain, Stage, StageAction
-from .signal import as_2d, db_to_lin, gain_for_target, like, true_peak_db
+from .signal import as_2d, db_to_lin, gain_for_target, like
 
 _PASS1_SKIP = frozenset({"loudness", "limiter"})
 
@@ -57,7 +57,7 @@ class HighpassStage(Stage):
     name = "highpass"
     title = "High-pass"
     spec = (
-        ParamSpec("cutoff_hz", "Cutoff", "float", 80.0,
+        ParamSpec("cutoff_hz", "Cutoff", "float", 70.0,
                   minimum=20.0, maximum=150.0, step=1.0, unit="Hz"),
     )
 
@@ -80,10 +80,14 @@ class DenoiseStage(Stage):
     spec = (
         ParamSpec("mode", "Mode", "choice", "spectral",
                   choices=("spectral", "deepfilter")),
-        ParamSpec("strength", "Strength", "float", 0.4,
+        ParamSpec("strength", "Strength", "float", 0.3,
                   minimum=0.0, maximum=1.0, step=0.01),
         ParamSpec("per_segment", "Re-estimate noise per segment", "bool", False),
     )
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.bypass = True
 
     def enabled_choices(self, key: str):
         if key == "mode" and not _deepfilter_installed():
@@ -148,11 +152,15 @@ class DeclickStage(Stage):
     name = "declick"
     title = "De-click"
     spec = (
-        ParamSpec("threshold", "Threshold", "float", 0.35,
+        ParamSpec("threshold", "Threshold", "float", 0.6,
                   minimum=0.05, maximum=1.0, step=0.01),
-        ParamSpec("sensitivity", "Sensitivity", "float", 0.5,
+        ParamSpec("sensitivity", "Sensitivity", "float", 0.3,
                   minimum=0.1, maximum=1.0, step=0.01),
     )
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.bypass = True
 
     def process(self, audio, sr: int):
         x = as_2d(audio)
@@ -206,10 +214,19 @@ class EqStage(Stage):
                   minimum=0.3, maximum=8.0, step=0.1),
         ParamSpec("air_shape", "High shape", "choice", "peak",
                   choices=("peak", "shelf")),
+        ParamSpec("trim_db", "Input trim", "float", 0.0,
+                  minimum=-12.0, maximum=12.0, step=0.1, unit="dB"),
     )
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.bypass = True
 
     def process(self, audio, sr: int):
         plugins = []
+        trim = float(self.params.get("trim_db", 0.0))
+        if abs(trim) >= 0.05:
+            plugins.append(Gain(gain_db=trim))
         bands = (
             ("low_freq", "low_gain", "low_q"),
             ("box_freq", "box_gain", "box_q"),
@@ -245,9 +262,13 @@ class DeesserStage(Stage):
     spec = (
         ParamSpec("frequency_hz", "Frequency", "float", 6500.0,
                   minimum=3000.0, maximum=12000.0, step=50.0, unit="Hz"),
-        ParamSpec("threshold_db", "Threshold", "float", -18.0,
+        ParamSpec("threshold_db", "Threshold", "float", -8.0,
                   minimum=-40.0, maximum=-6.0, step=0.5, unit="dB"),
     )
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.bypass = True
 
     def process(self, audio, sr: int):
         x = as_2d(audio)
@@ -278,11 +299,11 @@ class CompressorStage(Stage):
     spec = (
         ParamSpec("threshold_db", "Threshold", "float", -20.0,
                   minimum=-40.0, maximum=0.0, step=0.5, unit="dB"),
-        ParamSpec("ratio", "Ratio", "float", 2.0,
+        ParamSpec("ratio", "Ratio", "float", 1.8,
                   minimum=1.0, maximum=8.0, step=0.1),
-        ParamSpec("attack_ms", "Attack", "float", 15.0,
+        ParamSpec("attack_ms", "Attack", "float", 25.0,
                   minimum=1.0, maximum=80.0, step=1.0, unit="ms"),
-        ParamSpec("release_ms", "Release", "float", 150.0,
+        ParamSpec("release_ms", "Release", "float", 160.0,
                   minimum=20.0, maximum=500.0, step=1.0, unit="ms"),
         ParamSpec("makeup_db", "Makeup", "float", 0.0,
                   minimum=-6.0, maximum=12.0, step=0.1, unit="dB"),
@@ -311,9 +332,9 @@ class NoiseGateStage(Stage):
     name = "gate"
     title = "Noise gate"
     spec = (
-        ParamSpec("threshold_db", "Threshold", "float", -45.0,
+        ParamSpec("threshold_db", "Threshold", "float", -55.0,
                   minimum=-80.0, maximum=-20.0, step=1.0, unit="dB"),
-        ParamSpec("hold_ms", "Hold", "float", 150.0,
+        ParamSpec("hold_ms", "Hold", "float", 400.0,
                   minimum=20.0, maximum=1000.0, step=5.0, unit="ms"),
     )
 
@@ -340,7 +361,7 @@ class LoudnessStage(Stage):
     name = "loudness"
     title = "Loudness"
     spec = (
-        ParamSpec("target_lufs", "Target", "float", -19.0,
+        ParamSpec("target_lufs", "Target", "float", -18.0,
                   minimum=-30.0, maximum=-12.0, step=0.5, unit="LUFS"),
         ParamSpec("true_peak_db", "True-peak ceiling", "float", -3.0,
                   minimum=-6.0, maximum=-0.5, step=0.1, unit="dBTP"),
@@ -350,12 +371,7 @@ class LoudnessStage(Stage):
         x = as_2d(audio)
         fixed = self.extra.get("fixed_gain")
         gain = self._measure_gain(x, sr) if fixed is None else float(fixed)
-        y = x * db_to_lin(gain)
-        ceiling = db_to_lin(float(self.params["true_peak_db"]))
-        peak = float(np.max(np.abs(y))) if len(y) else 0.0
-        if peak > ceiling > 0:
-            y = y * (ceiling / peak)
-        return like(audio, y)
+        return like(audio, x * db_to_lin(gain))
 
     def _measure_gain(self, audio: np.ndarray, sr: int) -> float:
         if len(audio) < int(0.4 * sr):
@@ -366,21 +382,16 @@ class LoudnessStage(Stage):
             lufs = float(meter.integrated_loudness(np.clip(audio, -1.0, 1.0)))
         except ValueError:
             return 0.0
-        peak = true_peak_db(audio, sr)
-        return gain_for_target(
-            lufs, peak,
-            float(self.params["target_lufs"]),
-            float(self.params["true_peak_db"]),
-        )
+        return gain_for_target(lufs, float(self.params["target_lufs"]))
 
 
 class LimiterStage(Stage):
     name = "limiter"
     title = "Limiter"
     spec = (
-        ParamSpec("ceiling_db", "Ceiling", "float", -1.0,
+        ParamSpec("ceiling_db", "Ceiling", "float", -3.0,
                   minimum=-6.0, maximum=-0.1, step=0.1, unit="dB"),
-        ParamSpec("release_ms", "Release", "float", 80.0,
+        ParamSpec("release_ms", "Release", "float", 100.0,
                   minimum=10.0, maximum=300.0, step=1.0, unit="ms"),
     )
 
@@ -391,7 +402,9 @@ class LimiterStage(Stage):
                 release_ms=float(self.params["release_ms"]),
             ),
         ]
-        return _run_board(audio, sr, plugins)
+        limited = np.asarray(_run_board(audio, sr, plugins), dtype=np.float32)
+        ceiling = db_to_lin(float(self.params["ceiling_db"]))
+        return like(audio, np.clip(limited, -ceiling, ceiling))
 
 
 class EnhanceStage(Stage):
@@ -400,7 +413,7 @@ class EnhanceStage(Stage):
     name = "enhance"
     title = "Neural enhance"
     spec = (
-        ParamSpec("strength", "Strength", "float", 0.6,
+        ParamSpec("strength", "Strength", "float", 0.4,
                   minimum=0.0, maximum=1.0, step=0.01),
     )
 

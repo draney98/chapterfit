@@ -52,6 +52,11 @@ def test_identify_and_align_and_emit_argv():
                    {"--title": "Eon", "--author": ""})
     assert "--embed" in em and "--title" in em and "Eon" in em
     assert "--author" not in em
+    assert "--source" not in em
+    cleaned = emit_argv(prefix, "/w", "/w/a.quality.mp3", 0.5, True, {},
+                        source="/library/a.mp3")
+    assert cleaned[cleaned.index("--source") + 1] == "/library/a.mp3"
+    assert cleaned[-1] == "/w/a.quality.mp3"
 
 
 def test_whisper_argv_and_same_source():

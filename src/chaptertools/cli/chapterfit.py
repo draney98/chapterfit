@@ -366,7 +366,11 @@ def cmd_status(args):
 
 
 def cmd_emit(args):
-    art = Artifact(args.audio, args.work_dir)
+    media = args.audio
+    source = getattr(args, "source", None) or media
+    if source != media and not os.path.isfile(source):
+        die(f"no such file: {source}")
+    art = Artifact(source, args.work_dir)
     al = art.require("alignment", "chapterfit.py align FILE")
     dur = art.data["envelope"]["duration"]
     thr = args.min_confidence or al["min_confidence"]
@@ -383,7 +387,7 @@ def cmd_emit(args):
     overrides = {"title": args.title, "artist": args.author,
                  "album": args.album, "date": args.year,
                  "genre": args.genre, "comment": args.comment}
-    tags = merge_tags(read_tags(art.audio), overrides)
+    tags = merge_tags(read_tags(media), overrides)
     if tags:
         print("  tags: " + ", ".join(f"{k}={v[:40]}" for k, v in tags.items()))
 
@@ -423,13 +427,13 @@ def cmd_emit(args):
                 f.write(meta)
             print(f"  wrote {args.ffmetadata}")
         if args.embed or embed_dest:
-            dest = embed_dest or (os.path.splitext(art.audio)[0]
-                                  + ".chapters" + os.path.splitext(art.audio)[1])
+            dest = embed_dest or (os.path.splitext(media)[0]
+                                  + ".chapters" + os.path.splitext(media)[1])
             tmp = dest + ".ffmeta.tmp"
             with open(tmp, "w") as f:
                 f.write(meta)
             r = subprocess.run(["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
-                                "-y", "-i", art.audio, "-i", tmp,
+                                "-y", "-i", media, "-i", tmp,
                                 "-map", "0:a", "-map_metadata", "1",
                                 "-map_chapters", "1", "-c", "copy", dest],
                                capture_output=True, text=True)
@@ -449,7 +453,7 @@ def cmd_emit(args):
 
     if args.split:
         os.makedirs(args.split, exist_ok=True)
-        ext = os.path.splitext(art.audio)[1] or ".mp3"
+        ext = os.path.splitext(media)[1] or ".mp3"
         width = max(2, len(str(len(out))))
         print(f"  splitting into {args.split}/ ...")
         for i, c in enumerate(out, 1):
@@ -460,7 +464,7 @@ def cmd_emit(args):
             r = subprocess.run(
                 ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
                  "-ss", f"{c['start']:.3f}", "-to", f"{c['end']:.3f}",
-                 "-i", art.audio, "-c", "copy",
+                 "-i", media, "-c", "copy",
                  "-metadata", f"title={c['title']}",
                  "-metadata", f"track={i}/{len(out)}", dest],
                 capture_output=True, text=True)
@@ -687,6 +691,9 @@ def main():
     p.add_argument("--comment", help="global ID3 comment")
     p.add_argument("--abs-json", metavar="FILE")
     p.add_argument("--ffmetadata", metavar="FILE")
+    p.add_argument("--source", metavar="FILE",
+                   help="book the alignment belongs to, when embedding "
+                        "a different audio file")
     p.add_argument("--embed", action="store_true",
                    help="write a chaptered copy of the audio")
     p.add_argument("--embed-dest", metavar="DEST",

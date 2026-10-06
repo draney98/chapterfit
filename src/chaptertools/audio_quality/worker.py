@@ -19,10 +19,14 @@ import time
 import numpy as np
 import soundfile as sf
 
-from .analysis import Cancelled, check_cancel
+from chaptertools import file_log
+from chaptertools.util import clock
+
+from .analysis import Cancelled, LogPaused, check_cancel
 from .signal import StreamingLoudness, crossfade, gain_for_target, lin_to_db, true_peak
 
 CHUNK_SECONDS = 600.0
+NEURAL_CHUNK_SECONDS = 15.0
 OVERLAP_SECONDS = 1.0
 _BITRATE = re.compile(r"\d{2,3}k")
 
@@ -227,9 +231,9 @@ def process_wav(wav: str, source: str, work_dir: str, snapshot: dict,
         try:
             meter, peak = _pass_one(
                 wav, pass1, chain, pass1_skip(), cancel, report,
-                chunk_seconds, overlap_seconds, session,
+                render_chunk_seconds(chain, chunk_seconds), overlap_seconds, session,
             )
-            gain = _arm_gain(chain, meter, peak)
+            gain = _arm_gain(chain, meter)
             report(0.75, "encoding")
             _pass_two(
                 pass1, partial_mp3, source, chain, clean_bitrate(bitrate),
@@ -272,17 +276,34 @@ def replace_library(source: str, cleaned: str, work_dir: str) -> str:
     return original
 
 
+def render_chunk_seconds(chain, requested: float) -> float:
+    """DeepFilter runs one forward pass per chunk, so keep those short.
+
+    A ten-minute block is one model call. On this machine that call can
+    sit for hours with no progress line and no return to the cancel check.
+    """
+    denoise = chain.stage("denoise")
+    if not denoise.bypass and denoise.params.get("mode") == "deepfilter":
+        return min(float(requested), NEURAL_CHUNK_SECONDS)
+    return float(requested)
+
+
 def render_chunked(path: str, chain, *, skip: set[str] | None = None,
                    only: set[str] | None = None,
                    chunk_seconds: float = CHUNK_SECONDS,
                    overlap_seconds: float = OVERLAP_SECONDS,
-                   cancel=None):
-    """Yield ``(emitted, fraction)`` covering ``path`` exactly once."""
+                   cancel=None, on_chunk=None):
+    """Yield ``(emitted, fraction)`` covering ``path`` exactly once.
+
+    ``on_chunk(start, end, duration)`` runs before the chunk is processed,
+    so a slow stage still leaves a progress line.
+    """
     with sf.SoundFile(path) as handle:
         sr = int(handle.samplerate)
         total = len(handle)
         if total == 0:
             return
+        duration = total / float(sr)
         chunk_n = max(1, int(chunk_seconds * sr))
         overlap_n = int(overlap_seconds * sr)
         if overlap_n >= chunk_n:
@@ -291,12 +312,20 @@ def render_chunked(path: str, chain, *, skip: set[str] | None = None,
         pos = 0
         prev_tail = None
         while pos < total:
+            file_log.wait_turn()
             check_cancel(cancel)
             handle.seek(pos)
             data = handle.read(chunk_n, dtype="float32", always_2d=True)
             if len(data) == 0:
                 break
-            processed = chain.process(data, sr, skip=skip, only=only)
+            if on_chunk is not None:
+                start = pos / float(sr)
+                end = min(duration, (pos + len(data)) / float(sr))
+                on_chunk(start, end, duration)
+            try:
+                processed = chain.process(data, sr, skip=skip, only=only)
+            except LogPaused:
+                continue
             processed = np.asarray(processed, dtype=np.float32)
             if processed.ndim == 1:
                 processed = processed[:, None]
@@ -333,16 +362,25 @@ def _pass_one(wav, dest, chain, skip, cancel, report,
     info = sf.info(wav)
     meter = StreamingLoudness(int(info.samplerate))
     peak = 0.0
+    span = float(info.duration or 0)
+
+    def _mark(at: float) -> None:
+        report(
+            0.05 + 0.70 * (at / span if span else 0.0),
+            f"processing {clock(at)} / {clock(span)}",
+        )
+
     with _activating(session), sf.SoundFile(dest, "w", samplerate=info.samplerate,
                       channels=info.channels, subtype="PCM_16") as out:
         for emit, fraction in render_chunked(
             wav, chain, skip=skip, chunk_seconds=chunk_seconds,
             overlap_seconds=overlap_seconds, cancel=cancel,
+            on_chunk=lambda start, end, duration: _mark(start),
         ):
             out.write(emit)
             meter.add(emit)
             peak = max(peak, true_peak(emit, int(info.samplerate)))
-            report(0.05 + 0.70 * fraction, "processing")
+            _mark(fraction * span)
     return meter, peak
 
 
@@ -396,13 +434,11 @@ def _write_s16(proc: subprocess.Popen, emit: np.ndarray) -> None:
         raise RuntimeError("ffmpeg closed the encode pipe") from exc
 
 
-def _arm_gain(chain, meter: StreamingLoudness, peak: float) -> float:
+def _arm_gain(chain, meter: StreamingLoudness) -> float:
     loud = chain.stage("loudness")
     gain = gain_for_target(
         meter.integrated(),
-        lin_to_db(peak),
         float(loud.params["target_lufs"]),
-        float(loud.params["true_peak_db"]),
     )
     loud.extra["fixed_gain"] = gain
     return gain
@@ -487,6 +523,7 @@ def _ffmpeg(cmd: list[str], cancel) -> None:
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     try:
         while proc.poll() is None:
+            file_log.wait_turn()
             if cancel is not None and cancel.is_set():
                 proc.terminate()
                 raise Cancelled()

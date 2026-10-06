@@ -157,11 +157,16 @@ class DetailPanel(ttk.Frame):
     def _eq(self, stage) -> None:
         body = self.scroller.body
         grid = ttk.Frame(body, style="Panel.TFrame")
-        grid.grid(row=0, column=0, sticky="ew")
+        grid.grid(row=1, column=0, sticky="ew")
         for column in range(2):
             grid.columnconfigure(column, weight=1)
         specs = {item.key: item for item in stage.spec}
         base = (self.baseline or {}).get("params", {})
+        trim = specs["trim_db"]
+        trim_row = ParamRow(
+            body, stage, trim, base.get("trim_db", trim.default), self.on_edit)
+        trim_row.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+        self._rows.append(trim_row)
         for index, (title, hint, fields) in enumerate(_EQ_BANDS):
             card = ttk.Frame(grid, style="Card.TFrame", padding=4)
             card.grid(row=index // 2, column=index % 2, sticky="nsew", padx=2, pady=2)
@@ -180,13 +185,13 @@ class DetailPanel(ttk.Frame):
             lambda label: self._pick_shape(stage, label),
         )
         choice.set_baseline(_shape_label(base.get("air_shape", shape.default)))
-        choice.grid(row=1, column=0, sticky="ew", pady=(6, 2))
+        choice.grid(row=2, column=0, sticky="ew", pady=(6, 2))
         self._rows.append(choice)
         self.flat_note = ttk.Label(
             body, text="All gains at 0 dB \u2014 the EQ is currently flat and has no effect.",
             style="Muted.TLabel",
         )
-        self.flat_note.grid(row=2, column=0, sticky="w", pady=(4, 0))
+        self.flat_note.grid(row=3, column=0, sticky="w", pady=(4, 0))
         self._show_flat()
         previous = self.on_edit
         def _edit():

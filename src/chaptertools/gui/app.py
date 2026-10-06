@@ -10,9 +10,11 @@ import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import filedialog, messagebox, ttk
 
+from chaptertools import file_log
 from chaptertools.util import clock
 
 from . import fonts
+from .busy import JobWindow, progress_sentence
 from .library import book_marks, scan_library
 from .library import library_root as resolve_library_root
 from .log_drawer import LogDrawer
@@ -20,6 +22,7 @@ from .mpv import Player
 from .player_bar import PlayerBar
 from .runner import Runner
 from .session import BookSession
+from .step_rail import STEP_LABELS
 from .table import SHORTCUTS
 from .workflow import WorkflowPanel
 
@@ -33,6 +36,8 @@ class App(tk.Tk):
         self.geometry("1600x960")
         self.library_root = resolve_library_root(library_root)
         self.runner = Runner()
+        file_log.add_pause_hook(self.runner.pause_for_log)
+        self._log_prompt_open = False
         self.player = Player()
         self.session = BookSession()
         self._playback_time: float | None = None
@@ -188,11 +193,19 @@ class App(tk.Tk):
         self.status_var = tk.StringVar(value="")
         self.player_bar = PlayerBar(self, self)
         self.player_bar.pack(side="bottom", fill="x", before=pane)
+        self.job_window = JobWindow(self)
+        self.session.subscribe("job", self.job_window.sync)
         self.log_drawer = LogDrawer(self)
         self.log_text = self.log_drawer.text
+        self.log(f"log file {file_log.open_session()}")
+        self._logged_job = (False, "", "")
+        self.session.subscribe("job", self._log_job_edge)
         self.bind_all("<Control-Shift-L>", lambda e: self.toggle_log())
         self.bind_all("<Control-l>", self.toggle_library)
         self.bind_all("<Button-1>", self._log_button_click, add="+")
+        self.bind_all("<ButtonRelease-1>", self._log_value_release, add="+")
+        self.bind_class("TCombobox", "<<ComboboxSelected>>", self._log_combobox, add="+")
+        self.bind_class("Menu", "<ButtonRelease-1>", self._log_menu_click, add="+")
 
         # ---- main area ----------------------------------------------------
         main = ttk.Frame(pane)
@@ -213,22 +226,346 @@ class App(tk.Tk):
     def clear_log(self):
         self.log_drawer.clear()
 
+    def _log_job_edge(self) -> None:
+        """Log busy when a job starts or ends. Progress lines stay on the hover."""
+        job = self.session.job
+        running, name, detail = self._logged_job
+        if job.running and running and job.name == name:
+            return
+        if job.running:
+            if running:
+                self.log(f"idle: {detail}")
+            self.log(f"busy: {job.detail or 'Working'}")
+            self._logged_job = (True, job.name, job.detail or "Working")
+            return
+        if running:
+            self.log(f"idle: {detail}")
+        self._logged_job = (False, "", "")
+
+    def _target(self, event):
+        """The control under the pointer.
+
+        A click inside a canvas window can arrive as the canvas. The chain
+        enable boxes and the detail scroller are drawn that way.
+        """
+        widget = event.widget
+        if not isinstance(widget, tk.Misc):
+            return widget
+        if widget.winfo_class() != "Canvas":
+            return widget
+        try:
+            found = self.winfo_containing(event.x_root, event.y_root)
+        except tk.TclError:
+            return widget
+        if isinstance(found, tk.Misc) and found is not widget:
+            return found
+        return widget
+
     def _log_button_click(self, event):
-        w = event.widget
+        widget = self._target(event)
         # A combobox dropdown is a Tcl widget with no Python wrapper, so
         # Tkinter leaves event.widget as a path string.
-        if not isinstance(w, tk.Misc):
+        if not isinstance(widget, tk.Misc):
             return
-        if w.winfo_class() not in ("TButton", "Button"):
+        kind = widget.winfo_class()
+        if kind in ("TScale", "Scale", "TSpinbox", "Spinbox"):
+            return
+        if kind not in (
+            "TButton", "Button", "TCheckbutton", "Checkbutton",
+            "TRadiobutton", "Radiobutton", "TMenubutton", "Menubutton",
+            "TLabel", "Label",
+        ):
+            return
+        if self._control_disabled(widget):
             return
         try:
-            if "disabled" in str(w.cget("state")):
+            label = str(widget.cget("text") or "").strip()
+        except tk.TclError:
+            return
+        sentence = self._click_sentence(widget, label)
+        if sentence:
+            self.log(self._with_context(sentence))
+
+    def _log_value_release(self, event):
+        widget = self._target(event)
+        if not isinstance(widget, tk.Misc):
+            return
+        if widget.winfo_class() not in ("TScale", "Scale", "TSpinbox", "Spinbox"):
+            return
+        if self._control_disabled(widget):
+            return
+        shown = ""
+        try:
+            shown = str(widget.get()).strip()
+        except (tk.TclError, ValueError):
+            shown = ""
+        name = self._field_label(widget)
+        sentence = f"{name}: {shown}" if shown else name
+        self.log(self._with_context(sentence))
+
+    def _log_combobox(self, event):
+        widget = event.widget
+        if not isinstance(widget, tk.Misc):
+            return
+        if widget.winfo_class() not in ("TCombobox", "Combobox"):
+            return
+        if self._control_disabled(widget):
+            return
+        try:
+            value = str(widget.get()).strip()
+        except tk.TclError:
+            return
+        name = self._field_label(widget)
+        sentence = f"{name}: {value}" if value else name
+        self.log(self._with_context(sentence))
+
+    def _log_menu_click(self, event):
+        menu = event.widget
+        if not isinstance(menu, tk.Menu):
+            return
+        try:
+            index = menu.index("active")
+        except tk.TclError:
+            return
+        if index is None:
+            return
+        try:
+            if menu.type(index) not in ("command", "checkbutton", "radiobutton"):
                 return
-            label = str(w.cget("text") or "").strip()
+            if "disabled" in str(menu.entrycget(index, "state")):
+                return
+            label = str(menu.entrycget(index, "label") or "").strip()
         except tk.TclError:
             return
         if label:
-            self.log(f"clicked {label}")
+            self.log(self._with_context(label))
+
+    def _control_disabled(self, widget) -> bool:
+        try:
+            return bool(widget.instate(["disabled"]))
+        except (tk.TclError, AttributeError):
+            pass
+        try:
+            return "disabled" in str(widget.cget("state"))
+        except tk.TclError:
+            return False
+
+    def _with_context(self, action: str) -> str:
+        context = self._click_context()
+        if context:
+            return f"{action} — {context}"
+        return action
+
+    def _click_context(self) -> str:
+        parts = []
+        title = self.session.book_info.title.strip()
+        if not title and self.session.book:
+            title = os.path.splitext(os.path.basename(self.session.book))[0]
+        if title:
+            parts.append(title)
+        step = ""
+        try:
+            step = self.workflow._step
+        except AttributeError:
+            step = ""
+        label = STEP_LABELS.get(step, "")
+        if label:
+            parts.append(label)
+        return " — ".join(parts)
+
+    def _click_sentence(self, widget, label: str) -> str:
+        if widget is self.player_bar.play_btn:
+            return self._play_action()
+        if widget is self.player_bar.log_btn:
+            if self.log_drawer.visible:
+                return "Close the log"
+            return "Open the log"
+        seek = {
+            "−10": "Seek back 10 s",
+            "−5": "Seek back 5 s",
+            "+5": "Seek forward 5 s",
+            "+10": "Seek forward 10 s",
+        }.get(label)
+        if seek:
+            return seek
+        if label in {"Cancel job", "Cancel"}:
+            return "Cancel the running job"
+        for name in STEP_LABELS.values():
+            if label == name or label.endswith("  " + name):
+                return f"Show {name}"
+        kind = widget.winfo_class()
+        if kind in ("TMenubutton", "Menubutton"):
+            return f"Open {label}" if label else "Open the menu"
+        if kind in ("TCheckbutton", "Checkbutton"):
+            taking = "off" if widget.instate(["selected"]) else "on"
+            name = label or self._nearby_label(widget) or "Checkbox"
+            return f"{name}: {taking}"
+        if kind in ("TRadiobutton", "Radiobutton"):
+            if widget is self.player_bar.original_btn:
+                return "Hear original"
+            if widget is self.player_bar.edited_btn:
+                return "Hear edited"
+            return f"{label or 'Choice'}: on"
+        if kind in ("TLabel", "Label"):
+            return self._label_sentence(widget, label)
+        if not label or label == "\u21ba":
+            return self._reset_sentence(widget)
+        extra = self._action_detail(label)
+        if extra:
+            return f"{label}: {extra}"
+        return label
+
+    def _label_sentence(self, widget, label: str) -> str:
+        if not widget.bind("<Button-1>"):
+            return ""
+        text = label.strip()
+        nearby = self._nearby_label(widget)
+        if text.isdigit():
+            if nearby:
+                return f"Select {nearby}"
+            return f"Select chapter {text}"
+        if nearby and nearby != text:
+            return f"Select {nearby}"
+        if text:
+            return f"Select {text}"
+        return ""
+
+    def _reset_sentence(self, widget) -> str:
+        name = self._nearby_label(widget) or "this setting"
+        baseline = self._owning_baseline(widget)
+        if baseline is None or baseline == "":
+            return f"Reset {name}"
+        return f"Reset {name} to {baseline}"
+
+    def _owning_baseline(self, widget):
+        current = widget
+        for _ in range(6):
+            parent = current.winfo_parent()
+            if not parent:
+                return None
+            try:
+                current = current.nametowidget(parent)
+            except tk.TclError:
+                return None
+            baseline = getattr(current, "baseline", None)
+            if baseline is not None and not isinstance(baseline, dict):
+                return baseline
+        return None
+
+    def _field_label(self, widget) -> str:
+        workflow = self._workflow()
+        quality = getattr(workflow, "quality", None)
+        panel = getattr(quality, "chain_panel", None)
+        if panel is not None and widget is getattr(panel, "preset_box", None):
+            return "Preset"
+        if workflow is not None and widget is getattr(workflow, "filter_box", None):
+            return "Chapter filter"
+        return self._nearby_label(widget) or "Choice"
+
+    def _workflow(self):
+        try:
+            return self.workflow
+        except AttributeError:
+            return None
+
+    def _action_detail(self, label: str) -> str:
+        workflow = self._workflow()
+        if workflow is None:
+            return ""
+        if label == "Search":
+            return self._search_detail(workflow)
+        if label == "Identify":
+            mode = workflow.identify_mode.get().strip()
+            value = workflow.identify_value.get().strip()
+            return f"{mode} {value}".strip()
+        if label == "Use this edition":
+            return self._edition_detail(workflow)
+        if label in {"Dry run", "Apply to library"}:
+            embed = "embed chapters" if workflow.embed_var.get() else "chapters file only"
+            clean = "clean audio" if workflow.include_cleanup.get() else "leave audio"
+            return f"{embed}, {clean}"
+        if label == "Learn from selection":
+            span = self.session.selection
+            if not span:
+                return ""
+            return f"{clock(span[0])}–{clock(span[1])}"
+        if label == "Align with hint":
+            return workflow.hint_var.get().strip()
+        return ""
+
+    def _search_detail(self, workflow) -> str:
+        parts = []
+        title = workflow.asin_title.get().strip()
+        author = workflow.asin_author.get().strip()
+        keywords = workflow.asin_keywords.get().strip()
+        region = workflow.asin_region.get().strip()
+        if title:
+            parts.append(f"title {title}")
+        if author:
+            parts.append(f"author {author}")
+        if keywords:
+            parts.append(f"keywords {keywords}")
+        if region:
+            parts.append(f"region {region}")
+        return ", ".join(parts)
+
+    def _edition_detail(self, workflow) -> str:
+        try:
+            selected = workflow.asin_tree.selection()
+        except tk.TclError:
+            return ""
+        if not selected:
+            return ""
+        values = workflow.asin_tree.item(selected[0], "values")
+        if not values:
+            return ""
+        return str(values[0])
+
+    def _play_action(self) -> str:
+        starting = str(self.player_bar.play_btn.cget("text")) != "❚❚"
+        cleanup = False
+        quality = None
+        try:
+            cleanup = self.workflow._step == "cleanup"
+            quality = self.workflow.quality
+        except AttributeError:
+            cleanup = False
+        if not starting:
+            return "Stop the preview" if cleanup else "Pause playback"
+        span = self.session.selection
+        start = span[0] if span else (self.session.playhead or 0.0)
+        when = clock(start)
+        if not cleanup:
+            return f"Play from {when}"
+        name = (getattr(quality, "_preset_name", "") or "unsaved")
+        hear = getattr(quality, "hear_var", None)
+        source = "original" if hear is not None and hear.get() else "edited"
+        sentence = f"Play a 30 s preview from {when}, preset {name}, {source}"
+        chain = getattr(quality, "chain", None)
+        if chain is not None and quality._is_modified():
+            changed = [
+                stage.name for stage in chain.stages
+                if quality._stage_modified(stage.name)
+            ]
+            if changed:
+                sentence += ", modified: " + ", ".join(changed)
+        return sentence
+
+    def _nearby_label(self, widget) -> str:
+        try:
+            parent = widget.nametowidget(widget.winfo_parent())
+        except (KeyError, tk.TclError):
+            return ""
+        for child in parent.winfo_children():
+            if child is widget:
+                continue
+            try:
+                text = str(child.cget("text") or "").strip()
+            except tk.TclError:
+                continue
+            if text and not text.isdigit() and child.winfo_class() in ("TLabel", "Label"):
+                return text
+        return ""
 
     def copy_log(self):
         self.log_drawer.copy_all()
@@ -350,12 +687,16 @@ class App(tk.Tk):
     # ------------------------------------------------------------ plumbing --
     def _pump(self):
         """Drain runner events and poll the player on the Tk thread."""
+        self._check_log_size()
         while True:
             try:
                 kind, job, payload = self.runner.events.get_nowait()
             except queue.Empty:
                 break
             if kind == "line":
+                sentence = progress_sentence(payload)
+                if sentence:
+                    self.session.set_job_detail(sentence)
                 if getattr(job, "on_line", None):
                     job.on_line(payload)
                 else:
@@ -381,10 +722,36 @@ class App(tk.Tk):
                                "busy", False)
         busy = self.runner.busy or quality_busy
         self.workflow.set_busy(busy)
-        self.busy_var.set("busy ◌" if busy else "")
-        if self.session.job.running != busy:
-            self.session.set_job(busy, "busy" if busy else "")
+        self.busy_var.set("busy \u25cc" if busy else "")
+        if not busy and self.session.job.running:
+            self.session.set_job(False)
+        elif busy and not self.session.job.running:
+            self.session.set_job(True, "busy", "Working")
         self.after(100, self._pump)
+
+    def _check_log_size(self) -> None:
+        """A new 50 MB step stops the job and asks before anything else runs."""
+        if self._log_prompt_open:
+            return
+        file_log.consider()
+        if not file_log.prompt_pending():
+            return
+        self._log_prompt_open = True
+        try:
+            from chaptertools.audio_quality import neural
+            size_mb = file_log.size() / (1024 * 1024)
+            yes = messagebox.askyesno(
+                "Log file",
+                f"{file_log.LOG_PATH} is {size_mb:.0f} MB. Keep going?",
+                parent=self)
+            if not yes:
+                neural.abort_active()
+            file_log.resolve(bool(yes))
+            self.runner.release_log_hold(bool(yes))
+            if not yes:
+                self._cancel()
+        finally:
+            self._log_prompt_open = False
 
     def _cancel(self):
         self.runner.cancel()

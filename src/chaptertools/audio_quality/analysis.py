@@ -29,6 +29,10 @@ class Cancelled(Exception):
     """The user asked the scan or the render to stop."""
 
 
+class LogPaused(Exception):
+    """The log crossed a size step. The interrupted chunk runs again."""
+
+
 def check_cancel(cancel) -> None:
     if cancel is not None and cancel.is_set():
         raise Cancelled()

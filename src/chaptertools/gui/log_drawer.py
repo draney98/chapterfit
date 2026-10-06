@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import tkinter as tk
 import tkinter.font as tkfont
+from datetime import datetime
 from tkinter import filedialog, ttk
+
+from chaptertools import file_log
 
 from . import tips
 
@@ -69,7 +72,10 @@ class LogDrawer:
         return "break"
 
     def append(self, line: str) -> None:
-        self.text.insert("end", line + "\n")
+        stamp = datetime.now().strftime("%H:%M:%S")
+        text = f"{stamp} {line}\n"
+        self.text.insert("end", text)
+        file_log.write(text)
         if int(self.text.index("end-1c").split(".")[0]) > 5000:
             self.text.delete("1.0", "2.0")
         if not self.text.tag_ranges("sel"):

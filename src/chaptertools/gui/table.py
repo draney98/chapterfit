@@ -228,7 +228,10 @@ class TableViews:
         self.conflict_note = tk.StringVar(value="")
         self.conflict_label = ttk.Label(tab, textvariable=self.conflict_note,
                                         foreground=palette.WARN)
-        self.problem_var = tk.StringVar(value="")
+        self.problem_bar = ttk.Frame(tab)
+        self.problem_bar.grid(row=2, column=0, columnspan=2, sticky="ew",
+                              pady=(4, 0))
+        self.problem_bar.grid_remove()
         tab.grid(row=0, column=0, sticky="nsew")
         self._chapters_tab = tab
 
