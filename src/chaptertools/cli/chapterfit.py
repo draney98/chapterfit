@@ -706,15 +706,49 @@ def main():
                         "chapter editor")
     p.set_defaults(func=cmd_emit)
 
+    lv = sub.add_parser("librivox", help="search and fetch LibriVox books")
+    lv_sub = lv.add_subparsers(dest="lv_cmd", required=True)
+    lv_search = lv_sub.add_parser(
+        "search", help="search finished and unfinished projects")
+    lv_search.add_argument("--title", required=True,
+                           help="title prefix (anchored at the start)")
+    lv_search.add_argument("--author", help="author last-name query")
+    lv_search.add_argument("--json", action="store_true",
+                           help="one JSON object on stdout")
+    lv_search.set_defaults(func=_cmd_librivox_search)
+    lv_fetch = lv_sub.add_parser(
+        "fetch", help="download one Archive bitrate set into the library")
+    lv_fetch.add_argument("id", help="LibriVox catalog id")
+    lv_fetch.add_argument("--library", required=True, metavar="ROOT",
+                          help="library root (author/title folders)")
+    lv_fetch.add_argument("--set", dest="set", metavar="NAME",
+                          help="Archive set name (default: 128Kbps MP3, …)")
+    lv_fetch.add_argument("--plan-only", action="store_true",
+                          help="emit plan or refused; download nothing")
+    lv_fetch.add_argument("--json", action="store_true",
+                          help="one JSON event object per line")
+    lv_fetch.set_defaults(func=_cmd_librivox_fetch)
+
     args = ap.parse_args()
     if args.cmd == "version":
         print(f"chapterfit {__version__}")
         return
-    if args.cmd == "finalize":
+    if args.cmd in ("finalize", "librivox"):
         return args.func(args)
     if not os.path.isfile(args.audio):
         die(f"no such file: {args.audio}")
     args.func(args)
+
+
+def _cmd_librivox_search(args):
+    # Imported only here so the GUI process never loads this module.
+    from chaptertools.sources.librivox_fetch import cmd_search
+    return cmd_search(args)
+
+
+def _cmd_librivox_fetch(args):
+    from chaptertools.sources.librivox_fetch import cmd_fetch
+    return cmd_fetch(args)
 
 
 if __name__ == "__main__":

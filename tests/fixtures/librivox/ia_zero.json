@@ -1,0 +1,7 @@
+{
+  "files": [
+    {"name": "zero_128kb.m3u", "format": "128Kbps M3U"},
+    {"name": "zero_00_intro_128kb.mp3", "format": "128Kbps MP3"},
+    {"name": "zero_01_ch1_128kb.mp3", "format": "128Kbps MP3"}
+  ]
+}

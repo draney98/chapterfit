@@ -1,0 +1,10 @@
+{
+  "files": [
+    {"name": "prideandprejudice_128kb.m3u", "format": "128Kbps M3U"},
+    {"name": "prideandprejudice_64kb.m3u", "format": "64Kbps M3U"},
+    {"name": "prideandprejudice_01_austen_64kb.mp3", "format": "64Kbps MP3"},
+    {"name": "prideandprejudice_02_austen_64kb.mp3", "format": "64Kbps MP3"},
+    {"name": "prideandprejudice_01_austen_128kb.mp3", "format": "128Kbps MP3"},
+    {"name": "prideandprejudice_02_austen_128kb.mp3", "format": "128Kbps MP3"}
+  ]
+}

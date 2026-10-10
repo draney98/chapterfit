@@ -310,71 +310,171 @@ class StagePanels:
                   "fill empty book info, align this edition, and open Place")
 
     def _panel_emit(self, host):
-        """Finish summary: chapters, tags, and whether this write cleans audio."""
+        """Finish: one-column write table, plan box, Dry run / Apply."""
         p = ttk.Frame(host)
         p.columnconfigure(0, weight=1)
+        p.rowconfigure(3, weight=1)
         self.include_cleanup = tk.BooleanVar(value=False)
         self.embed_var = tk.BooleanVar(value=True)
         self.bitrate_var = tk.StringVar(value="64k")
-        self.chapters_card = tk.StringVar(value="Chapters: not written")
-        self.tags_card = tk.StringVar(value="Tags: filled in on Match")
-        self.cleanup_card = tk.StringVar(value="Audio cleanup: off")
+        self.chapters_card = tk.StringVar(value="0 of 0 placed · 0 withheld · 0 pins")
+        self.tags_card = tk.StringVar(value="title · author · album · year")
+        self.cleanup_card = tk.StringVar(
+            value="Not included — the audio is copied untouched.")
+        self.cleanup_option = tk.StringVar(value="")
         self.emit_result = tk.StringVar(value="")
-        cards = (
-            (self.chapters_card, "Edit in Place", "place"),
-            (self.tags_card, "Edit in Match", "match"),
-            (self.cleanup_card, "Edit cleanup", "cleanup"),
-        )
-        for row, (var, label, step) in enumerate(cards):
-            ttk.Label(p, textvariable=var, wraplength=420, justify="left").grid(
-                row=row, column=0, sticky="w", pady=2)
-            ttk.Button(p, text=label,
-                       command=lambda s=step: self.show_step(s)).grid(
-                row=row, column=1, sticky="e", padx=(8, 0))
-        embed_cb = ttk.Checkbutton(p, text="Embed chapters",
-                                   variable=self.embed_var)
-        embed_cb.grid(row=3, column=0, sticky="w")
-        self._tip(embed_cb, "also write a chaptered copy of the audio "
-                  "for this write to put in place; off writes only "
-                  "chapters.txt and chapters.json")
-        ttk.Checkbutton(p, text="Clean the audio in this write",
-                        variable=self.include_cleanup,
-                        command=self._sync_cleanup_choice).grid(
-            row=4, column=0, sticky="w")
-        ttk.Label(p, text="MP3").grid(row=4, column=1, sticky="e")
-        bitrates = ("48k", "64k", "96k", "128k", "160k", "192k", "256k", "320k")
-        ttk.Combobox(p, textvariable=self.bitrate_var, values=bitrates,
-                     width=6, state="readonly").grid(
-            row=5, column=1, sticky="e")
-        self.dry_log = tk.Text(
-            p, height=4, wrap="none", state="disabled",
-            font=tkfont.nametofont("TkFixedFont", root=self))
-        self.dry_log.grid(row=6, column=0, columnspan=2, sticky="nsew", pady=(6, 0))
-        return p
+        self.apply_hint = tk.StringVar(value="")
+        self._plan_empty = True
 
-    def _panel_finalize(self, host):
-        p = ttk.Frame(host)
-        p.columnconfigure(1, weight=1)
-        self.finalize_btn = self._primary(p, 0, 0, "Dry run",
-                                          self.cmd_finalize_dry)
-        self.apply_btn = ttk.Button(p, text="Apply to library", state=["disabled"],
-                                    command=self.cmd_apply_library)
-        self.apply_btn.grid(row=0, column=1, sticky="w", padx=(8, 0))
-        self._tip(self.finalize_btn, "preview everything finalize "
-                  "would do - nothing is changed")
+        head = ttk.Frame(p)
+        head.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        ttk.Label(head, text="Finish", font=("", 12, "bold")).pack(side="left")
+        ttk.Label(
+            head,
+            text="Writes one new file into the library. "
+                 "The first original is always kept.",
+            foreground=palette.MUTED).pack(side="left", padx=(10, 0))
+
+        table = ttk.Frame(p, padding=0)
+        table.grid(row=1, column=0, sticky="ew")
+        table.columnconfigure(1, weight=1)
+        # Columns: Write 170 | What goes in stretch | Option 250 | blank 130
+        border = tk.Frame(table, bg="#C8C5BE", bd=0)
+        border.grid(row=0, column=0, sticky="ew")
+        border.columnconfigure(1, weight=1)
+        inner = tk.Frame(border, bg="#FFFFFF", bd=1, relief="solid")
+        inner.pack(fill="both", expand=True)
+        inner.columnconfigure(1, weight=1)
+        headers = (("Write", 170), ("What goes in", 0), ("Option", 250), ("", 130))
+        for col, (text, width) in enumerate(headers):
+            lbl = tk.Label(inner, text=text, bg="#FFFFFF", fg="#5a5a5a",
+                           font=("", 9), anchor="w", padx=8, pady=4)
+            sticky = "ew" if col == 1 else "w"
+            lbl.grid(row=0, column=col, sticky=sticky)
+            if width:
+                lbl.configure(width=max(8, width // 8))
+
+        # Chapters row
+        self.chapters_check = ttk.Checkbutton(inner, text="Chapters",
+                                              variable=self.embed_var)
+        self.chapters_check.grid(row=1, column=0, sticky="w", padx=8, pady=4)
+        tk.Label(inner, textvariable=self.chapters_card, bg="#FFFFFF",
+                 anchor="w", padx=8).grid(row=1, column=1, sticky="ew")
+        tk.Label(inner, text="Embed in the audio", bg="#FFFFFF",
+                 anchor="w", padx=8).grid(row=1, column=2, sticky="w")
+        self._edit_place = ttk.Button(
+            inner, text="Edit in Place",
+            command=lambda: self.show_step("place"))
+        self._edit_place.grid(row=1, column=3, sticky="e", padx=8, pady=4)
+
+        # Tags row
+        self.tags_on = tk.BooleanVar(value=True)
+        ttk.Checkbutton(inner, text="Tags", variable=self.tags_on,
+                        state="disabled").grid(
+            row=2, column=0, sticky="w", padx=8, pady=4)
+        tk.Label(inner, textvariable=self.tags_card, bg="#FFFFFF",
+                 anchor="w", padx=8).grid(row=2, column=1, sticky="ew")
+        tk.Label(inner, text="also written to album.nfo", bg="#FFFFFF",
+                 anchor="w", padx=8).grid(row=2, column=2, sticky="w")
+        self._edit_match = ttk.Button(
+            inner, text="Edit in Match",
+            command=lambda: self.show_step("match"))
+        self._edit_match.grid(row=2, column=3, sticky="e", padx=8, pady=4)
+
+        # Audio cleanup row
+        ttk.Checkbutton(
+            inner, text="Audio cleanup",
+            variable=self.include_cleanup,
+            command=self._sync_cleanup_choice).grid(
+            row=3, column=0, sticky="w", padx=8, pady=4)
+        tk.Label(inner, textvariable=self.cleanup_card, bg="#FFFFFF",
+                 anchor="w", padx=8).grid(row=3, column=1, sticky="ew")
+        opt = ttk.Frame(inner)
+        opt.grid(row=3, column=2, sticky="w", padx=8)
+        ttk.Label(opt, text="MP3").pack(side="left")
+        bitrates = ("48k", "64k", "96k", "128k", "160k", "192k", "256k", "320k")
+        self.bitrate_combo = ttk.Combobox(
+            opt, textvariable=self.bitrate_var, values=bitrates,
+            width=6, state="readonly")
+        self.bitrate_combo.pack(side="left", padx=(6, 0))
+        self._edit_cleanup = ttk.Button(
+            inner, text="Edit cleanup",
+            command=lambda: self.show_step("cleanup"))
+        self._edit_cleanup.grid(row=3, column=3, sticky="e", padx=8, pady=4)
+
+        # Share Edit button width
+        edit_w = 14
+        for btn in (self._edit_place, self._edit_match, self._edit_cleanup):
+            btn.configure(width=edit_w)
+
+        plan_head = ttk.Frame(p)
+        plan_head.grid(row=2, column=0, sticky="ew", pady=(10, 4))
+        ttk.Label(plan_head, text="Plan", font=("", 11, "bold")).pack(side="left")
+        ttk.Label(plan_head, text="from the last dry run",
+                  foreground=palette.MUTED).pack(side="left", padx=(8, 0))
+
+        plan_wrap = tk.Frame(p, bg="#FFFFFF", bd=1, relief="solid")
+        plan_wrap.grid(row=3, column=0, sticky="nsew")
+        plan_wrap.columnconfigure(0, weight=1)
+        plan_wrap.rowconfigure(0, weight=1)
+        self._plan_empty_frame = ttk.Frame(plan_wrap)
+        self._plan_empty_frame.grid(row=0, column=0, sticky="")
+        ttk.Label(self._plan_empty_frame, text="No dry run yet",
+                  font=("", 11, "bold")).pack(pady=(24, 4))
+        ttk.Label(
+            self._plan_empty_frame,
+            text="Dry run shows what Apply will write, without changing the library.",
+            foreground=palette.MUTED).pack(pady=(0, 8))
+        self._plan_empty_btn = ttk.Button(
+            self._plan_empty_frame, text="Dry run",
+            command=self.cmd_finalize_dry)
+        self._plan_empty_btn.pack()
+        self.dry_log = tk.Text(
+            plan_wrap, wrap="none", state="disabled",
+            font=tkfont.nametofont("TkFixedFont", root=self),
+            bg="#FFFFFF", relief="flat", borderwidth=0)
+        # dry_log shown after first dry run
+
+        foot = ttk.Frame(p)
+        foot.grid(row=4, column=0, sticky="ew", pady=(8, 0))
+        foot.columnconfigure(0, weight=1)
         self.allow_delete_var = tk.BooleanVar(value=False)
         allow_delete_cb = ttk.Checkbutton(
-            p, text="allow delete-and-re-add (clears listening progress)",
+            foot,
+            text="Allow delete-and-re-add in Audiobookshelf "
+                 "(clears listening progress)",
             variable=self.allow_delete_var)
-        allow_delete_cb.grid(row=1, column=0, columnspan=2, sticky="w")
+        allow_delete_cb.grid(row=0, column=0, columnspan=3, sticky="w")
         self._tip(allow_delete_cb, "last resort: delete the ABS database "
                   "entry and let the library scan re-add it; clears "
                   "listening progress")
-        self.finalize_result = self._result_line(p, row=2, colspan=2)
+        ttk.Label(foot, textvariable=self.apply_hint,
+                  foreground=palette.MUTED).grid(
+            row=1, column=0, sticky="w", pady=(4, 0))
+        self.finalize_btn = ttk.Button(
+            foot, text="Dry run", command=self.cmd_finalize_dry)
+        self.finalize_btn.grid(row=1, column=1, sticky="e", padx=(8, 4))
+        self.apply_btn = ttk.Button(
+            foot, text="Apply to library", state=["disabled"],
+            command=self.cmd_apply_library)
+        self.apply_btn.grid(row=1, column=2, sticky="e")
+        self._tip(self.finalize_btn, "preview everything finalize "
+                  "would do - nothing is changed")
         self._tip(self.apply_btn, "stage the original away, rename the "
                   "chaptered file into place, write album.nfo, and "
                   "reload Audiobookshelf. The first original is kept.")
-        ttk.Label(p, text="The first original is always kept.",
-                  foreground=palette.MUTED).grid(
-            row=3, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        self.finalize_result = tk.StringVar(value="")
         return p
+
+    def _panel_finalize(self, host):
+        """Finish is one column in the main pane; inspector stays empty."""
+        p = ttk.Frame(host)
+        return p
+
+    def _show_plan_log(self):
+        """Reveal the dry-run text after the first run."""
+        if not getattr(self, "_plan_empty", True):
+            return
+        self._plan_empty = False
+        self._plan_empty_frame.grid_remove()
+        self.dry_log.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)

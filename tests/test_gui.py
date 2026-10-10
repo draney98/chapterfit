@@ -600,6 +600,97 @@ def test_source_radios_switch_bypass_and_log_the_stream(tmp_path):
         app.destroy()
 
 
+def test_hear_radios_sit_beside_the_play_group(tmp_path):
+    app = _make_app(tmp_path)
+    try:
+        app.session.cleanup["stages_on"] = 1
+        app.player_bar._show_hear()
+        info = app.player_bar.edited_btn.master.grid_info()
+        assert int(info["column"]) == 5
+    finally:
+        app.destroy()
+
+
+def test_finished_preview_clears_the_play_icon(tmp_path):
+    app = _make_app(tmp_path)
+    try:
+        player = app.workflow.quality._player
+        app.workflow._step = "cleanup"
+
+        class _Stream:
+            def __init__(self, active):
+                self.active = active
+
+            def stop(self):
+                return None
+
+            def close(self):
+                return None
+
+        player._stream = _Stream(True)
+        assert player.alive
+        app.player_bar._sync_button()
+        assert str(app.player_bar.play_btn.cget("text")) == "❚❚"
+
+        player._stream = _Stream(False)
+        assert not player.alive
+        assert player._stream is None
+        app.player_bar._sync_button()
+        assert str(app.player_bar.play_btn.cget("text")) == "▶"
+    finally:
+        app.destroy()
+
+
+def test_cleanup_dropdown_stops_playback(tmp_path, monkeypatch):
+    monkeypatch.setenv("CHAPTERFIT_CONFIG", str(tmp_path / "config"))
+    app = _make_app(tmp_path)
+    try:
+        quality = app.workflow.quality
+        stopped = []
+        quality._player.stop = lambda: stopped.append("preview")
+
+        class _Library:
+            alive = True
+
+            def stop(self):
+                stopped.append("library")
+                self.alive = False
+
+        app.player = _Library()
+        quality.detail._pick_mode(quality.chain.stage("denoise"), "Spectral")
+        assert stopped == ["preview", "library"]
+        assert str(app.player_bar.play_btn.cget("text")) == "▶"
+    finally:
+        app.destroy()
+
+
+def test_preset_change_prompts_only_when_asked(tmp_path, monkeypatch):
+    monkeypatch.setenv("CHAPTERFIT_CONFIG", str(tmp_path / "config"))
+    monkeypatch.delenv("CHAPTERFIT_CONFIRM_PRESET", raising=False)
+    import chaptertools.gui.quality_tab.tab as quality_tab
+    asked = []
+    monkeypatch.setattr(
+        quality_tab.messagebox, "askyesno",
+        lambda *args, **kwargs: asked.append(args[0]) or False)
+    app = _make_app(tmp_path)
+    try:
+        quality = app.workflow.quality
+        quality._baseline = quality.chain.snapshot()
+        quality._preset_name = "Gentle cleanup"
+        quality.chain.stage("compressor").params["ratio"] = 4.0
+        quality._on_preset_picked("Audiobook master")
+        assert asked == []
+        assert quality._preset_name == "Audiobook master"
+
+        quality.chain.stage("compressor").params["ratio"] = 9.0
+        monkeypatch.setenv("CHAPTERFIT_CONFIRM_PRESET", "1")
+        quality._on_preset_picked("Gentle cleanup")
+        assert asked == ["Apply preset"]
+        assert quality._preset_name == "Audiobook master"
+    finally:
+        app.destroy()
+
+
 def test_busy_logs_when_it_starts_and_when_it_ends(tmp_path):
     app = _make_app(tmp_path)
     try:
@@ -934,15 +1025,15 @@ def test_blocked_step_hover_says_what_to_do(tmp_path):
         wf._refresh()
         app.update()
         place = "On Match, Search for the book, then choose an edition."
-        assert [tip.text for tip in wf.rail._tips["place"]] == [place, place]
+        assert all(tip.text == place for tip in wf.rail._tips["place"])
         assert wf.rail._subs["place"].get() == "blocked"
         wf.show_step("match")
         app.update()
         assert wf.asin_search_btn.winfo_viewable()
         _write_artifact(wf, WEAK_ART)
         wf._refresh()
-        finish = "Dry-run on Finish, then Apply, to write the chapters."
-        assert wf.rail._tips["finish"][0].text == finish
+        # Place is done; Finish waits on a dry run (not blocked)
+        assert wf.rail._subs["finish"].get() == "needs a dry run"
         assert wf.rail._tips["place"][0].text == ""
     finally:
         app.destroy()

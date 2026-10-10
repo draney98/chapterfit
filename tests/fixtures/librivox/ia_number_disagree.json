@@ -1,0 +1,7 @@
+{
+  "files": [
+    {"name": "book_128kb.m3u", "format": "128Kbps M3U"},
+    {"name": "book_05_austen_128kb.mp3", "format": "128Kbps MP3"},
+    {"name": "book_09_austen_128kb.mp3", "format": "128Kbps MP3"}
+  ]
+}

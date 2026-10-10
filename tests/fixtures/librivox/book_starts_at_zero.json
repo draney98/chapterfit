@@ -1,0 +1,24 @@
+{
+  "books": {
+    "id": "817",
+    "title": "Extended Zero",
+    "language": "English",
+    "url_librivox": "https://librivox.org/example/",
+    "url_iarchive": "https://archive.org/details/extended_zero_librivox",
+    "authors": [{"first_name": "Test", "last_name": "Author"}],
+    "sections": [
+      {
+        "section_number": "0",
+        "title": "Introduction",
+        "playtime": "120",
+        "readers": [{"display_name": "Reader A"}]
+      },
+      {
+        "section_number": "1",
+        "title": "Chapter One",
+        "playtime": "300",
+        "readers": [{"display_name": "Reader A"}]
+      }
+    ]
+  }
+}

@@ -41,17 +41,20 @@ _EQ_BANDS = (
 class DetailPanel(ttk.Frame):
     """Header plus a scroller that holds only the selected stage."""
 
-    def __init__(self, master, enabled_vars, on_edit, on_reset_stage, on_learn):
+    def __init__(self, master, enabled_vars, on_edit, on_reset_stage, on_learn,
+                 on_choice=None):
         super().__init__(master, style="Panel.TFrame", padding=4)
         self.enabled_vars = enabled_vars
         self.on_edit = on_edit
         self.on_reset_stage = on_reset_stage
         self.on_learn = on_learn
+        self.on_choice = on_choice
         self.stage = None
         self.baseline = None
         self.selection = None
         self.recommend = False
         self.enabled_var = None
+        self.multifile = False
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
         self.header = ttk.Frame(self, style="Panel.TFrame")
@@ -139,8 +142,15 @@ class DetailPanel(ttk.Frame):
         row.set_baseline(_mode_label(base.get("mode", mode_spec.default)))
         row.grid(row=0, column=0, sticky="ew", pady=2)
         self._rows.append(row)
-        self._bool(body, stage, per_seg, 1, recommend=self.recommend,
-                   baseline=base.get("per_segment", per_seg.default))
+        if self.multifile:
+            ttk.Label(
+                body,
+                text="Denoise runs per file (noise is re-estimated for each).",
+                style="Muted.TLabel",
+            ).grid(row=1, column=0, sticky="w", pady=2)
+        else:
+            self._bool(body, stage, per_seg, 1, recommend=self.recommend,
+                       baseline=base.get("per_segment", per_seg.default))
         note = "Select a quiet stretch on the timeline first"
         learn_state = "normal" if self.selection else "disabled"
         block = ttk.Frame(body, style="Panel.TFrame")
@@ -253,8 +263,13 @@ class DetailPanel(ttk.Frame):
         row.grid(row=row_index, column=0, sticky="ew", pady=2)
         self._rows.append(row)
 
+    def _choice_changed(self) -> None:
+        if self.on_choice is not None:
+            self.on_choice()
+
     def _pick_plain(self, stage, spec, label: str) -> str:
         stage.params[spec.key] = label
+        self._choice_changed()
         self.on_edit()
         return label
 
@@ -262,11 +277,13 @@ class DetailPanel(ttk.Frame):
         if label.startswith("Neural (install"):
             return _mode_label(stage.params["mode"])
         stage.params["mode"] = "deepfilter" if label == "Neural" else "spectral"
+        self._choice_changed()
         self.on_edit()
         return _mode_label(stage.params["mode"])
 
     def _pick_shape(self, stage, label: str) -> str:
         stage.params["air_shape"] = "shelf" if label == "Shelf" else "peak"
+        self._choice_changed()
         self.on_edit()
         return _shape_label(stage.params["air_shape"])
 

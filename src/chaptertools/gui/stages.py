@@ -88,27 +88,32 @@ def stage_states(analysis: dict, min_conf: float, disk: DiskFacts,
     src = analysis.get("source") or {}
     out["measure"] = {
         "state": DONE if measured else PENDING,
-        "detail": (f"{len((analysis.get('gaps') or {}).get('gaps', []))} gaps"
+        "detail": (f"{len((analysis.get('gaps') or {}).get('gaps', [])):,} gaps"
                    if measured else ""),
         "blocked": False, "why": "",
     }
     if measured and src and not src.get("timeline_trustworthy", True):
         out["measure"]["state"] = ATTENTION
-        out["measure"]["detail"] += " (header wrong - rewrite the Xing header)"
+        out["measure"]["detail"] = "header timing is wrong"
 
     ident = analysis.get("identification") or {}
     # the user picked the source (ASIN/JSON/embedded) - the identification
     # stage is done the moment it runs; fit quality is Align's warning
     out["identify"] = {
         "state": DONE if ident else PENDING,
-        "detail": f"{len(ident.get('chapters') or [])} chapters" if ident
-        else "",
+        "detail": (
+            f"{len(ident.get('chapters') or [])} chapters"
+            + (f" · {str(ident.get('label') or '').removeprefix('Audnexus ').strip()}"
+               if ident.get("label") else "")
+            if ident else "pick an edition"),
         "blocked": False, "why": "",
     }
 
     al = analysis.get("alignment") or {}
     results = al.get("results") or []
     weak = _weak_count(results, min_conf) if results else 0
+    placed = sum(1 for r in results if r.get("time") is not None)
+    place_detail = f"{placed} placed · {weak} to check" if results else ""
     if not ident:
         out["align"] = _blocked("identify first")
     elif not al:
@@ -116,20 +121,20 @@ def stage_states(analysis: dict, min_conf: float, disk: DiskFacts,
                         "why": ""}
     else:
         score = (ident.get("best_trial") or {}).get("score")
-        notes = [f"weak: {weak}"]
+        notes = [place_detail]
         if score is not None and score < 5:
             notes.append(f"edition fit {'rejected' if score < 2 else 'weak'}"
                          f" - score {score:.1f}")
         out["align"] = {"state": ATTENTION if weak or (score or 5) < 5
                         else DONE,
-                        "detail": ", ".join(notes), "blocked": False,
-                        "why": ""}
+                        "detail": ", ".join(n for n in notes if n),
+                        "blocked": False, "why": ""}
 
     align_ok = bool(ident) and bool(al)
     if align_ok:
         out["resolve"] = {
             "state": DONE if weak == 0 else ATTENTION,
-            "detail": f"weak: {weak}",
+            "detail": place_detail,
             "blocked": False, "why": ""}
     else:
         out["resolve"] = _blocked("align first")
@@ -154,13 +159,18 @@ def stage_states(analysis: dict, min_conf: float, disk: DiskFacts,
                       if emitted else "",
             "blocked": False, "why": ""}
 
-    if not emit_done:
-        out["finalize"] = _blocked("emit first")
+    if not align_ok:
+        out["finalize"] = _blocked("needs Place")
+    elif not emit_done:
+        # Chapters are placed; a dry run / apply still needed. Not blocked.
+        out["finalize"] = {
+            "state": PENDING, "detail": "needs a dry run",
+            "blocked": False, "why": ""}
     else:
         fin_ok = one_file and disk.embedded_chapters >= 2
         out["finalize"] = {
             "state": DONE if fin_ok else PENDING,
-            "detail": "folder ready" if fin_ok else "",
+            "detail": "applied" if fin_ok else "ready to apply",
             "blocked": False, "why": ""}
     return out
 

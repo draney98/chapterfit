@@ -26,7 +26,7 @@ def test_measure_done_and_bad_header():
     bad = base_analysis(source={"timeline_trustworthy": False})
     states = stage_states(bad, 0.5, DiskFacts())
     assert states["measure"]["state"] == "attention"
-    assert "Xing" in states["measure"]["detail"]
+    assert "header timing is wrong" in states["measure"]["detail"]
 
 
 def test_identify_verdicts():
@@ -82,7 +82,7 @@ def test_align_resolve_weak_counts():
     states = stage_states(base_analysis(identification=ident, alignment=al),
                           0.5, DiskFacts())
     assert states["align"]["state"] == "attention"   # align carries warnings
-    assert "weak: 2" in states["align"]["detail"]
+    assert "2 to check" in states["align"]["detail"]
     assert states["resolve"]["state"] == "attention"
 
     good = [r for r in results if r["index"] in (0, 1)]
@@ -128,8 +128,7 @@ def test_finalize_requires_emit_done():
     assert states["finalize"]["state"] == "blocked"
     assert states["measure"]["state"] == "pending"
 
-    # chaptered file on disk + full pipeline, but emit never ran:
-    # finalize must be pending while emit is (dependency rule)
+    # Place is done; Finish waits on a dry run (not blocked)
     ident = {"best_trial": {"score": 6.0}, "chapters": [1, 2]}
     al = {"results": [{"index": 0, "time": 0.0, "confidence": 1.0,
                        "pinned": False},
@@ -138,7 +137,8 @@ def test_finalize_requires_emit_done():
     analysis = base_analysis(identification=ident, alignment=al)
     states = stage_states(analysis, 0.5, full)
     assert states["emit"]["state"] == "pending"
-    assert states["finalize"]["state"] == "blocked"
+    assert states["finalize"]["state"] == "pending"
+    assert states["finalize"]["detail"] == "needs a dry run"
 
     # ...and once emit has run (artifact emitted + disk match), both done
     analysis["emitted"] = {"count": 2, "first": 0.0, "last": 3600.0}

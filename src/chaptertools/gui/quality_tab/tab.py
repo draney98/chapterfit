@@ -188,6 +188,7 @@ class QualityTab(ttk.Frame):
         )
         self.detail = DetailPanel(
             body, self.enabled_vars, self._changed, self.reset_stage, self._learn_noise,
+            on_choice=self._stop_playback,
         )
         body.add(self.chain_panel, weight=0)
         body.add(self.detail, weight=1)
@@ -197,16 +198,66 @@ class QualityTab(ttk.Frame):
             self.cmd_process, self.cmd_replace, self.cancel,
         )
         self.footer.grid(row=2, column=0, sticky="ew")
+        self._include_at_finish = None
         if self.workflow is not None and hasattr(self.workflow, "bitrate_var"):
             self.footer.bitrate_var = self.workflow.bitrate_var
-            ttk.Checkbutton(
+            self._include_at_finish = ttk.Checkbutton(
                 self.chain_panel, text="Include at Finish",
                 variable=self.workflow.include_cleanup,
                 command=self.workflow._sync_cleanup_choice,
-            ).grid(row=4, column=0, sticky="w", pady=(2, 0))
+            )
+            self._include_at_finish.grid(row=4, column=0, sticky="w", pady=(2, 0))
+        self._multifile = False
+        self._multifile_folder = ""
+        self._multifile_files: list[str] = []
+        self._multifile_reports: dict[str, dict] = {}
+        self._across_files = tk.StringVar(value="each")  # each | whole
+        self._mf_dry_ok = False
+        self._mf_dry_hash: tuple | None = None
+        self._build_multifile_bar()
         self._fill_presets()
         self._show_stage(0)
         self._refresh_status()
+
+    def _build_multifile_bar(self) -> None:
+        """Write bar for multi-file books (Part 4). Hidden unless multifile."""
+        bar = ttk.Frame(self, style="Quality.TFrame", padding=4)
+        self._mf_bar = bar
+        bar.columnconfigure(1, weight=1)
+        self._mf_back = ttk.Button(
+            bar, text="← Book", command=self._back_to_multifile)
+        self._mf_back.grid(row=0, column=0, sticky="w")
+        self._mf_status = tk.StringVar(value="")
+        ttk.Label(bar, textvariable=self._mf_status).grid(
+            row=0, column=1, sticky="w", padx=8)
+        ttk.Label(bar, text="MP3").grid(row=0, column=2, sticky="e")
+        bitrates = ("48k", "64k", "96k", "128k", "160k", "192k", "256k", "320k")
+        self._mf_bitrate = tk.StringVar(value="128k")
+        ttk.Combobox(bar, textvariable=self._mf_bitrate, values=bitrates,
+                     width=6, state="readonly").grid(row=0, column=3, padx=4)
+        ttk.Button(bar, text="Dry run", command=self.cmd_multifile_dry).grid(
+            row=0, column=4, padx=4)
+        self._mf_clean_btn = ttk.Button(
+            bar, text="Clean all files", command=self.cmd_multifile_clean,
+            state="disabled")
+        self._mf_clean_btn.grid(row=0, column=5, sticky="e")
+        # Across-files loudness choice
+        across = ttk.Frame(bar, style="Quality.TFrame")
+        across.grid(row=1, column=0, columnspan=6, sticky="w", pady=(4, 0))
+        ttk.Label(across, text="Across files").pack(side="left")
+        ttk.Radiobutton(
+            across, text="Level each file to the target",
+            value="each", variable=self._across_files,
+            command=self._mf_settings_changed).pack(side="left", padx=(8, 0))
+        ttk.Radiobutton(
+            across, text="One gain for the whole book",
+            value="whole", variable=self._across_files,
+            command=self._mf_settings_changed).pack(side="left", padx=(8, 0))
+        self._mf_strip = tk.Canvas(bar, height=28, bg="#E9E7E2",
+                                   highlightthickness=0)
+        self._mf_strip.grid(row=2, column=0, columnspan=6, sticky="ew",
+                            pady=(4, 0))
+        self._mf_file_states: dict[str, str] = {}
 
     def _show_stage(self, index: int) -> None:
         stage = self.chain.stages[index]
@@ -395,6 +446,21 @@ class QualityTab(ttk.Frame):
         if name == "scan":
             self._apply_report(payload)
             self._log("quality scan finished")
+        elif name == "mf-scan":
+            self._apply_mf_reports((payload or {}).get("reports") or {})
+            self._log(f"analysed {len(self._multifile_reports)} files")
+        elif name == "mf-clean":
+            written = (payload or {}).get("written") or ""
+            for path in (payload or {}).get("cleaned") or []:
+                self._mf_file_states[path] = "done"
+            self._draw_mf_strip()
+            self._mf_status.set(f"Gentle cleanup · written {written}")
+            self.app.session.cleanup["written"] = written
+            self.app.session.cleanup["preset"] = self._preset_name or "Gentle cleanup"
+            self.app.session.emit("cleanup")
+            self._log(f"cleaned {len((payload or {}).get('cleaned') or [])} files")
+            if self.workflow is not None and hasattr(self.workflow, "multifile"):
+                self.workflow.multifile.load(self._multifile_folder)
         elif name == "preview":
             self._preview = payload
             self._note_preview()
@@ -403,6 +469,7 @@ class QualityTab(ttk.Frame):
                 self._player.bypass = bool(self.hear_var.get())
                 source = "original" if self.hear_var.get() else "edited"
                 self._log(f"Playing {source} audio")
+                self._sync_transport()
             except Exception as exc:
                 messagebox.showerror("Preview", str(exc), parent=self.winfo_toplevel())
         elif name == "process":
@@ -482,7 +549,7 @@ class QualityTab(ttk.Frame):
     def _on_preset_picked(self, name: str) -> None:
         if not name or name == self._preset_name:
             return
-        if self._is_modified():
+        if self._is_modified() and os.environ.get("CHAPTERFIT_CONFIRM_PRESET") == "1":
             keep = messagebox.askyesno(
                 "Apply preset",
                 "Discard the changes that aren't saved as a preset?",
@@ -490,7 +557,22 @@ class QualityTab(ttk.Frame):
             if not keep:
                 self.chain_panel.preset_var.set(self._preset_name)
                 return
+        self._stop_playback()
         self.apply_named(name)
+
+    def _stop_playback(self) -> None:
+        self._player.stop()
+        app = getattr(self, "app", None)
+        player = getattr(app, "player", None)
+        if player is not None and getattr(player, "alive", False):
+            player.stop()
+        self._sync_transport()
+
+    def _sync_transport(self) -> None:
+        bar = getattr(getattr(self, "app", None), "player_bar", None)
+        sync = getattr(bar, "_sync_button", None)
+        if sync is not None:
+            sync()
 
     def cmd_save_preset(self) -> None:
         from chaptertools.audio_quality.presets import save_user_preset
@@ -725,6 +807,274 @@ class QualityTab(ttk.Frame):
         if log is not None:
             log(text)
 
+    # ------------------------------------------------------ multi-file ------
+
+    def set_multifile(self, folder: str, work_dir: str) -> None:
+        """Prepare cleanup for a LibriVox multi-file book folder."""
+        from chaptertools.gui.multifile_book import list_audio, load_librivox
+
+        if not self.available:
+            return
+        self._multifile = True
+        self._multifile_folder = folder
+        self.work_dir = work_dir
+        self._multifile_files = list_audio(folder)
+        self.audio = self._multifile_files[0] if self._multifile_files else None
+        self._multifile_reports = {}
+        self._mf_file_states = {p: "waiting" for p in self._multifile_files}
+        self._mf_dry_ok = False
+        meta = load_librivox(folder) or {}
+        set_name = str(meta.get("set") or "")
+        bitrate = "128k"
+        if "64" in set_name:
+            bitrate = "64k"
+        elif "128" in set_name:
+            bitrate = "128k"
+        elif "VBR" in set_name.upper():
+            bitrate = "128k"
+        self._mf_bitrate.set(bitrate)
+        if self.audio:
+            self._show_source()
+            self._load_saved_report()
+
+    def show_multifile_bar(self, show: bool) -> None:
+        if not self.available or not hasattr(self, "_mf_bar"):
+            return
+        if show:
+            self.footer.grid_remove()
+            if self._include_at_finish is not None:
+                self._include_at_finish.grid_remove()
+            self._mf_bar.grid(row=2, column=0, sticky="ew")
+            self._mf_status.set(
+                f"Write cleaned audio · {len(self._multifile_files)} files")
+            self._mf_clean_btn.configure(
+                text=f"Clean all {len(self._multifile_files)} files",
+                state="normal" if self._mf_dry_ok else "disabled")
+            self.detail.multifile = True
+            self._draw_mf_strip()
+            # Kick analysis of all files if empty
+            if self._multifile_files and not self._multifile_reports:
+                self.cmd_multifile_analyse()
+        else:
+            self._mf_bar.grid_remove()
+            self.footer.grid()
+            if self._include_at_finish is not None:
+                self._include_at_finish.grid()
+            self.detail.multifile = False
+
+    def _back_to_multifile(self) -> None:
+        self.show_multifile_bar(False)
+        if self.workflow is not None:
+            self.workflow.return_from_multifile_cleanup()
+
+    def _mf_settings_changed(self) -> None:
+        self._mf_dry_ok = False
+        self._mf_clean_btn.configure(state="disabled")
+        cleanup = (getattr(self.app.session, "cleanup", None) or {})
+        if cleanup.get("written"):
+            self._mf_status.set("changed since last write")
+
+    def _mf_hash(self) -> tuple:
+        return (self.chain.snapshot() if self.chain else {},
+                self._across_files.get(), self._mf_bitrate.get(),
+                tuple(self._multifile_files))
+
+    def cmd_multifile_analyse(self) -> None:
+        if not self._guard() or not self._multifile_files:
+            return
+        files = list(self._multifile_files)
+        work = self.work_dir
+        self._set_running(True)
+        self._begin_job("scan")
+        if not self.jobs.start(
+            "mf-scan",
+            lambda cancel, progress: self._mf_scan_job(files, work, cancel, progress),
+        ):
+            self._end_job()
+
+    def _mf_scan_job(self, files, work, cancel, progress):
+        from chaptertools.audio_quality.analysis import (
+            quality_json_path, save_report, scan_wav,
+        )
+        from chaptertools.audio_quality.worker import ensure_decoded
+
+        reports = {}
+        for i, path in enumerate(files):
+            progress(i / max(len(files), 1), None, f"analysing {i + 1}/{len(files)}")
+            # Cache by size + mtime
+            try:
+                st = os.stat(path)
+                cache_key = f"{st.st_size}-{int(st.st_mtime)}"
+            except OSError:
+                cache_key = ""
+            qpath = quality_json_path(work, path)
+            existing = None
+            if os.path.isfile(qpath):
+                from chaptertools.audio_quality.analysis import load_report
+                existing = load_report(qpath)
+            if existing and existing.get("cache_key") == cache_key:
+                reports[path] = existing
+                continue
+            wav = ensure_decoded(path, work, cancel, progress)
+            report = scan_wav(wav, cancel=cancel, progress=progress)
+            report["cache_key"] = cache_key
+            if os.path.isfile(path):
+                report["source_size"] = os.path.getsize(path)
+            save_report(qpath, report)
+            reports[path] = report
+        progress(1.0, None, "done")
+        return {"reports": reports}
+
+    def cmd_multifile_dry(self) -> None:
+        if not self._multifile_files:
+            return
+        n = len(self._multifile_files)
+        mode = self._across_files.get()
+        lines = [
+            f"Would clean {n} files at {self._mf_bitrate.get()}.",
+            f"Loudness: {'each file to target' if mode == 'each' else 'one gain for the book'}.",
+            f"Originals kept in {self.work_dir} (first write only).",
+            "album.nfo and librivox.json stay; tags are preserved.",
+        ]
+        for line in lines:
+            self._log(line)
+        self._mf_dry_ok = True
+        self._mf_dry_hash = self._mf_hash()
+        self._mf_clean_btn.configure(state="normal")
+        self._mf_status.set("Dry run ready — Clean all is enabled")
+
+    def cmd_multifile_clean(self) -> None:
+        if not self._mf_dry_ok or self._mf_hash() != self._mf_dry_hash:
+            self._mf_clean_btn.configure(state="disabled")
+            self._mf_status.set("Dry run again — settings changed")
+            return
+        if not self._guard():
+            return
+        files = list(self._multifile_files)
+        work = self.work_dir
+        snapshot = self.chain.snapshot()
+        bitrate = self._mf_bitrate.get()
+        across = self._across_files.get()
+        folder = self._multifile_folder
+        self._mf_file_states = {p: "waiting" for p in files}
+        self._draw_mf_strip()
+        self._set_running(True)
+        self._begin_job("process")
+        if not self.jobs.start(
+            "mf-clean",
+            lambda cancel, progress: self._mf_clean_job(
+                files, work, snapshot, bitrate, across, folder, cancel, progress),
+        ):
+            self._end_job()
+
+    def _mf_clean_job(self, files, work, snapshot, bitrate, across, folder,
+                      cancel, progress):
+        from datetime import date
+
+        from chaptertools.audio_quality.stages import default_chain
+        from chaptertools.audio_quality.worker import (
+            process_file, replace_library, output_mp3_path,
+        )
+
+        # Optional whole-book gain: measure first file's needed gain and reuse
+        fixed_gain = None
+        if across == "whole" and files:
+            # process_file computes gain internally; stash via chain extra
+            pass
+        results = []
+        for i, path in enumerate(files):
+            progress(i / max(len(files), 1), None,
+                     f"rendering {i + 1}/{len(files)}")
+            # Mark state via side channel in result; UI updates on done events
+            chain_snap = dict(snapshot)
+            if fixed_gain is not None:
+                stages = dict(chain_snap.get("stages") or {})
+                loud = dict(stages.get("loudness") or {})
+                extra = dict(loud.get("extra") or {})
+                extra["fixed_gain"] = fixed_gain
+                loud["extra"] = extra
+                stages["loudness"] = loud
+                chain_snap["stages"] = stages
+            info = process_file(path, work, chain_snap, bitrate, cancel, progress)
+            if across == "whole" and fixed_gain is None and info.get("gain_db") is not None:
+                fixed_gain = info["gain_db"]
+            cleaned = info.get("mp3") or output_mp3_path(work, path)
+            replace_library(path, cleaned, work)
+            results.append(path)
+        # Update librivox.json cleanup entry
+        meta_path = os.path.join(folder, "librivox.json")
+        try:
+            import json
+            with open(meta_path) as handle:
+                meta = json.load(handle)
+        except (OSError, ValueError):
+            meta = {}
+        meta["cleanup"] = {
+            "written": date.today().isoformat(),
+            "preset": self._preset_name or "custom",
+            "bitrate": bitrate,
+            "across": across,
+            "files": len(results),
+        }
+        with open(meta_path, "w") as handle:
+            json.dump(meta, handle, indent=2)
+            handle.write("\n")
+        progress(1.0, None, "done")
+        return {"cleaned": results, "written": meta["cleanup"]["written"]}
+
+    def _draw_mf_strip(self) -> None:
+        if not hasattr(self, "_mf_strip"):
+            return
+        c = self._mf_strip
+        c.delete("all")
+        files = self._multifile_files
+        if not files:
+            return
+        w = max(c.winfo_width(), 100)
+        bw = max(4, w / len(files))
+        colors = {
+            "waiting": "#C8C5BE",
+            "rendering": "#4A6984",
+            "done": "#2E7D32",
+            "failed": "#B00020",
+        }
+        for i, path in enumerate(files):
+            state = self._mf_file_states.get(path, "waiting")
+            # Loudness height from report
+            report = self._multifile_reports.get(path) or {}
+            lufs = report.get("integrated_lufs")
+            h = 20
+            if isinstance(lufs, (int, float)):
+                # map -30..-10 to 8..24
+                h = max(8, min(24, int(24 + (lufs + 10))))
+            x = i * bw
+            c.create_rectangle(x, 28 - h, x + bw - 1, 28,
+                               fill=colors.get(state, "#C8C5BE"), outline="")
+
+    def _apply_mf_reports(self, reports: dict) -> None:
+        self._multifile_reports = reports or {}
+        if not reports:
+            return
+        lufs = [r.get("integrated_lufs") for r in reports.values()
+                if isinstance(r.get("integrated_lufs"), (int, float))]
+        floors = [r.get("noise_floor_db") for r in reports.values()
+                  if isinstance(r.get("noise_floor_db"), (int, float))]
+        clips = sum(1 for r in reports.values()
+                    if (r.get("true_peak_db") or -99) > -1.0)
+        bits = []
+        if lufs:
+            bits.append(f"loudness {min(lufs):.1f} to {max(lufs):.1f} LUFS")
+        if floors:
+            bits.append(f"noise floor {min(floors):.0f} to {max(floors):.0f} dB")
+        if clips:
+            bits.append(f"{clips} clip")
+        self.analysis.set_source(
+            f"{len(reports)} files · " + (" · ".join(bits) if bits else "analysed"))
+        # Show "This file" for the first
+        first = next(iter(reports.values()))
+        self._apply_report(first)
+        self._draw_mf_strip()
+
 
 class _IdleJobs:
     busy = False
@@ -782,7 +1132,17 @@ class _ABPlayer:
 
     @property
     def alive(self) -> bool:
-        return self._stream is not None
+        stream = self._stream
+        if stream is None:
+            return False
+        try:
+            running = bool(stream.active)
+        except Exception:
+            running = False
+        if running:
+            return True
+        self.stop()
+        return False
 
     def stop(self) -> None:
         stream = self._stream

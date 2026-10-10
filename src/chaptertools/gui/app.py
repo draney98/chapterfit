@@ -155,12 +155,42 @@ class App(tk.Tk):
         self._lib_body.pack(side="top", fill="both", expand=True)
         searchbar = ttk.Frame(self._lib_body)
         searchbar.pack(side="top", fill="x", pady=(0, 4))
-        ttk.Label(searchbar, text="search:").pack(side="left")
         self.search_var = tk.StringVar()
-        self.search_var.trace_add("write", lambda *_: self._apply_search())
-        search_entry = ttk.Entry(searchbar, textvariable=self.search_var)
-        search_entry.pack(side="left", fill="x", expand=True, padx=(4, 0))
-        search_entry.bind("<Escape>", lambda e: self.search_var.set(""))
+        self._search_placeholder = "Search title or author"
+        self._search_has_placeholder = True
+        self.search_var.set(self._search_placeholder)
+        search_entry = ttk.Entry(searchbar, textvariable=self.search_var,
+                                 foreground="#888888")
+        search_entry.pack(side="left", fill="x", expand=True)
+        self._search_entry = search_entry
+
+        def _search_focus_in(_e=None):
+            if self._search_has_placeholder:
+                self._search_has_placeholder = False
+                self.search_var.set("")
+                search_entry.configure(foreground="")
+
+        def _search_focus_out(_e=None):
+            if not self.search_var.get().strip():
+                self._search_has_placeholder = True
+                self.search_var.set(self._search_placeholder)
+                search_entry.configure(foreground="#888888")
+
+        def _on_search_write(*_a):
+            value = self.search_var.get()
+            if self._search_has_placeholder:
+                if value == self._search_placeholder:
+                    return
+                # Programmatic set (tests / clear) replaces the placeholder
+                self._search_has_placeholder = False
+                search_entry.configure(foreground="")
+            self._apply_search()
+
+        self.search_var.trace_add("write", _on_search_write)
+        search_entry.bind("<FocusIn>", _search_focus_in)
+        search_entry.bind("<FocusOut>", _search_focus_out)
+        search_entry.bind("<Escape>", lambda e: (
+            self.search_var.set(""), search_entry.configure(foreground="")))
         ttk.Button(searchbar, text="‹", width=3,
                    command=self.toggle_library).pack(side="right", padx=(4, 0))
         chips = ttk.Frame(self._lib_body)
@@ -175,17 +205,21 @@ class App(tk.Tk):
         tree_box.pack(side="top", fill="both", expand=True)
         tree_box.columnconfigure(0, weight=1)
         tree_box.rowconfigure(0, weight=1)
-        self.lib_tree = ttk.Treeview(tree_box, show="tree")
+        self.lib_tree = ttk.Treeview(
+            tree_box, show="tree", columns=("status",))
+        self.lib_tree.heading("status", text="")
+        self.lib_tree.column("#0", stretch=True, minwidth=40)
+        self.lib_tree.column("status", width=56, stretch=False, anchor="e")
         self.lib_tree.grid(row=0, column=0, sticky="nsew")
         sb = ttk.Scrollbar(tree_box, orient="vertical",
                            command=self.lib_tree.yview)
         sb.grid(row=0, column=1, sticky="ns")
-        xsb = ttk.Scrollbar(tree_box, orient="horizontal",
-                            command=self.lib_tree.xview)
-        xsb.grid(row=1, column=0, sticky="ew")
-        self.lib_tree.configure(yscrollcommand=sb.set,
-                                xscrollcommand=xsb.set)
+        self.lib_tree.configure(yscrollcommand=sb.set)
         self.lib_tree.bind("<<TreeviewSelect>>", self._on_select)
+        self._librivox_btn = ttk.Button(
+            self._lib_body, text="+ Get a book from LibriVox…",
+            command=self._open_librivox, state="disabled")
+        self._librivox_btn.pack(side="bottom", fill="x", pady=(4, 0))
         self._pane = pane
 
         # ---- player bar (the one transport; packed before the pane) ------
@@ -210,8 +244,13 @@ class App(tk.Tk):
         # ---- main area ----------------------------------------------------
         main = ttk.Frame(pane)
         pane.add(main, weight=1)
+        self._book_host = main
         self.workflow = WorkflowPanel(main, app=self)
         self.workflow.pack(fill="both", expand=True)
+        from .librivox_view import LibrivoxView
+        self.librivox_view = LibrivoxView(main, app=self)
+        # Packed only while Get-from-LibriVox is open.
+        self._librivox_btn.configure(state="normal")
 
     def toggle_log(self):
         self.log_drawer.toggle()
@@ -593,13 +632,13 @@ class App(tk.Tk):
 
     def _render_library(self, query: str | None):
         """(Re)draw the tree; a query of 3+ chars filters by title/author."""
+        if getattr(self, "_search_has_placeholder", False):
+            query = ""
         query = (query or "").strip().lower()
         active = len(query) >= 3
         self.lib_tree.delete(*self.lib_tree.get_children())
         selected = self.lib_tree.selection()
 
-        font = tkfont.nametofont("TkDefaultFont", root=self)
-        widest = 0
         for author in sorted(self._library):
             author_hit = active and query in author.lower()
             paths = [p for p in self._library[author]
@@ -608,24 +647,53 @@ class App(tk.Tk):
             if not paths:
                 continue
             author_id = self.lib_tree.insert("", "end",
-                                             text=author, open=active)
-            widest = max(widest, font.measure(author))
+                                             text=author, open=active,
+                                             values=(""))
+            # Group multi-file folders into one row when librivox.json exists
+            shown: set[str] = set()
             for path in paths:
-                label = _book_label(path, self._library[author])
-                marks = book_marks(path)
-                if marks:
-                    label = f"{marks} {label}"
-                self.lib_tree.insert(author_id, "end", iid=str(path),
-                                     text=label)
-                widest = max(widest, font.measure(label) + 20)
-        # wider than the pane -> the horizontal scrollbar reaches the rest
-        self.lib_tree.column("#0", minwidth=widest + 40, stretch=True)
+                folder = os.path.dirname(path)
+                if folder in shown:
+                    continue
+                siblings = [p for p in self._library[author]
+                            if os.path.dirname(p) == folder]
+                meta = _folder_librivox(folder)
+                if meta or len(siblings) > 1:
+                    shown.add(folder)
+                    label = os.path.basename(folder)
+                    status = _book_status(folder, siblings, meta)
+                    iid = f"book:{folder}"
+                    self.lib_tree.insert(
+                        author_id, "end", iid=iid, text=label,
+                        values=(status,))
+                else:
+                    label = _book_label(path, self._library[author])
+                    status = _book_status(folder, [path], None)
+                    self.lib_tree.insert(
+                        author_id, "end", iid=str(path), text=label,
+                        values=(status,))
 
         if selected and self.lib_tree.exists(selected[0]):
             self.lib_tree.selection_set(selected[0])
 
     def _apply_search(self):
-        self._render_library(self.search_var.get())
+        q = "" if self._search_has_placeholder else self.search_var.get()
+        self._render_library(q)
+
+    def _open_librivox(self):
+        """Open the Get-from-LibriVox view (Part 2)."""
+        view = getattr(self, "librivox_view", None)
+        if view is not None:
+            view.open_search()
+
+    def _show_librivox(self, show: bool) -> None:
+        """Swap the book pane for the LibriVox search/fetch view."""
+        if show:
+            self.workflow.pack_forget()
+            self.librivox_view.pack(fill="both", expand=True)
+        else:
+            self.librivox_view.pack_forget()
+            self.workflow.pack(fill="both", expand=True)
 
     def _chip_allows(self, path: str) -> bool:
         choice = self.library_filter.get()
@@ -677,11 +745,31 @@ class App(tk.Tk):
         iid = sel[0]
         if self.lib_tree.parent(iid):
             path = self._path_for(iid)
-            if path:
-                self.workflow.set_book(path)
+            if not path:
+                return
+            # In-progress LibriVox fetch: reopen the fetch view
+            folder = path if os.path.isdir(path) else os.path.dirname(path)
+            meta = _folder_librivox(folder)
+            fetch = (meta or {}).get("fetch") or {}
+            if fetch and int(fetch.get("done") or 0) < int(fetch.get("total") or 0):
+                self._open_librivox()
+                return
+            if getattr(self, "librivox_view", None) is not None:
+                self._show_librivox(False)
+            self.workflow.set_book(path)
 
     def _path_for(self, iid) -> str | None:
-        """Leaf ids are the absolute path of the audio file."""
+        """Leaf ids are an audio path, or book:<folder> for multi-file books."""
+        if isinstance(iid, str) and iid.startswith("book:"):
+            folder = iid[5:]
+            meta = _folder_librivox(folder)
+            if meta:
+                return folder
+            for _author, paths in self._library.items():
+                for path in paths:
+                    if os.path.dirname(path) == folder:
+                        return path
+            return None
         return iid if os.path.isfile(iid) else None
 
     # ------------------------------------------------------------ plumbing --
@@ -712,12 +800,22 @@ class App(tk.Tk):
         self.workflow.poll_facts()
         if getattr(self.workflow, "quality", None) is not None:
             self.workflow.quality.poll()
+        was_alive = getattr(self, "_player_was_alive", False)
         t = self.player.poll()
+        alive = self.player.alive
+        self._player_was_alive = alive
         self._playback_time = t
         if t is not None:
             self.session.playhead = t
         self.player_bar.update_time(t)
         self.workflow.update_playback(t)
+        # Multi-file: continue into the next chapter when one file ends
+        if was_alive and not alive and getattr(
+                self.workflow, "_multifile_mode", False):
+            mf = getattr(self.workflow, "multifile", None)
+            if mf is not None and self.session.chapter_index is not None:
+                if self.session.chapter_index + 1 < len(mf.files):
+                    mf.play_next()
         quality_busy = getattr(getattr(self.workflow, "quality", None),
                                "busy", False)
         busy = self.runner.busy or quality_busy
@@ -832,6 +930,37 @@ def _title_of(path: str) -> str:
     base = os.path.splitext(os.path.basename(path))[0]
     folder = os.path.basename(os.path.dirname(path))
     return f"{folder} {base}".lower()
+
+
+def _folder_librivox(folder: str) -> dict | None:
+    path = os.path.join(folder, "librivox.json")
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path) as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _book_status(folder: str, files: list[str], meta: dict | None) -> str:
+    """Right-aligned library status: 4/4, 1/4, 27 files, ↓ 9/27."""
+    if meta and meta.get("fetch"):
+        done = int(meta["fetch"].get("done") or 0)
+        total = int(meta["fetch"].get("total") or 0)
+        if total and done < total:
+            return f"↓ {done}/{total}"
+    if meta or len(files) > 1:
+        return f"{len(files)} files"
+    audio = files[0] if files else ""
+    marks = book_marks(audio) if audio else ""
+    if "✓" in marks:
+        return "4/4"
+    if marks:
+        # crude progress from glyphs; detailed stage count is in the rail
+        return "1/4" if "●" in marks else "0/4"
+    return "0/4"
 
 
 def main(argv: list[str] | None = None):

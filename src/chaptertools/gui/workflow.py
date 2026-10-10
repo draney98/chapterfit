@@ -228,6 +228,9 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         place.add(self._panels["resolve"], weight=2)
         self._build_chapters_tab(self._main_frames["place"])
         self._build_quality_tab(self._main_frames["cleanup"])
+        from .multifile_book import MultifileBook
+        self.multifile = MultifileBook(self, self.app, on_cleanup=self._open_multifile_cleanup)
+        self._multifile_mode = False
         self._bind_step_keys()
         self.show_step("scan")
 
@@ -306,7 +309,7 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
             else:
                 frame.grid_remove()
         self.workspace.set_inspector(
-            step in ("match", "place", "finish"), table=step == "place")
+            step in ("match", "place"), table=step == "place")
         if step == "finish":
             self.timeline.grid_remove()
         else:
@@ -324,12 +327,34 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         if key in STEPS:
             self.show_step(key)
 
+    def _finish_rail_detail(self, states: dict) -> str:
+        """Sub-status for Finish: Place gate, dry run, ready, or applied."""
+        fin = states.get("finalize") or {}
+        if fin.get("state") == BLOCKED or fin.get("why") == "needs Place":
+            return "needs Place"
+        if self._finalize_dry_ok:
+            applied = getattr(self, "_applied_at", None)
+            if applied and (states.get("finalize") or {}).get("state") == DONE:
+                return f"applied {applied}"
+            return "ready to apply"
+        return fin.get("detail") or "needs a dry run"
+
     def _sync_rail(self, states: dict | None = None) -> None:
         states = states or self._compute_states()
-        preset = self.app.session.cleanup.get("preset") or "off"
+        preset = self.app.session.cleanup.get("preset") or ""
         on = int(self.app.session.cleanup.get("stages_on") or 0)
-        cleanup = f"{preset} · {on} stages" if on else "off"
-        self.rail.update(states, self._step, cleanup)
+        written = self.app.session.cleanup.get("written") or ""
+        if written:
+            cleanup = f"{preset or 'cleanup'} · written {written}"
+        elif on:
+            name = preset or "custom"
+            if name == "off":
+                name = "custom"
+            cleanup = f"{name} · {on} stages"
+        else:
+            cleanup = "off · optional"
+        self.rail.update(states, self._step, cleanup,
+                         finish_detail=self._finish_rail_detail(states))
 
     # ------------------------------------------------------ media facts --
     def _request_facts(self, harvest: bool = False):
@@ -443,7 +468,27 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
             and self._dry_hash.get(self.audio) == self._finish_hash()
 
     def set_book(self, audio: str):
-        self.audio = os.path.abspath(audio)
+        from .multifile_book import is_multifile_book, list_audio
+
+        path = os.path.abspath(audio)
+        if is_multifile_book(path):
+            folder = path if os.path.isdir(path) else os.path.dirname(path)
+            files = list_audio(folder)
+            self.audio = files[0] if files else folder
+            self.work_dir = work_dir_for(self.audio if files else folder)
+            self.app.session.book = folder
+            self.app.session.playhead = 0.0
+            self.app.session.selection = None
+            self.app.session.preview_marks = []
+            self.app.session.emit("book")
+            self.book_var.set(folder)
+            self._enter_multifile(folder)
+            if hasattr(self.app, "sync_library_strip"):
+                self.app.sync_library_strip()
+            return
+
+        self._leave_multifile()
+        self.audio = path
         self.work_dir = work_dir_for(self.audio)
         self.app.session.book = self.audio
         self.app.session.playhead = 0.0
@@ -485,6 +530,56 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         self._maybe_autoscan()
         if hasattr(self.app, "sync_library_strip"):
             self.app.sync_library_strip()
+
+    def _enter_multifile(self, folder: str) -> None:
+        self._multifile_mode = True
+        self.rail.grid_remove()
+        self.timeline.grid_remove()
+        self.workspace.grid_remove()
+        self.multifile.grid(row=2, column=0, sticky="nsew", pady=(4, 0))
+        self.multifile.load(folder)
+        self._step = "multifile"
+        quality = getattr(self, "quality", None)
+        if quality is not None and hasattr(quality, "set_multifile"):
+            quality.set_multifile(folder, self.work_dir)
+
+    def _leave_multifile(self) -> None:
+        if not getattr(self, "_multifile_mode", False):
+            return
+        self._multifile_mode = False
+        quality = getattr(self, "quality", None)
+        if quality is not None and hasattr(quality, "show_multifile_bar"):
+            quality.show_multifile_bar(False)
+            if hasattr(quality, "_multifile"):
+                quality._multifile = False
+        self.multifile.grid_remove()
+        self.rail.grid()
+        self.timeline.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        self.workspace.grid(row=2, column=0, sticky="nsew", pady=(4, 0))
+
+    def _open_multifile_cleanup(self) -> None:
+        """Show Audio cleanup for a multi-file book (no Scan / Finish)."""
+        if not self._multifile_mode:
+            return
+        self.multifile.grid_remove()
+        self.workspace.grid(row=2, column=0, sticky="nsew", pady=(4, 0))
+        self.rail.grid_remove()
+        self.timeline.grid_remove()
+        self.show_step("cleanup")
+        # Back affordance via status strip on multifile; quality gets a back button
+        quality = getattr(self, "quality", None)
+        if quality is not None and hasattr(quality, "show_multifile_bar"):
+            quality.show_multifile_bar(True)
+
+    def return_from_multifile_cleanup(self) -> None:
+        if not self._multifile_mode:
+            return
+        folder = self.multifile.folder
+        self.workspace.grid_remove()
+        self.multifile.grid(row=2, column=0, sticky="nsew", pady=(4, 0))
+        if folder:
+            self.multifile.load(folder)
+        self._step = "multifile"
 
     def _pick_stage(self, key: str):
         """A stage chosen by the user: no automatic re-choice after that."""
@@ -738,7 +833,16 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
                  self.full_btn], "no Whisper interpreter found "
                                  "(set WHISPER_PYTHON)")
         if not self._finalize_dry_ok:
-            off([self.apply_btn], "run a successful Dry run first")
+            off([self.apply_btn], "Apply needs a dry run of these settings")
+            if hasattr(self, "apply_hint"):
+                self.apply_hint.set("Apply needs a dry run of these settings")
+        elif hasattr(self, "apply_hint"):
+            self.apply_hint.set("")
+        if hasattr(self, "bitrate_combo"):
+            if self.include_cleanup.get():
+                self.bitrate_combo.configure(state="readonly")
+            else:
+                self.bitrate_combo.configure(state="disabled")
         mode = self.identify_mode.get()
         if mode == "emb":
             off([self.identify_entry],
@@ -1676,40 +1780,42 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
             return
         proj = getattr(self, "_projection", None)
         if proj is None or not self._chapters_placed():
-            self.chapters_card.set("Chapters: not written")
+            self.chapters_card.set("0 of 0 placed · 0 withheld · 0 pins")
         else:
             pins = sum(1 for row in proj.rows if row.pin)
             withheld = len(proj.rows) - proj.confident_count
+            total = len(proj.rows)
             self.chapters_card.set(
-                f"Chapters: {proj.confident_count} written, "
-                f"{withheld} withheld, {pins} pins")
-        bits = [f"{key} {self.meta_vars[key].get().strip()}"
-                for key in ("title", "author", "album", "year", "genre")
+                f"{proj.confident_count} of {total} placed · "
+                f"{withheld} withheld · {pins} pins")
+        bits = [self.meta_vars[key].get().strip()
+                for key in ("title", "author", "album", "year")
                 if self.meta_vars[key].get().strip()]
-        tags = ", ".join(bits) if bits else "filled in on Match"
-        self.tags_card.set(f"Tags: {tags} · also written to album.nfo")
-        preset = "custom"
+        self.tags_card.set(" · ".join(bits) if bits else "title · author · album · year")
         stages = self.app.session.cleanup.get("stages_on") or 0
         quality = getattr(self, "quality", None)
+        preset = "custom"
         if quality is not None and quality._preset_name:
             preset = quality._preset_name
-        state = "in this write" if self.include_cleanup.get() else "off"
-        about = ""
-        factor = getattr(quality, "_render_factor", None)
-        duration = float(self.app.session.duration or 0)
-        if factor and duration > 0:
-            from chaptertools.gui.quality_tab.tab import _eta
-            about = f" · about {_eta(factor * duration)}"
-        self.cleanup_card.set(
-            f"Audio cleanup: {state} · {preset} · {stages} stages · "
-            f"MP3 {self.bitrate_var.get()}{about}")
+        if self.include_cleanup.get() and stages:
+            self.cleanup_card.set(f"{preset} · {stages} stages")
+        else:
+            self.cleanup_card.set(
+                "Not included — the audio is copied untouched.")
 
     def _clear_dry_log(self):
         self.dry_log.configure(state="normal")
         self.dry_log.delete("1.0", "end")
         self.dry_log.configure(state="disabled")
+        if hasattr(self, "_plan_empty"):
+            self._plan_empty = True
+            if hasattr(self, "_plan_empty_frame"):
+                self._plan_empty_frame.grid()
+                self.dry_log.grid_remove()
 
     def _dry_line(self, line: str):
+        if hasattr(self, "_show_plan_log"):
+            self._show_plan_log()
         self.dry_log.configure(state="normal")
         self.dry_log.insert("end", line.rstrip() + "\n")
         self.dry_log.configure(state="disabled")

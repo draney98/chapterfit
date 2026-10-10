@@ -14,7 +14,7 @@ class PlayerBar(ttk.Frame):
     def __init__(self, master, app):
         super().__init__(master, padding=(8, 2))
         self.app = app
-        self.columnconfigure(7, weight=1)
+        self.columnconfigure(8, weight=1)
         self._build()
         session = app.session
         session.subscribe("playhead", self._show_time)
@@ -34,27 +34,26 @@ class PlayerBar(ttk.Frame):
             ttk.Button(self, text=text, width=4,
                        command=lambda d=delta: self._seek(d)).grid(
                 row=0, column=col, padx=1)
+        self.source_var = tk.StringVar(self, value="edited")
+        self._source = ttk.Frame(self)
         self.time_var = tk.StringVar(value="0:00:00 / —")
         ttk.Label(self, textvariable=self.time_var).grid(
-            row=0, column=5, padx=(8, 4))
+            row=0, column=6, padx=(8, 4))
         self.chapter_var = tk.StringVar(value="")
-        ttk.Label(self, textvariable=self.chapter_var).grid(row=0, column=6)
-        self.source_var = tk.StringVar(self, value="edited")
-        source = ttk.Frame(self)
-        source.grid(row=0, column=8, padx=(8, 4))
+        ttk.Label(self, textvariable=self.chapter_var).grid(row=0, column=7)
         self.edited_btn = ttk.Radiobutton(
-            source, text="Edited", value="edited", variable=self.source_var,
-            command=self._hear, state="disabled")
+            self._source, text="Edited", value="edited",
+            variable=self.source_var, command=self._hear, state="disabled")
         self.original_btn = ttk.Radiobutton(
-            source, text="Original", value="original", variable=self.source_var,
-            command=self._hear, state="disabled")
+            self._source, text="Original", value="original",
+            variable=self.source_var, command=self._hear, state="disabled")
         self.edited_btn.pack(side="left")
         self.original_btn.pack(side="left", padx=(6, 0))
         self.source_buttons = (self.edited_btn, self.original_btn)
         tip = "switch the preview between edited and original audio"
         for button in self.source_buttons:
             tips.tooltip(button, tip)
-        self.status_var = tk.StringVar(value="")
+        self.status_var = tk.StringVar(value="Idle")
         ttk.Label(self, textvariable=self.status_var, anchor="e").grid(
             row=0, column=9, sticky="ew", padx=4)
         self.busy_label = ttk.Label(self, textvariable=self.app.busy_var)
@@ -63,9 +62,10 @@ class PlayerBar(ttk.Frame):
         self.log_btn = ttk.Button(self, text="Log", command=self.app.toggle_log)
         self.log_btn.grid(row=0, column=10, padx=2)
         tips.tooltip(self.log_btn, "open the log (Ctrl+Shift+L)")
-        cancel = ttk.Button(self, text="Cancel job", command=self.app._cancel)
-        cancel.grid(row=0, column=11, padx=(2, 0))
-        tips.tooltip(cancel, "stop the running job and any playback")
+        self.cancel_btn = ttk.Button(
+            self, text="Cancel job", command=self.app._cancel)
+        tips.tooltip(self.cancel_btn, "stop the running job and any playback")
+        # Shown only while a job runs (_show_job).
 
     def _bind_keys(self) -> None:
         root = self.winfo_toplevel()
@@ -129,7 +129,7 @@ class PlayerBar(ttk.Frame):
             quality._toggle_hear()
 
     def show_status(self, line: str) -> None:
-        self.status_var.set(line)
+        self.status_var.set(line or "Idle")
 
     def set_log_errors(self, count: int) -> None:
         self.log_btn.configure(text=f"Log {count}" if count else "Log")
@@ -153,6 +153,14 @@ class PlayerBar(ttk.Frame):
     def _show_job(self) -> None:
         job = self.app.session.job
         self._busy_tip.text = job.detail if job.running else ""
+        if job.running:
+            self.cancel_btn.grid(row=0, column=11, padx=(2, 0))
+            if not self.status_var.get() or self.status_var.get() == "Idle":
+                self.status_var.set(job.detail or "Working…")
+        else:
+            self.cancel_btn.grid_remove()
+            if not self.app.busy_var.get():
+                self.status_var.set("Idle")
 
     def _workflow(self):
         try:
@@ -166,18 +174,26 @@ class PlayerBar(ttk.Frame):
         return getattr(quality, "_player", None)
 
     def _show_hear(self) -> None:
+        """Edited/Original only when Audio cleanup has at least one stage on."""
         workflow = self._workflow()
         quality = getattr(workflow, "quality", None)
+        on = int(self.app.session.cleanup.get("stages_on") or 0)
+        # Also show while a cleanup preview is loaded (stages may be mid-edit)
         loaded = (
             getattr(workflow, "_step", "") == "cleanup"
             and quality is not None
             and getattr(quality, "_preview", None) is not None
         )
-        state = "normal" if loaded else "disabled"
-        flag = ["!disabled"] if loaded else ["disabled"]
-        for button in self.source_buttons:
-            button.configure(state=state)
-            button.state(flag)
+        show = on > 0 or loaded
+        if show:
+            self._source.grid(row=0, column=5, padx=(8, 4))
+            state = "normal" if loaded else "disabled"
+            flag = ["!disabled"] if loaded else ["disabled"]
+            for button in self.source_buttons:
+                button.configure(state=state)
+                button.state(flag)
+        else:
+            self._source.grid_remove()
 
     def _sync_button(self) -> None:
         preview = self._preview_player()
