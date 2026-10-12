@@ -10,10 +10,16 @@ pytest.importorskip("tkinter")
 
 def _button_labels(widget):
     import tkinter as tk
+
+    from chaptertools.gui.theme import ctk_kind, widget_text
+
     labels = []
     for child in widget.winfo_children():
-        if isinstance(child, tk.Misc) and child.winfo_class() in ("TButton", "Button"):
-            labels.append(str(child.cget("text")))
+        if not isinstance(child, tk.Misc):
+            continue
+        kind = ctk_kind(child) or child.winfo_class()
+        if kind in ("TButton", "Button", "CTkButton"):
+            labels.append(widget_text(child))
         labels.extend(_button_labels(child))
     return labels
 

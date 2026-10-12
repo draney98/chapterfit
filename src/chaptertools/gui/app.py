@@ -24,16 +24,38 @@ from .runner import Runner
 from .session import BookSession
 from .step_rail import STEP_LABELS
 from .table import SHORTCUTS
+from .theme import (
+    APPEARANCE_MODES,
+    apply_appearance,
+    ctk_control,
+    ctk_frame,
+    ctk_kind,
+    equalize_segments,
+    is_disabled,
+    load_gui_prefs,
+    require_customtkinter,
+    restyle_ttk,
+    save_gui_prefs,
+    widget_text,
+)
 from .workflow import WorkflowPanel
 
 LIBRARY_WIDTH = 300
 
+ctk = require_customtkinter()
 
-class App(tk.Tk):
+
+class App(ctk.CTk):
     def __init__(self, library_root: str | None = None):
+        prefs = load_gui_prefs()
+        mode = prefs.get("appearance", "Light")
+        if mode not in APPEARANCE_MODES:
+            mode = "Light"
+        apply_appearance(mode)
         super().__init__()
         self.title("chaptertools")
         self.geometry("1600x960")
+        self.appearance_mode = mode
         self.library_root = resolve_library_root(library_root)
         self.runner = Runner()
         file_log.add_pause_hook(self.runner.pause_for_log)
@@ -45,6 +67,7 @@ class App(tk.Tk):
         self.log_errors = 0
 
         self._setup_fonts()
+        restyle_ttk(self)
         self._build_menu()
         self._build_ui()
         self._fill_library()
@@ -52,6 +75,12 @@ class App(tk.Tk):
         self.after_idle(self._place_library_sash)
         self.after(100, self._pump)
         self.protocol("WM_DELETE_WINDOW", self._quit)
+
+    def minsize(self, width=None, height=None):
+        """Query form (no args) still works; CustomTkinter only sets size."""
+        if width is None and height is None:
+            return tk.Tk.minsize(self)
+        return super().minsize(width, height)
 
     def fit_minsize(self):
         """Smallest window in which no panel clips: the widest panel's
@@ -73,11 +102,7 @@ class App(tk.Tk):
             except tk.TclError:
                 continue
             f.configure(size=base + (2 if name == "TkFixedFont" else 0))
-        style = ttk.Style(self)
-        style.theme_use("clam")
-        style.configure("Treeview", rowheight=tkfont.nametofont(
-            "TkDefaultFont", root=self).metrics("linespace") + 6)
-        style.configure("TButton", padding=(8, 1))
+        restyle_ttk(self)
 
     def set_font_size(self, base: int):
         """View menu: every font, column width and minimum size follows."""
@@ -88,6 +113,16 @@ class App(tk.Tk):
         self._render_library(self.search_var.get())
         self.fit_minsize()
         self.log(f"text size {base} pt")
+
+    def set_appearance(self, mode: str):
+        """View menu: Light / Dark / System."""
+        if mode not in APPEARANCE_MODES:
+            return
+        self.appearance_mode = mode
+        apply_appearance(mode)
+        restyle_ttk(self)
+        save_gui_prefs(appearance=mode, library_open=self._library_open)
+        self.log(f"appearance {mode.lower()}")
 
     def _build_menu(self):
         menu = tk.Menu(self)
@@ -104,6 +139,14 @@ class App(tk.Tk):
                          command=lambda: self.set_font_size(self.font_base - 1))
         view.add_command(label="Default text size", accelerator="Ctrl+0",
                          command=lambda: self.set_font_size(11))
+        view.add_separator()
+        appearance = tk.Menu(view, tearoff=0)
+        self._appearance_var = tk.StringVar(value=self.appearance_mode)
+        for mode in APPEARANCE_MODES:
+            appearance.add_radiobutton(
+                label=mode, variable=self._appearance_var, value=mode,
+                command=lambda m=mode: self.set_appearance(m))
+        view.add_cascade(label="Appearance", menu=appearance)
         menu.add_cascade(label="View", menu=view)
         for seq in ("<Control-plus>", "<Control-equal>", "<Control-KP_Add>"):
             self.bind_all(seq, lambda e: self.set_font_size(self.font_base + 1))
@@ -142,66 +185,47 @@ class App(tk.Tk):
         pane.pack(fill="both", expand=True)
 
         # ---- library pane -------------------------------------------------
-        lib = ttk.Frame(pane, padding=4)
+        lib = ctk_frame(pane, corner_radius=0, fg_color="transparent")
         pane.add(lib, weight=0)
         self._lib = lib
-        self._library_open = _load_library_open()
+        self._library_open = bool(load_gui_prefs().get("library_open"))
         self._library_collapsed = False
-        ttk.Style(self).configure("Library.TButton", padding=(2, 2))
-        self._lib_expand = ttk.Button(lib, text="›", width=2,
-                                      style="Library.TButton",
-                                      command=self.toggle_library)
-        self._lib_body = ttk.Frame(lib)
-        self._lib_body.pack(side="top", fill="both", expand=True)
-        searchbar = ttk.Frame(self._lib_body)
+        self._lib_expand = ctk.CTkButton(
+            lib, text="›", width=36, height=28, command=self.toggle_library)
+        self._lib_body = ctk_frame(lib, corner_radius=0, fg_color="transparent")
+        self._lib_body.pack(side="top", fill="both", expand=True, padx=4, pady=4)
+        searchbar = ctk_frame(self._lib_body, fg_color="transparent")
         searchbar.pack(side="top", fill="x", pady=(0, 4))
         self.search_var = tk.StringVar()
-        self._search_placeholder = "Search title or author"
-        self._search_has_placeholder = True
-        self.search_var.set(self._search_placeholder)
-        search_entry = ttk.Entry(searchbar, textvariable=self.search_var,
-                                 foreground="#888888")
+        self._search_has_placeholder = False
+        search_entry = ctk.CTkEntry(
+            searchbar, textvariable=self.search_var,
+            placeholder_text="Search title or author")
         search_entry.pack(side="left", fill="x", expand=True)
         self._search_entry = search_entry
 
-        def _search_focus_in(_e=None):
-            if self._search_has_placeholder:
-                self._search_has_placeholder = False
-                self.search_var.set("")
-                search_entry.configure(foreground="")
-
-        def _search_focus_out(_e=None):
-            if not self.search_var.get().strip():
-                self._search_has_placeholder = True
-                self.search_var.set(self._search_placeholder)
-                search_entry.configure(foreground="#888888")
-
         def _on_search_write(*_a):
-            value = self.search_var.get()
-            if self._search_has_placeholder:
-                if value == self._search_placeholder:
-                    return
-                # Programmatic set (tests / clear) replaces the placeholder
-                self._search_has_placeholder = False
-                search_entry.configure(foreground="")
             self._apply_search()
 
         self.search_var.trace_add("write", _on_search_write)
-        search_entry.bind("<FocusIn>", _search_focus_in)
-        search_entry.bind("<FocusOut>", _search_focus_out)
-        search_entry.bind("<Escape>", lambda e: (
-            self.search_var.set(""), search_entry.configure(foreground="")))
-        ttk.Button(searchbar, text="‹", width=3,
-                   command=self.toggle_library).pack(side="right", padx=(4, 0))
-        chips = ttk.Frame(self._lib_body)
+        search_entry.bind("<Escape>", lambda e: self.search_var.set(""))
+        ctk.CTkButton(searchbar, text="‹", width=36, height=28,
+                      command=self.toggle_library).pack(side="right", padx=(4, 0))
+        chips = ctk_frame(self._lib_body, fg_color="transparent")
         chips.pack(side="top", fill="x", pady=(0, 4))
         self.library_filter = tk.StringVar(value="all")
         self.library_filter.trace_add("write", lambda *_: self._apply_search())
-        for value, label in (("all", "All"), ("work", "Needs work"),
-                             ("done", "Done")):
-            ttk.Radiobutton(chips, text=label, value=value,
-                            variable=self.library_filter).pack(side="left")
-        tree_box = ttk.Frame(self._lib_body)
+        self._lib_filter_labels = {
+            "All": "all", "Needs work": "work", "Done": "done"}
+        self._lib_filter_values = {v: k for k, v in self._lib_filter_labels.items()}
+        self._lib_seg = ctk.CTkSegmentedButton(
+            chips, values=list(self._lib_filter_labels),
+            command=self._on_library_filter, border_width=None,
+            dynamic_resizing=False, height=28)
+        self._lib_seg.set("All")
+        self._lib_seg.pack(side="left", fill="x", expand=True)
+        equalize_segments(self._lib_seg, width=LIBRARY_WIDTH - 24)
+        tree_box = ctk_frame(self._lib_body, fg_color="transparent")
         tree_box.pack(side="top", fill="both", expand=True)
         tree_box.columnconfigure(0, weight=1)
         tree_box.rowconfigure(0, weight=1)
@@ -216,7 +240,7 @@ class App(tk.Tk):
         sb.grid(row=0, column=1, sticky="ns")
         self.lib_tree.configure(yscrollcommand=sb.set)
         self.lib_tree.bind("<<TreeviewSelect>>", self._on_select)
-        self._librivox_btn = ttk.Button(
+        self._librivox_btn = ctk.CTkButton(
             self._lib_body, text="+ Get a book from LibriVox…",
             command=self._open_librivox, state="disabled")
         self._librivox_btn.pack(side="bottom", fill="x", pady=(4, 0))
@@ -242,7 +266,7 @@ class App(tk.Tk):
         self.bind_class("Menu", "<ButtonRelease-1>", self._log_menu_click, add="+")
 
         # ---- main area ----------------------------------------------------
-        main = ttk.Frame(pane)
+        main = ctk_frame(pane, corner_radius=0, fg_color="transparent")
         pane.add(main, weight=1)
         self._book_host = main
         self.workflow = WorkflowPanel(main, app=self)
@@ -251,6 +275,14 @@ class App(tk.Tk):
         self.librivox_view = LibrivoxView(main, app=self)
         # Packed only while Get-from-LibriVox is open.
         self._librivox_btn.configure(state="normal")
+
+    def _on_library_filter(self, label: str) -> None:
+        value = self._lib_filter_labels.get(label, "all")
+        if self.library_filter.get() != value:
+            self.library_filter.set(value)
+        seg_label = self._lib_filter_values.get(value, "All")
+        if self._lib_seg.get() != seg_label:
+            self._lib_seg.set(seg_label)
 
     def toggle_log(self):
         self.log_drawer.toggle()
@@ -306,21 +338,28 @@ class App(tk.Tk):
         # Tkinter leaves event.widget as a path string.
         if not isinstance(widget, tk.Misc):
             return
-        kind = widget.winfo_class()
-        if kind in ("TScale", "Scale", "TSpinbox", "Spinbox"):
+        control = ctk_control(widget)
+        if control is not None:
+            widget = control
+            kind = ctk_kind(widget)
+        else:
+            kind = widget.winfo_class()
+        if kind in ("TScale", "Scale", "TSpinbox", "Spinbox", "CTkSlider"):
             return
         if kind not in (
             "TButton", "Button", "TCheckbutton", "Checkbutton",
             "TRadiobutton", "Radiobutton", "TMenubutton", "Menubutton",
             "TLabel", "Label",
+            "CTkButton", "CTkCheckBox", "CTkSwitch", "CTkRadioButton",
+            "CTkSegmentedButton", "CTkLabel",
         ):
             return
         if self._control_disabled(widget):
             return
-        try:
-            label = str(widget.cget("text") or "").strip()
-        except tk.TclError:
-            return
+        label = widget_text(widget)
+        if kind == "CTkSegmentedButton":
+            with contextlib.suppress(tk.TclError, AttributeError):
+                label = str(widget.get() or "").strip()
         sentence = self._click_sentence(widget, label)
         if sentence:
             self.log(self._with_context(sentence))
@@ -329,14 +368,20 @@ class App(tk.Tk):
         widget = self._target(event)
         if not isinstance(widget, tk.Misc):
             return
-        if widget.winfo_class() not in ("TScale", "Scale", "TSpinbox", "Spinbox"):
+        control = ctk_control(widget)
+        if control is not None and ctk_kind(control) == "CTkSlider":
+            widget = control
+            kind = "CTkSlider"
+        else:
+            kind = widget.winfo_class()
+        if kind not in ("TScale", "Scale", "TSpinbox", "Spinbox", "CTkSlider"):
             return
         if self._control_disabled(widget):
             return
         shown = ""
         try:
             shown = str(widget.get()).strip()
-        except (tk.TclError, ValueError):
+        except (tk.TclError, ValueError, AttributeError):
             shown = ""
         name = self._field_label(widget)
         sentence = f"{name}: {shown}" if shown else name
@@ -380,14 +425,7 @@ class App(tk.Tk):
             self.log(self._with_context(label))
 
     def _control_disabled(self, widget) -> bool:
-        try:
-            return bool(widget.instate(["disabled"]))
-        except (tk.TclError, AttributeError):
-            pass
-        try:
-            return "disabled" in str(widget.cget("state"))
-        except tk.TclError:
-            return False
+        return is_disabled(widget)
 
     def _with_context(self, action: str) -> str:
         context = self._click_context()
@@ -432,20 +470,32 @@ class App(tk.Tk):
         for name in STEP_LABELS.values():
             if label == name or label.endswith("  " + name):
                 return f"Show {name}"
-        kind = widget.winfo_class()
+        kind = ctk_kind(widget) or widget.winfo_class()
         if kind in ("TMenubutton", "Menubutton"):
             return f"Open {label}" if label else "Open the menu"
-        if kind in ("TCheckbutton", "Checkbutton"):
-            taking = "off" if widget.instate(["selected"]) else "on"
+        if kind in ("TCheckbutton", "Checkbutton", "CTkCheckBox", "CTkSwitch"):
+            taking = "on"
+            try:
+                if kind.startswith("CTk"):
+                    taking = "off" if widget.get() else "on"
+                else:
+                    taking = "off" if widget.instate(["selected"]) else "on"
+            except (tk.TclError, AttributeError):
+                pass
             name = label or self._nearby_label(widget) or "Checkbox"
             return f"{name}: {taking}"
-        if kind in ("TRadiobutton", "Radiobutton"):
-            if widget is self.player_bar.original_btn:
+        if kind in ("TRadiobutton", "Radiobutton", "CTkRadioButton",
+                    "CTkSegmentedButton"):
+            if label in {"Original", "original"}:
                 return "Hear original"
-            if widget is self.player_bar.edited_btn:
+            if label in {"Edited", "edited"}:
+                return "Hear edited"
+            if widget is getattr(self.player_bar, "original_btn", None):
+                return "Hear original"
+            if widget is getattr(self.player_bar, "edited_btn", None):
                 return "Hear edited"
             return f"{label or 'Choice'}: on"
-        if kind in ("TLabel", "Label"):
+        if kind in ("TLabel", "Label", "CTkLabel"):
             return self._label_sentence(widget, label)
         if not label or label == "\u21ba":
             return self._reset_sentence(widget)
@@ -602,7 +652,9 @@ class App(tk.Tk):
                 text = str(child.cget("text") or "").strip()
             except tk.TclError:
                 continue
-            if text and not text.isdigit() and child.winfo_class() in ("TLabel", "Label"):
+            kind = ctk_kind(child) or child.winfo_class()
+            if text and not text.isdigit() and kind in (
+                    "TLabel", "Label", "CTkLabel"):
                 return text
         return ""
 
@@ -632,8 +684,6 @@ class App(tk.Tk):
 
     def _render_library(self, query: str | None):
         """(Re)draw the tree; a query of 3+ chars filters by title/author."""
-        if getattr(self, "_search_has_placeholder", False):
-            query = ""
         query = (query or "").strip().lower()
         active = len(query) >= 3
         self.lib_tree.delete(*self.lib_tree.get_children())
@@ -677,8 +727,7 @@ class App(tk.Tk):
             self.lib_tree.selection_set(selected[0])
 
     def _apply_search(self):
-        q = "" if self._search_has_placeholder else self.search_var.get()
-        self._render_library(q)
+        self._render_library(self.search_var.get())
 
     def _open_librivox(self):
         """Open the Get-from-LibriVox view (Part 2)."""
@@ -804,18 +853,24 @@ class App(tk.Tk):
         t = self.player.poll()
         alive = self.player.alive
         self._player_was_alive = alive
-        self._playback_time = t
-        if t is not None:
-            self.session.playhead = t
-        self.player_bar.update_time(t)
-        self.workflow.update_playback(t)
+        # LibriVox sections: mpv's clock is file-local; show book time.
+        book_t = self.workflow.book_time_from_file(t) if hasattr(
+            self.workflow, "book_time_from_file") else t
+        self._playback_time = book_t
+        if book_t is not None:
+            self.session.playhead = book_t
+        self.player_bar.update_time(book_t)
+        self.workflow.update_playback(book_t)
         # Multi-file: continue into the next chapter when one file ends
         if was_alive and not alive and getattr(
+                self.workflow, "section_files", None):
+            self.workflow.play_next_section()
+        elif was_alive and not alive and getattr(
                 self.workflow, "_multifile_mode", False):
             mf = getattr(self.workflow, "multifile", None)
-            if mf is not None and self.session.chapter_index is not None:
-                if self.session.chapter_index + 1 < len(mf.files):
-                    mf.play_next()
+            if (mf is not None and self.session.chapter_index is not None
+                    and self.session.chapter_index + 1 < len(mf.files)):
+                mf.play_next()
         quality_busy = getattr(getattr(self.workflow, "quality", None),
                                "busy", False)
         busy = self.runner.busy or quality_busy
@@ -888,29 +943,10 @@ class App(tk.Tk):
         self.destroy()
 
 
-def _library_pref_path():
-    from chaptertools.audio_quality.presets import config_dir
-    return config_dir() / "gui.json"
-
-
-def _load_library_open() -> bool:
-    """False collapses the list once a book is open."""
-    try:
-        with open(_library_pref_path()) as handle:
-            data = json.load(handle)
-    except (OSError, ValueError):
-        return False
-    return bool(data.get("library_open"))
-
-
 def _save_library_open(open_: bool) -> None:
-    path = _library_pref_path()
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w") as handle:
-            json.dump({"library_open": open_}, handle)
-    except OSError:
-        pass
+    prefs = load_gui_prefs()
+    prefs["library_open"] = open_
+    save_gui_prefs(**prefs)
 
 
 def _book_label(path: str, siblings: list[str]) -> str:
@@ -966,6 +1002,7 @@ def _book_status(folder: str, files: list[str], meta: dict | None) -> str:
 def main(argv: list[str] | None = None):
     if argv is None:
         argv = sys.argv[1:]
+    require_customtkinter()
     library_root = next((a for a in argv if not a.startswith("-")), None)
     app = App(library_root=library_root)
     app.mainloop()

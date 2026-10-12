@@ -16,6 +16,11 @@ if ! .venv/bin/python -c "import numpy, scipy, soundfile, noisereduce, pedalboar
   .venv/bin/python -m pip install -e '.[quality]'
 fi
 
+if ! .venv/bin/python -c "import customtkinter" >/dev/null 2>&1; then
+  .venv/bin/python -m pip install -U pip
+  .venv/bin/python -m pip install -e '.[gui]'
+fi
+
 # DeepFilterNet's published pin wants numpy<2. resemble-enhance 0.0.1 wants
 # torch==2.1.1, which has no Python 3.12 wheel, so it is not installed.
 # The CPU index avoids the default CUDA build on this machine. DeepFilterLib

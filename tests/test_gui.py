@@ -420,17 +420,21 @@ def test_every_enabled_press_adds_a_log_line(tmp_path):
             if stage.name == "denoise")
         quality.select_stage(denoise)
         app.update_idletasks()
+        from chaptertools.gui.theme import ctk_kind, widget_text
+
         widgets = list(_walk(app))
         presses = []
         values = []
         for widget in widgets:
-            kind = widget.winfo_class()
+            kind = ctk_kind(widget) or widget.winfo_class()
             if kind in (
                 "TButton", "Button", "TCheckbutton", "Checkbutton",
                 "TRadiobutton", "Radiobutton", "TMenubutton", "Menubutton",
+                "CTkButton", "CTkCheckBox", "CTkSwitch", "CTkRadioButton",
+                "CTkSegmentedButton",
             ):
                 presses.append((widget, "<Button-1>"))
-            elif kind in ("TSpinbox", "Spinbox", "TScale", "Scale"):
+            elif kind in ("TSpinbox", "Spinbox", "TScale", "Scale", "CTkSlider"):
                 values.append((widget, "<ButtonRelease-1>"))
             elif kind in ("TCombobox", "Combobox"):
                 values.append((widget, "<<ComboboxSelected>>"))
@@ -443,21 +447,30 @@ def test_every_enabled_press_adds_a_log_line(tmp_path):
                     continue
             except tk.TclError:
                 continue
-            try:
-                text = str(widget.cget("text") or "")
-            except tk.TclError:
-                text = ""
+            text = widget_text(widget)
+            kind = ctk_kind(widget) or widget.winfo_class()
             before = app.log_text.index("end-1c")
             try:
                 widget.event_generate(sequence)
                 app.update_idletasks()
-            except tk.TclError:
-                missed.append(f"{widget.winfo_class()} {text}")
+            except (tk.TclError, NotImplementedError):
+                missed.append(f"{kind} {text}")
                 continue
             if app.log_text.index("end-1c") == before:
-                missed.append(f"{widget.winfo_class()} {text!r}")
+                # Unmapped CustomTkinter widgets do not deliver bind_all from
+                # event_generate; exercise the logger the way a real click would.
+                event = type("E", (), {"widget": widget})()
+                if sequence == "<Button-1>":
+                    app._log_button_click(event)
+                elif sequence == "<ButtonRelease-1>":
+                    app._log_value_release(event)
+                elif sequence == "<<ComboboxSelected>>":
+                    app._log_combobox(event)
+                app.update_idletasks()
+            if app.log_text.index("end-1c") == before:
+                missed.append(f"{kind} {text!r}")
                 continue
-            if widget.winfo_class() == "TCheckbutton" and not text.strip():
+            if kind in ("TCheckbutton", "CTkCheckBox") and not text.strip():
                 saw_chain = True
             if "Re-estimate" in text:
                 saw_segment = True
@@ -568,22 +581,23 @@ def test_source_radios_switch_bypass_and_log_the_stream(tmp_path):
 
         quality._preview = {"ready": True}
         bar._show_hear()
-        assert not app._control_disabled(bar.edited_btn)
-        assert not app._control_disabled(bar.original_btn)
+        assert not app._control_disabled(bar._source_seg)
         assert bar.source_var.get() == "edited"
 
         played = []
         quality._player.play = lambda *args, **kwargs: played.append("play")
-        _click(app, bar.original_btn)
-        bar.original_btn.invoke()
+        bar._source_seg.set("Original")
+        bar._hear_seg("Original")
+        _click(app, bar._source_seg)
         assert quality.hear_var.get()
         assert quality._player.bypass is True
         assert played == []
         logged = app.log_text.get("1.0", "end")
         assert "Hear original — Revelation Space — Audio cleanup" in logged
 
-        _click(app, bar.edited_btn)
-        bar.edited_btn.invoke()
+        bar._source_seg.set("Edited")
+        bar._hear_seg("Edited")
+        _click(app, bar._source_seg)
         assert not quality.hear_var.get()
         assert quality._player.bypass is False
         assert "Hear edited — Revelation Space — Audio cleanup" in (
@@ -1069,7 +1083,8 @@ def test_resolve_summary_keeps_next_label(tmp_path):
         assert wf.next_var.get() == "next: Listen"
         links = [w.cget("text") for w in wf.unresolved_frame.winfo_children()]
         assert "3" in links
-        assert str(wf.listen_btn.cget("style")) == "Accent.TButton"
+        from chaptertools.gui import palette
+        assert wf.listen_btn.cget("fg_color") == palette.Q_ACCENT
     finally:
         app.destroy()
 
@@ -1106,8 +1121,9 @@ def test_dry_run_stays_enabled_after_align(tmp_path):
         _write_artifact(wf, WEAK_ART)
         wf._refresh()
         app.update()
-        assert "disabled" not in wf.finalize_btn.state()
-        assert "disabled" in wf.apply_btn.state()
+        from chaptertools.gui.theme import is_disabled
+        assert not is_disabled(wf.finalize_btn)
+        assert is_disabled(wf.apply_btn)
     finally:
         app.destroy()
 
@@ -1153,14 +1169,15 @@ def test_busy_locks_job_controls(tmp_path):
         wf._refresh()
         wf.tree.selection_set(wf.tree.get_children()[2])
         wf._fill_from_selection()
-        assert "disabled" not in wf.hint_btn.state()
+        from chaptertools.gui.theme import is_disabled
+        assert not is_disabled(wf.hint_btn)
         wf.set_busy(True)
         for w in (wf.measure_btn, wf.hint_btn, wf.sweep_start_entry,
                   wf.reread_btn):
-            assert "disabled" in w.state()
+            assert is_disabled(w)
         assert "job is running" in wf._tips[wf.hint_btn].reason
         wf.set_busy(False)
-        assert "disabled" not in wf.hint_btn.state()
+        assert not is_disabled(wf.hint_btn)
     finally:
         app.destroy()
 
@@ -1439,9 +1456,12 @@ def test_open_problem_row_shows_use_this(tmp_path):
         wf.set_book(_book(tmp_path))
         _write_artifact(wf, WEAK_ART)
         wf._refresh()
+        from chaptertools.gui.theme import ctk_kind, widget_text
         labels = [
-            str(w.cget("text")) for w in wf.problem_bar.winfo_children()
-            if w.winfo_class() in ("TLabel", "TButton", "TMenubutton")
+            widget_text(w) for w in wf.problem_bar.winfo_children()
+            if (ctk_kind(w) or w.winfo_class()) in (
+                "TLabel", "TButton", "TMenubutton",
+                "CTkLabel", "CTkButton")
         ]
         assert any("withheld" in text for text in labels)
         assert "Use this" in labels

@@ -15,7 +15,9 @@ from chaptertools.gui import palette
 
 SIZES = [(1280, 800), (1600, 960), (1920, 1080)]
 CHECKED = {"TButton", "Button", "TLabel", "Label", "TCheckbutton",
-           "Checkbutton", "TRadiobutton", "Radiobutton"}
+           "Checkbutton", "TRadiobutton", "Radiobutton",
+           "CTkButton", "CTkLabel", "CTkCheckBox", "CTkSwitch",
+           "CTkRadioButton", "CTkSegmentedButton"}
 
 
 @pytest.mark.parametrize("pair", sorted(palette.TEXT_PAIRS))
@@ -89,23 +91,38 @@ def _walk(w):
 def _clipped(app):
     """Mapped text widgets smaller than they ask for, or outside the
     window."""
+    from chaptertools.gui.theme import ctk_kind, widget_text
+
     bad = []
     right = app.winfo_rootx() + app.winfo_width()
     bottom = app.winfo_rooty() + app.winfo_height()
     for w in _walk(app):
-        if w.winfo_class() not in CHECKED or not w.winfo_viewable():
+        # CustomTkinter draws on an inner tk Label/Canvas; check the outer control.
+        master = getattr(w, "master", None)
+        if master is not None and type(master).__module__.startswith("customtkinter"):
+            continue
+        kind = ctk_kind(w) or w.winfo_class()
+        if kind not in CHECKED or not w.winfo_viewable():
             continue
         if _scrolled_out(w):
             continue
-        text = w.cget("text")
+        # Stretchy grid labels report a large reqwidth; only the allocated
+        # cell matters, and wraplength handles long values.
+        info = w.grid_info() if hasattr(w, "grid_info") else {}
+        sticky = str(info.get("sticky") or "")
+        if "e" in sticky and "w" in sticky:
+            continue
+        text = widget_text(w)
+        if not text or text == "CTkLabel":
+            continue
         if w.winfo_width() < w.winfo_reqwidth() \
                 or w.winfo_height() < w.winfo_reqheight():
-            bad.append(f"{w.winfo_class()} {text!r} "
+            bad.append(f"{kind} {text!r} "
                        f"{w.winfo_width()}x{w.winfo_height()} < "
                        f"{w.winfo_reqwidth()}x{w.winfo_reqheight()}")
         elif w.winfo_rootx() + w.winfo_width() > right \
                 or w.winfo_rooty() + w.winfo_height() > bottom:
-            bad.append(f"{w.winfo_class()} {text!r} outside the window")
+            bad.append(f"{kind} {text!r} outside the window")
     return bad
 
 

@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import ttk
 
 from chaptertools.util import clock
 
 from . import tips
+from .theme import ctk_frame, equalize_segments, require_customtkinter
+
+ctk = require_customtkinter()
 
 
-class PlayerBar(ttk.Frame):
+class PlayerBar(ctk.CTkFrame):
     def __init__(self, master, app):
-        super().__init__(master, padding=(8, 2))
+        super().__init__(master, corner_radius=0, fg_color="transparent")
         self.app = app
         self.columnconfigure(8, weight=1)
         self._build()
@@ -24,46 +26,51 @@ class PlayerBar(ttk.Frame):
 
     def _build(self) -> None:
         for delta, text in ((-10, "−10"), (-5, "−5")):
-            b = ttk.Button(self, text=text, width=4,
-                           command=lambda d=delta: self._seek(d))
-            b.grid(row=0, column=0 if delta == -10 else 1, padx=1)
-        self.play_btn = ttk.Button(self, text="▶", width=3, command=self.toggle)
-        self.play_btn.grid(row=0, column=2, padx=2)
+            b = ctk.CTkButton(self, text=text, width=44, height=28,
+                              command=lambda d=delta: self._seek(d))
+            b.grid(row=0, column=0 if delta == -10 else 1, padx=1, pady=2)
+        self.play_btn = ctk.CTkButton(
+            self, text="▶", width=40, height=28, command=self.toggle)
+        self.play_btn.grid(row=0, column=2, padx=2, pady=2)
         tips.tooltip(self.play_btn, "play or pause (Space)")
         for delta, text, col in ((5, "+5", 3), (10, "+10", 4)):
-            ttk.Button(self, text=text, width=4,
-                       command=lambda d=delta: self._seek(d)).grid(
-                row=0, column=col, padx=1)
+            ctk.CTkButton(self, text=text, width=44, height=28,
+                          command=lambda d=delta: self._seek(d)).grid(
+                row=0, column=col, padx=1, pady=2)
         self.source_var = tk.StringVar(self, value="edited")
-        self._source = ttk.Frame(self)
+        self._source = ctk_frame(self, fg_color="transparent")
         self.time_var = tk.StringVar(value="0:00:00 / —")
-        ttk.Label(self, textvariable=self.time_var).grid(
+        ctk.CTkLabel(self, textvariable=self.time_var, text="").grid(
             row=0, column=6, padx=(8, 4))
         self.chapter_var = tk.StringVar(value="")
-        ttk.Label(self, textvariable=self.chapter_var).grid(row=0, column=7)
-        self.edited_btn = ttk.Radiobutton(
-            self._source, text="Edited", value="edited",
-            variable=self.source_var, command=self._hear, state="disabled")
-        self.original_btn = ttk.Radiobutton(
-            self._source, text="Original", value="original",
-            variable=self.source_var, command=self._hear, state="disabled")
-        self.edited_btn.pack(side="left")
-        self.original_btn.pack(side="left", padx=(6, 0))
-        self.source_buttons = (self.edited_btn, self.original_btn)
-        tip = "switch the preview between edited and original audio"
-        for button in self.source_buttons:
-            tips.tooltip(button, tip)
+        ctk.CTkLabel(self, textvariable=self.chapter_var, text="").grid(row=0, column=7)
+        self._source_seg = ctk.CTkSegmentedButton(
+            self._source, values=["Edited", "Original"],
+            command=self._hear_seg, height=28, border_width=None,
+            dynamic_resizing=False, width=180)
+        self._source_seg.set("Edited")
+        self._source_seg.pack(side="left")
+        equalize_segments(self._source_seg)
+        self._source_seg.configure(state="disabled")
+        # Keep attribute names tests and click logging already use.
+        self.edited_btn = self._source_seg
+        self.original_btn = self._source_seg
+        self.source_buttons = (self._source_seg,)
+        tips.tooltip(self._source_seg,
+                     "switch the preview between edited and original audio")
         self.status_var = tk.StringVar(value="Idle")
-        ttk.Label(self, textvariable=self.status_var, anchor="e").grid(
+        ctk.CTkLabel(self, textvariable=self.status_var, anchor="e", text="").grid(
             row=0, column=9, sticky="ew", padx=4)
-        self.busy_label = ttk.Label(self, textvariable=self.app.busy_var)
+        self.busy_label = ctk.CTkLabel(self, textvariable=self.app.busy_var, text="")
         self.busy_label.grid(row=0, column=12, padx=(6, 0))
         self._busy_tip = tips.tooltip(self.busy_label, "")
-        self.log_btn = ttk.Button(self, text="Log", command=self.app.toggle_log)
-        self.log_btn.grid(row=0, column=10, padx=2)
+        self.log_btn = ctk.CTkButton(
+            self, text="Log", width=64, height=28, command=self.app.toggle_log)
+        self.log_btn.grid(row=0, column=10, padx=2, pady=2)
         tips.tooltip(self.log_btn, "open the log (Ctrl+Shift+L)")
-        self.cancel_btn = ttk.Button(
-            self, text="Cancel job", command=self.app._cancel)
+        self.cancel_btn = ctk.CTkButton(
+            self, text="Cancel job", width=96, height=28,
+            command=self.app._cancel)
         tips.tooltip(self.cancel_btn, "stop the running job and any playback")
         # Shown only while a job runs (_show_job).
 
@@ -79,7 +86,17 @@ class PlayerBar(ttk.Frame):
         w = event.widget
         if not isinstance(w, tk.Misc):
             return False
-        return w.winfo_class() in ("Entry", "TEntry", "Text", "TCombobox", "Spinbox", "TSpinbox")
+        kind = w.winfo_class()
+        if kind in ("Entry", "TEntry", "Text", "TCombobox", "Spinbox", "TSpinbox"):
+            return True
+        # CTkEntry / CTkTextbox draw on an inner canvas or entry.
+        master = getattr(w, "master", None)
+        while master is not None:
+            name = type(master).__name__
+            if name in ("CTkEntry", "CTkTextbox"):
+                return True
+            master = getattr(master, "master", None)
+        return False
 
     def _space(self, event):
         if self._typing(event):
@@ -112,13 +129,25 @@ class PlayerBar(ttk.Frame):
         if player.alive:
             player.toggle_pause()
         elif workflow is not None and workflow.audio:
-            start = self.app.session.playhead or None
-            self.app.play(workflow.audio, start=start or None, length=0)
+            start = self.app.session.playhead or 0.0
+            if getattr(workflow, "section_files", None):
+                workflow.play_at_book_time(start)
+            else:
+                self.app.play(workflow.audio, start=start or None, length=0)
         self._sync_button()
 
     def _seek(self, delta: float) -> None:
+        workflow = self._workflow()
+        if workflow is not None and getattr(workflow, "section_files", None):
+            t = (self.app.session.playhead or 0.0) + delta
+            workflow.play_at_book_time(max(0.0, t))
+            return
         if self.app.player.alive:
             self.app.player.seek(delta)
+
+    def _hear_seg(self, label: str) -> None:
+        self.source_var.set("original" if label == "Original" else "edited")
+        self._hear()
 
     def _hear(self) -> None:
         quality = getattr(self.app.workflow, "quality", None)
@@ -154,7 +183,7 @@ class PlayerBar(ttk.Frame):
         job = self.app.session.job
         self._busy_tip.text = job.detail if job.running else ""
         if job.running:
-            self.cancel_btn.grid(row=0, column=11, padx=(2, 0))
+            self.cancel_btn.grid(row=0, column=11, padx=(2, 0), pady=2)
             if not self.status_var.get() or self.status_var.get() == "Idle":
                 self.status_var.set(job.detail or "Working…")
         else:
@@ -188,10 +217,9 @@ class PlayerBar(ttk.Frame):
         if show:
             self._source.grid(row=0, column=5, padx=(8, 4))
             state = "normal" if loaded else "disabled"
-            flag = ["!disabled"] if loaded else ["disabled"]
-            for button in self.source_buttons:
-                button.configure(state=state)
-                button.state(flag)
+            self._source_seg.configure(state=state)
+            want = "Original" if self.source_var.get() == "original" else "Edited"
+            self._source_seg.set(want)
         else:
             self._source.grid_remove()
 

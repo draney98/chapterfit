@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import tkinter as tk
-from tkinter import ttk
+
+from .theme import require_customtkinter
+
+ctk = require_customtkinter()
 
 _SENTENCES = {
     "measure": "Measuring the audio",
@@ -62,36 +66,49 @@ class JobWindow:
 
     def __init__(self, app):
         self.app = app
-        self.win: tk.Toplevel | None = None
+        self.win: ctk.CTkToplevel | None = None
         self.var = tk.StringVar(value="")
+        self.bar: ctk.CTkProgressBar | None = None
 
     def sync(self) -> None:
         job = self.app.session.job
         if job.running and job.modal:
             self._open()
             self.var.set(job.detail or "Working")
+            if self.bar is not None:
+                self.bar.start()
             return
         self.close()
 
     def _open(self) -> None:
         if self.win is not None and self.win.winfo_exists():
             return
-        win = tk.Toplevel(self.app)
+        win = ctk.CTkToplevel(self.app)
         win.title("Working")
         win.transient(self.app)
         win.resizable(False, False)
         win.protocol("WM_DELETE_WINDOW", self.app._cancel)
-        ttk.Label(win, textvariable=self.var, wraplength=420,
-                  justify="left").pack(padx=16, pady=(16, 8))
-        ttk.Button(win, text="Cancel", command=self.app._cancel).pack(
-            pady=(0, 16))
+        ctk.CTkLabel(win, textvariable=self.var, wraplength=420,
+                     justify="left", text="").pack(padx=16, pady=(16, 8))
+        self.bar = ctk.CTkProgressBar(win, mode="indeterminate", width=280)
+        self.bar.pack(padx=16, pady=(0, 8))
+        self.bar.start()
+        ctk.CTkButton(win, text="Cancel", width=100, height=28,
+                      command=self.app._cancel).pack(pady=(0, 16))
         win.update_idletasks()
+        # Local grab only: this job already captured settings the user
+        # must not edit mid-run. Never grab_set_global.
         win.grab_set()
         self.win = win
 
     def close(self) -> None:
         win = self.win
         self.win = None
+        bar = self.bar
+        self.bar = None
+        if bar is not None:
+            with contextlib.suppress(tk.TclError):
+                bar.stop()
         if win is None:
             return
         try:

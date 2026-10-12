@@ -14,7 +14,10 @@ from tkinter import ttk
 from chaptertools.gui import palette
 from chaptertools.gui.commands import chapterfit_prefix
 from chaptertools.gui.runner import Job
+from chaptertools.gui.theme import ctk_frame, require_customtkinter
 from chaptertools.util import clock
+
+ctk = require_customtkinter()
 
 
 def _readers_label(readers) -> str:
@@ -27,11 +30,11 @@ def _readers_label(readers) -> str:
     return ", ".join(readers)
 
 
-class LibrivoxView(ttk.Frame):
+class LibrivoxView(ctk.CTkFrame):
     """Replaces the book pane while searching or fetching."""
 
     def __init__(self, master, app):
-        super().__init__(master)
+        super().__init__(master, fg_color="transparent", corner_radius=0)
         self.app = app
         self._prev_book: str | None = None
         self._plan: dict | None = None
@@ -42,7 +45,7 @@ class LibrivoxView(ttk.Frame):
         self._mode = "search"  # search | fetch | stop
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
-        self._host = ttk.Frame(self)
+        self._host = ctk_frame(self)
         self._host.grid(row=0, column=0, sticky="nsew")
         self._host.columnconfigure(0, weight=1)
         self._host.rowconfigure(0, weight=1)
@@ -68,44 +71,44 @@ class LibrivoxView(ttk.Frame):
     # -- search UI ----------------------------------------------------------
 
     def _build_search(self):
-        self.search_frame = ttk.Frame(self._host)
+        self.search_frame = ctk_frame(self._host)
         self.search_frame.columnconfigure(0, weight=1)
         self.search_frame.rowconfigure(2, weight=1)
 
-        head = ttk.Frame(self.search_frame)
+        head = ctk_frame(self.search_frame)
         head.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         head.columnconfigure(0, weight=1)
-        ttk.Label(head, text="Get a book from LibriVox",
-                  font=("", 12, "bold")).grid(row=0, column=0, sticky="w")
-        ttk.Label(
+        ctk.CTkLabel(head, text="Get a book from LibriVox",
+                  font=ctk.CTkFont(size=14, weight="bold")).grid(row=0, column=0, sticky="w")
+        ctk.CTkLabel(
             head,
             text="Search the catalog, pick a finished recording, fetch tagged sections.",
-            foreground=palette.MUTED).grid(row=1, column=0, sticky="w")
-        ttk.Button(head, text="Close", command=self.close).grid(
+            text_color=palette.MUTED).grid(row=1, column=0, sticky="w")
+        ctk.CTkButton(head, text="Close", command=self.close).grid(
             row=0, column=1, rowspan=2, sticky="e")
 
-        form = ttk.Frame(self.search_frame)
+        form = ctk_frame(self.search_frame)
         form.grid(row=1, column=0, sticky="ew", pady=(0, 6))
-        ttk.Label(form, text="Title starts with").grid(row=0, column=0, sticky="w")
+        ctk.CTkLabel(form, text="Title starts with").grid(row=0, column=0, sticky="w")
         self.title_var = tk.StringVar()
-        self.title_entry = ttk.Entry(form, textvariable=self.title_var, width=36)
+        self.title_entry = ctk.CTkEntry(form, textvariable=self.title_var, width=280)
         self.title_entry.grid(row=0, column=1, sticky="ew", padx=(6, 12))
-        ttk.Label(form, text="Author last name").grid(row=0, column=2, sticky="w")
+        ctk.CTkLabel(form, text="Author last name").grid(row=0, column=2, sticky="w")
         self.author_var = tk.StringVar()
-        self.author_entry = ttk.Entry(form, textvariable=self.author_var, width=20)
+        self.author_entry = ctk.CTkEntry(form, textvariable=self.author_var, width=160)
         self.author_entry.grid(row=0, column=3, sticky="ew", padx=(6, 12))
-        ttk.Button(form, text="Search", command=self._do_search).grid(
+        ctk.CTkButton(form, text="Search", command=self._do_search).grid(
             row=0, column=4, sticky="e")
         form.columnconfigure(1, weight=1)
-        ttk.Label(
+        ctk.CTkLabel(
             form,
             text="Matches from the start of the title — try the first word or two.",
-            foreground=palette.MUTED).grid(
+            text_color=palette.MUTED).grid(
             row=1, column=0, columnspan=5, sticky="w", pady=(4, 0))
         for entry in (self.title_entry, self.author_entry):
             entry.bind("<Return>", lambda _e: self._do_search())
 
-        body = ttk.Frame(self.search_frame)
+        body = ctk_frame(self.search_frame)
         body.grid(row=2, column=0, sticky="nsew")
         body.columnconfigure(0, weight=1)
         body.columnconfigure(1, weight=0)
@@ -131,7 +134,7 @@ class LibrivoxView(ttk.Frame):
         self.results.bind("<Double-1>", self._on_result_activate)
         self.results.bind("<Return>", self._on_result_activate)
 
-        self.detail = ttk.Frame(body, width=470)
+        self.detail = ctk_frame(body, width=470)
         self.detail.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
         self.detail.grid_propagate(False)
         self.detail.columnconfigure(0, weight=1)
@@ -141,86 +144,87 @@ class LibrivoxView(ttk.Frame):
         self._detail_path = tk.StringVar(value="")
         self._detail_note = tk.StringVar(
             value="Files are named 00 - Title.mp3. Audio is not re-encoded.")
-        ttk.Label(self.detail, textvariable=self._detail_title,
-                  font=("", 11, "bold"), wraplength=440).grid(
+        ctk.CTkLabel(self.detail, textvariable=self._detail_title,
+                  font=ctk.CTkFont(size=13, weight="bold"), wraplength=440).grid(
             row=0, column=0, sticky="w")
-        ttk.Label(self.detail, textvariable=self._detail_meta,
-                  foreground=palette.MUTED, wraplength=440).grid(
+        ctk.CTkLabel(self.detail, textvariable=self._detail_meta,
+                  text_color=palette.MUTED, wraplength=440, text="").grid(
             row=1, column=0, sticky="w", pady=(2, 6))
-        set_row = ttk.Frame(self.detail)
+        set_row = ctk_frame(self.detail)
         set_row.grid(row=2, column=0, sticky="ew")
-        ttk.Label(set_row, text="Audio").pack(side="left")
+        ctk.CTkLabel(set_row, text="Audio").pack(side="left")
         self.set_combo = ttk.Combobox(
             set_row, textvariable=self._set_var, state="readonly", width=22)
         self.set_combo.pack(side="left", padx=(6, 0))
         self.set_combo.bind("<<ComboboxSelected>>", lambda _e: self._replan())
-        self._order_lbl = ttk.Label(
-            self.detail, textvariable=self._detail_order, wraplength=440)
+        self._order_lbl = ctk.CTkLabel(
+            self.detail, textvariable=self._detail_order, wraplength=440, text="")
         self._order_lbl.grid(row=3, column=0, sticky="w", pady=(6, 0))
-        ttk.Label(self.detail, textvariable=self._detail_path,
-                  foreground=palette.MUTED, wraplength=440).grid(
+        ctk.CTkLabel(self.detail, textvariable=self._detail_path,
+                  text_color=palette.MUTED, wraplength=440, text="").grid(
             row=4, column=0, sticky="w", pady=(4, 0))
         self.section_list = tk.Listbox(self.detail, height=12)
         self.section_list.grid(row=5, column=0, sticky="nsew", pady=(6, 0))
         self.detail.rowconfigure(5, weight=1)
-        ttk.Label(self.detail, textvariable=self._detail_note,
-                  foreground=palette.MUTED, wraplength=440).grid(
+        ctk.CTkLabel(self.detail, textvariable=self._detail_note,
+                  text_color=palette.MUTED, wraplength=440, text="").grid(
             row=6, column=0, sticky="w", pady=(4, 0))
-        self.fetch_btn = ttk.Button(
+        self.fetch_btn = ctk.CTkButton(
             self.detail, text="Fetch into library",
             command=self._start_fetch, state="disabled")
         self.fetch_btn.grid(row=7, column=0, sticky="ew", pady=(8, 0))
 
         self._status_var = tk.StringVar(value="")
-        ttk.Label(self.search_frame, textvariable=self._status_var,
-                  foreground=palette.MUTED).grid(
+        ctk.CTkLabel(self.search_frame, textvariable=self._status_var,
+                  text_color=palette.MUTED, text="").grid(
             row=3, column=0, sticky="w", pady=(6, 0))
         self._empty_var = tk.StringVar(value="")
-        ttk.Label(self.search_frame, textvariable=self._empty_var,
-                  foreground=palette.MUTED).grid(
+        ctk.CTkLabel(self.search_frame, textvariable=self._empty_var,
+                  text_color=palette.MUTED, text="").grid(
             row=4, column=0, sticky="w")
 
         self._hits: dict[str, dict] = {}
         self._unfinished_ids: set[str] = set()
 
     def _build_fetch(self):
-        self.fetch_frame = ttk.Frame(self._host)
+        self.fetch_frame = ctk_frame(self._host)
         self.fetch_frame.columnconfigure(0, weight=1)
         self.fetch_frame.rowconfigure(4, weight=1)
 
-        head = ttk.Frame(self.fetch_frame)
+        head = ctk_frame(self.fetch_frame)
         head.grid(row=0, column=0, sticky="ew")
         head.columnconfigure(0, weight=1)
         self._fetch_head = tk.StringVar(value="Fetching…")
         self._fetch_sub = tk.StringVar(value="")
-        ttk.Label(head, textvariable=self._fetch_head,
-                  font=("", 12, "bold")).grid(row=0, column=0, sticky="w")
-        ttk.Label(head, textvariable=self._fetch_sub,
-                  foreground=palette.MUTED).grid(row=1, column=0, sticky="w")
-        ttk.Button(head, text="Back to search",
+        ctk.CTkLabel(head, textvariable=self._fetch_head,
+                  font=ctk.CTkFont(size=14, weight="bold")).grid(row=0, column=0, sticky="w")
+        ctk.CTkLabel(head, textvariable=self._fetch_sub,
+                  text_color=palette.MUTED, text="").grid(row=1, column=0, sticky="w")
+        ctk.CTkButton(head, text="Back to search",
                    command=self._show_search).grid(row=0, column=1, rowspan=2)
 
-        stages = ttk.Frame(self.fetch_frame)
+        stages = ctk_frame(self.fetch_frame)
         stages.grid(row=1, column=0, sticky="ew", pady=(8, 4))
         for i, name in enumerate(("Check", "Download", "Tag", "Add to library")):
-            ttk.Label(stages, text=name, padding=(8, 2)).grid(row=0, column=i)
+            ctk.CTkLabel(stages, text=name).grid(row=0, column=i)
 
-        prog = ttk.Frame(self.fetch_frame)
+        prog = ctk_frame(self.fetch_frame)
         prog.grid(row=2, column=0, sticky="ew", pady=(4, 0))
         prog.columnconfigure(0, weight=1)
-        self._progress = ttk.Progressbar(prog, mode="determinate", maximum=100)
+        self._progress = ctk.CTkProgressBar(prog, mode="determinate")
+        self._progress.set(0)
         self._progress.grid(row=0, column=0, sticky="ew")
         self._progress_lbl = tk.StringVar(value="")
-        ttk.Label(prog, textvariable=self._progress_lbl).grid(
+        ctk.CTkLabel(prog, textvariable=self._progress_lbl, text="").grid(
             row=0, column=1, padx=(8, 0))
-        self.pause_btn = ttk.Button(prog, text="Pause", command=self._toggle_pause)
+        self.pause_btn = ctk.CTkButton(prog, text="Pause", command=self._toggle_pause)
         self.pause_btn.grid(row=0, column=2, padx=(8, 0))
 
-        ttk.Label(
+        ctk.CTkLabel(
             self.fetch_frame,
             text="Safe to pause or quit: finished files stay, "
                  "the current one resumes from where it stopped.",
-            foreground=palette.MUTED).grid(row=3, column=0, sticky="w", pady=4)
+            text_color=palette.MUTED).grid(row=3, column=0, sticky="w", pady=4)
 
         cols = ("num", "file", "reader", "time", "size", "state")
         self.file_tree = ttk.Treeview(
@@ -233,16 +237,16 @@ class LibrivoxView(ttk.Frame):
             self.file_tree.column(col, width=width, stretch=col == "file")
         self.file_tree.grid(row=4, column=0, sticky="nsew")
 
-        self._stop_frame = ttk.Frame(self.fetch_frame)
+        self._stop_frame = ctk_frame(self.fetch_frame)
         self._stop_frame.grid(row=2, column=0, rowspan=2, sticky="nsew")
         self._stop_frame.grid_remove()
         self._stop_title = tk.StringVar()
         self._stop_body = tk.StringVar()
-        ttk.Label(self._stop_frame, textvariable=self._stop_title,
-                  font=("", 12, "bold")).pack(anchor="w", pady=(8, 4))
-        ttk.Label(self._stop_frame, textvariable=self._stop_body,
-                  wraplength=520).pack(anchor="w", pady=(0, 8))
-        self._stop_btns = ttk.Frame(self._stop_frame)
+        ctk.CTkLabel(self._stop_frame, textvariable=self._stop_title,
+                  font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", pady=(8, 4))
+        ctk.CTkLabel(self._stop_frame, textvariable=self._stop_body,
+                  wraplength=520, text="").pack(anchor="w", pady=(0, 8))
+        self._stop_btns = ctk_frame(self._stop_frame)
         self._stop_btns.pack(anchor="w")
 
     def _show_search(self):
@@ -395,7 +399,7 @@ class LibrivoxView(ttk.Frame):
                 self._detail_order.set(
                     f"Playlist {obj.get('playlist_count')} · "
                     f"catalog {obj.get('section_count')} — counts differ")
-                self._order_lbl.configure(foreground="#B00020")
+                self._order_lbl.configure(text_color="#B00020")
             else:
                 self._detail_order.set("")
             self.fetch_btn.configure(state="disabled")
@@ -417,7 +421,7 @@ class LibrivoxView(ttk.Frame):
         pc, sc = obj.get("playlist_count"), obj.get("section_count")
         self._detail_order.set(f"Playlist {pc} · catalog {sc}")
         self._order_lbl.configure(
-            foreground="#B00020" if pc != sc else palette.MUTED)
+            text_color="#B00020" if pc != sc else palette.MUTED)
         dest = obj.get("dest") or ""
         self._detail_path.set(f"Saves to {dest}")
         self.section_list.delete(0, "end")
@@ -585,12 +589,12 @@ class LibrivoxView(ttk.Frame):
                 1 for c in self.file_tree.get_children()
                 if "✓" in str(self.file_tree.item(c, "values")[5]))
             pct = int(100 * done / total) if total else 0
-            self._progress["value"] = pct
+            self._progress.set(pct / 100.0)
             self._progress_lbl.set(f"{done} of {total} files · {pct}%")
             self.app.session.set_job_detail(f"Fetching {done} of {total} · {pct}%")
             self.app.player_bar.show_status(f"Fetching {done} of {total} · {pct}%")
         elif event == "done":
-            self._progress["value"] = 100
+            self._progress.set(1.0)
 
     def _toggle_pause(self):
         if self._paused:
@@ -623,5 +627,5 @@ class LibrivoxView(ttk.Frame):
         for child in self._stop_btns.winfo_children():
             child.destroy()
         for label, cmd in buttons:
-            ttk.Button(self._stop_btns, text=label, command=cmd).pack(
+            ctk.CTkButton(self._stop_btns, text=label, command=cmd).pack(
                 side="left", padx=(0, 8))

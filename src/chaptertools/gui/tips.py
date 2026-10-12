@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import tkinter as tk
 
+from chaptertools.gui import palette
+
 
 class Tip:
     """One widget's hover tooltip. Created by `tooltip()`; not directly.
@@ -17,9 +19,14 @@ class Tip:
         self.reason: str | None = None
         self._tipwin: tk.Toplevel | None = None
         self._after = None
-        widget.bind("<Enter>", self._schedule, add="+")
-        widget.bind("<Leave>", self.hide, add="+")
-        widget.bind("<ButtonPress>", self.hide, add="+")
+        # CustomTkinter SegmentedButton (and a few others) refuse bind().
+        for target in (widget, *getattr(widget, "_buttons_dict", {}).values()):
+            try:
+                target.bind("<Enter>", self._schedule, add="+")
+                target.bind("<Leave>", self.hide, add="+")
+                target.bind("<ButtonPress>", self.hide, add="+")
+            except (NotImplementedError, tk.TclError, AttributeError):
+                continue
 
     @property
     def shown_text(self) -> str:
@@ -39,10 +46,12 @@ class Tip:
         self._tipwin = tw = tk.Toplevel(self.widget)
         tw.wm_overrideredirect(True)
         tw.wm_geometry(f"+{x}+{y}")
+        # Borderless tip: never take focus or a grab.
         tk.Label(tw, text=self.shown_text, justify="left",
-                 background="#ffffe0", foreground="#1a1a1a",
+                 background=palette.TIP, foreground=palette.TEXT,
                  relief="solid", borderwidth=1, padx=6, pady=3,
-                 wraplength=480, font="TkDefaultFont").pack()
+                 wraplength=480, font="TkDefaultFont",
+                 takefocus=0).pack()
 
     def hide(self, _event=None):
         if self._after is not None:

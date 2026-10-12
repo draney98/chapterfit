@@ -5,50 +5,63 @@ from __future__ import annotations
 import tkinter as tk
 import tkinter.font as tkfont
 from datetime import datetime
-from tkinter import filedialog, ttk
+from tkinter import filedialog
 
 from chaptertools import file_log
 
 from . import tips
+from .theme import ctk_frame, require_customtkinter
+
+ctk = require_customtkinter()
 
 
 class LogDrawer:
     def __init__(self, app):
         self.app = app
-        self.win = tk.Toplevel(app)
+        self.win = ctk.CTkToplevel(app)
         self.win.title("Log")
         self.win.geometry("720x320")
         self.win.withdraw()
         self.win.protocol("WM_DELETE_WINDOW", self.hide)
-        bar = ttk.Frame(self.win)
-        bar.pack(side="top", fill="x")
-        copy = ttk.Button(bar, text="Copy all", command=self.copy_all)
+        bar = ctk_frame(self.win, fg_color="transparent")
+        bar.pack(side="top", fill="x", padx=4, pady=4)
+        copy = ctk.CTkButton(bar, text="Copy all", width=90, height=28,
+                             command=self.copy_all)
         copy.pack(side="right", padx=(0, 2))
         tips.tooltip(copy, "copy the whole log to the clipboard")
-        clear = ttk.Button(bar, text="Clear log", command=self.clear)
+        clear = ctk.CTkButton(bar, text="Clear log", width=90, height=28,
+                              command=self.clear)
         clear.pack(side="right", padx=(0, 8))
         tips.tooltip(clear, "empty the log")
-        save = ttk.Button(bar, text="Save log…", command=self.save)
+        save = ctk.CTkButton(bar, text="Save log…", width=90, height=28,
+                             command=self.save)
         save.pack(side="right", padx=(0, 8))
         tips.tooltip(save, "write the log to a file")
-        self.text = tk.Text(
-            self.win, height=12, wrap="none",
-            font=tkfont.nametofont("TkFixedFont", root=app))
-        self.text.pack(side="top", fill="both", expand=True)
-        scroll = ttk.Scrollbar(self.win, orient="vertical", command=self.text.yview)
-        scroll.pack(side="right", fill="y")
-        self.text.configure(yscrollcommand=scroll.set)
+        fixed = tkfont.nametofont("TkFixedFont", root=app)
+        self.text = ctk.CTkTextbox(
+            self.win, height=280, wrap="none",
+            font=ctk.CTkFont(family=fixed.actual("family"),
+                             size=fixed.actual("size")))
+        self.text.pack(side="top", fill="both", expand=True, padx=4, pady=(0, 4))
         self.text.bind("<Key>", self._key)
         self.text.bind("<Button-2>", lambda e: "break")
         self.text.bind("<ButtonRelease-2>", lambda e: "break")
         menu = tk.Menu(self.text, tearoff=0)
         menu.add_command(label="Copy", command=self._copy_selection)
-        menu.add_command(label="Select all",
-                         command=lambda: self.text.tag_add("sel", "1.0", "end"))
+        menu.add_command(label="Select all", command=self._select_all)
         menu.add_command(label="Copy everything", command=self.copy_all)
         menu.add_command(label="Save log…", command=self.save)
-        self.text.bind("<Button-3>", lambda e: menu.tk_popup(e.x_root, e.y_root))
+        self._menu = menu
+        self.text.bind("<Button-3>", self._popup_menu)
         self.visible = False
+
+    def _popup_menu(self, event) -> None:
+        """Right-click menu; always release the grab (tkinter safety)."""
+        menu = self._menu
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
 
     def toggle(self) -> None:
         if self.visible:
@@ -76,7 +89,8 @@ class LogDrawer:
         text = f"{stamp} {line}\n"
         self.text.insert("end", text)
         file_log.write(text)
-        if int(self.text.index("end-1c").split(".")[0]) > 5000:
+        end_index = self.text.index("end-1c")
+        if int(str(end_index).split(".")[0]) > 5000:
             self.text.delete("1.0", "2.0")
         if not self.text.tag_ranges("sel"):
             self.text.see("end")
@@ -90,9 +104,16 @@ class LogDrawer:
         self.app.clipboard_clear()
         self.app.clipboard_append(self.text.get("1.0", "end-1c"))
 
+    def _select_all(self) -> None:
+        self.text.tag_add("sel", "1.0", "end")
+
     def _copy_selection(self) -> None:
         if self.text.tag_ranges("sel"):
-            self.text.event_generate("<<Copy>>")
+            try:
+                self.app.clipboard_clear()
+                self.app.clipboard_append(self.text.get("sel.first", "sel.last"))
+            except tk.TclError:
+                pass
 
     def save(self) -> None:
         path = filedialog.asksaveasfilename(

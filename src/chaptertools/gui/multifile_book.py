@@ -1,6 +1,8 @@
-"""Multi-file LibriVox book pane: status strip, file strip, chapter table.
+"""Helpers and a legacy status pane for LibriVox section folders.
 
-No Scan / Match / Place / Finish. Audio cleanup is optional (Part 4).
+Opening a LibriVox book uses the normal Scan → Match → Place → Finish
+rail (see WorkflowPanel.set_book). This module still lists files and
+loads librivox.json; MultifileBook is kept for optional cleanup UI.
 """
 from __future__ import annotations
 
@@ -11,8 +13,10 @@ from tkinter import ttk
 from webbrowser import open as open_url
 
 from chaptertools.gui import palette
+from chaptertools.gui.theme import ctk_frame, require_customtkinter
 from chaptertools.util import clock
 
+ctk = require_customtkinter()
 
 AUDIO_EXTS = {".mp3", ".m4a", ".m4b", ".flac", ".ogg", ".wav"}
 
@@ -46,9 +50,9 @@ def is_multifile_book(path: str) -> bool:
     return load_librivox(folder) is not None
 
 
-class MultifileBook(ttk.Frame):
+class MultifileBook(ctk.CTkFrame):
     def __init__(self, master, app, on_cleanup):
-        super().__init__(master)
+        super().__init__(master, fg_color="transparent", corner_radius=0)
         self.app = app
         self.on_cleanup = on_cleanup
         self.folder = ""
@@ -58,43 +62,43 @@ class MultifileBook(ttk.Frame):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(3, weight=1)
 
-        head = ttk.Frame(self)
+        head = ctk_frame(self)
         head.grid(row=0, column=0, sticky="ew", pady=(0, 6))
         head.columnconfigure(0, weight=1)
         self.title_var = tk.StringVar()
         self.author_var = tk.StringVar()
         self.meta_var = tk.StringVar()
-        ttk.Label(head, textvariable=self.title_var,
-                  font=("", 13, "bold")).grid(row=0, column=0, sticky="w")
-        ttk.Label(head, textvariable=self.author_var).grid(
+        ctk.CTkLabel(head, textvariable=self.title_var,
+                  font=ctk.CTkFont(size=15, weight="bold")).grid(row=0, column=0, sticky="w")
+        ctk.CTkLabel(head, textvariable=self.author_var, text="").grid(
             row=1, column=0, sticky="w")
-        ttk.Label(head, textvariable=self.meta_var,
-                  foreground=palette.MUTED).grid(row=2, column=0, sticky="w")
-        nav = ttk.Frame(head)
+        ctk.CTkLabel(head, textvariable=self.meta_var,
+                  text_color=palette.MUTED, text="").grid(row=2, column=0, sticky="w")
+        nav = ctk_frame(head)
         nav.grid(row=0, column=1, rowspan=3, sticky="e")
-        ttk.Button(nav, text="◀ Prev", width=8,
+        ctk.CTkButton(nav, text="◀ Prev", width=80, height=28,
                    command=self.play_prev).pack(side="left", padx=2)
-        ttk.Button(nav, text="Next ▶", width=8,
+        ctk.CTkButton(nav, text="Next ▶", width=80, height=28,
                    command=self.play_next).pack(side="left", padx=2)
 
-        strip = ttk.Frame(self)
+        strip = ctk_frame(self)
         strip.grid(row=1, column=0, sticky="ew", pady=(0, 6))
         self.chapters_status = tk.StringVar(
             value="✓ Chapters — files, one per chapter — nothing to scan, match or place")
         self.cleanup_status = tk.StringVar(value="○ Audio cleanup — off · optional")
-        ch = ttk.Label(strip, textvariable=self.chapters_status, cursor="hand2")
+        ch = ctk.CTkLabel(strip, textvariable=self.chapters_status, cursor="hand2", text="")
         ch.pack(side="left", padx=(0, 16))
-        cu = ttk.Label(strip, textvariable=self.cleanup_status, cursor="hand2")
+        cu = ctk.CTkLabel(strip, textvariable=self.cleanup_status, cursor="hand2", text="")
         cu.pack(side="left")
         cu.bind("<Button-1>", lambda _e: self.on_cleanup())
 
-        self.file_strip = tk.Canvas(self, height=36, bg="#E9E7E2",
+        self.file_strip = tk.Canvas(self, height=36, bg=palette.RAIL_IDLE,
                                     highlightthickness=0)
         self.file_strip.grid(row=2, column=0, sticky="ew", pady=(0, 6))
         self.file_strip.bind("<Button-1>", self._strip_click)
         self.file_strip.bind("<Configure>", lambda _e: self._draw_strip())
 
-        body = ttk.Frame(self)
+        body = ctk_frame(self)
         body.grid(row=3, column=0, sticky="nsew")
         body.columnconfigure(0, weight=1)
         body.columnconfigure(1, weight=0)
@@ -114,28 +118,28 @@ class MultifileBook(ttk.Frame):
         sb.grid(row=0, column=0, sticky="nse")
         self.table.configure(yscrollcommand=sb.set)
 
-        side = ttk.Frame(body, width=380)
+        side = ctk_frame(body, width=380)
         side.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
         side.grid_propagate(False)
         self._source_text = tk.StringVar()
         self._tags_text = tk.StringVar()
-        ttk.Label(side, text="Source", font=("", 10, "bold")).pack(anchor="w")
-        ttk.Label(side, textvariable=self._source_text, wraplength=360,
-                  justify="left").pack(anchor="w", pady=(0, 8))
-        btns = ttk.Frame(side)
+        ctk.CTkLabel(side, text="Source", font=ctk.CTkFont(size=12, weight="bold")).pack(anchor="w")
+        ctk.CTkLabel(side, textvariable=self._source_text, wraplength=360,
+                  justify="left", text="").pack(anchor="w", pady=(0, 8))
+        btns = ctk_frame(side)
         btns.pack(anchor="w", pady=(0, 12))
-        ttk.Button(btns, text="Open folder",
+        ctk.CTkButton(btns, text="Open folder",
                    command=self._open_folder).pack(side="left", padx=(0, 6))
-        ttk.Button(btns, text="LibriVox page",
+        ctk.CTkButton(btns, text="LibriVox page",
                    command=self._open_lv).pack(side="left")
-        ttk.Label(side, text="Tags", font=("", 10, "bold")).pack(anchor="w")
-        ttk.Label(side, textvariable=self._tags_text, wraplength=360,
-                  justify="left").pack(anchor="w")
+        ctk.CTkLabel(side, text="Tags", font=ctk.CTkFont(size=12, weight="bold")).pack(anchor="w")
+        ctk.CTkLabel(side, textvariable=self._tags_text, wraplength=360,
+                  justify="left", text="").pack(anchor="w")
 
-        ttk.Label(
+        ctk.CTkLabel(
             self,
             text="A single glued-together file still goes through Scan, Match, and Place.",
-            foreground=palette.MUTED).grid(row=4, column=0, sticky="w", pady=(6, 0))
+            text_color=palette.MUTED).grid(row=4, column=0, sticky="w", pady=(6, 0))
 
     def load(self, path: str) -> None:
         folder = path if os.path.isdir(path) else os.path.dirname(path)
@@ -213,7 +217,7 @@ class MultifileBook(ttk.Frame):
             c.create_rectangle(x, 4, x + bw - 1, 32, fill=color, outline="")
             c.create_text(x + 4, 18, anchor="w", text=str(i),
                           fill="#fff" if i == self._index else "#333",
-                          font=("", 8))
+                          font=ctk.CTkFont(size=10))
             x += bw
 
     def _strip_click(self, event):

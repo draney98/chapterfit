@@ -15,6 +15,11 @@ BLOCKED = "#555555"     # blocked stage labels
 LINK = "#0b4a94"        # clickable chapter numbers
 BANNER = "#ffe9c8"      # attention strip background
 TIP = "#ffffe0"         # tooltip background
+BORDER = "#C8C5BE"      # card outlines, rail gaps
+RAIL_IDLE = "#E9E7E2"   # step rail idle cell
+RAIL_CURRENT = FIELD    # step rail selected cell
+RAIL_ACCENT = "#4A6984" # selected step underline
+RAIL_DONE = "#2E7D32"   # done step title
 
 ROW_UNPLACED = "#b0b0b0"   # owner directive: light grey
 ROW_LOWCONF = "#e8c680"
@@ -39,6 +44,34 @@ Q_CLIP = "#D97706"
 Q_NOISY = "#EADFC8"
 Q_ON_ACCENT = "#FFFFFF"
 
+# CTkButton faces (theme.json). Disabled fill is muted so off actions
+# stay readable instead of grey-on-slate.
+BTN_FACE = "#4A6984"
+BTN_FACE_DARK = "#3a5670"
+BTN_DISABLED_FACE = "#5A738C"
+BTN_DISABLED_FACE_DARK = "#4a5a6a"
+BTN_DISABLED_TEXT = "#E8E6E1"
+BTN_DISABLED_TEXT_DARK = "#D5D3CD"
+BTN_ON_DISABLED = "#FFFFFF"  # light mode: white on muted fill
+
+# Dark appearance (CustomTkinter Dark mode). Checked for WCAG AA too.
+D_WINDOW = "#1e1e1c"
+D_FIELD = "#2a2a28"
+D_TEXT = "#E8E6E1"
+D_MUTED = "#B0AEA8"
+D_BORDER = "#3d3d3a"
+D_SELECT = "#243548"
+D_PANEL = "#2a2a28"
+D_GROUND = "#1e1e1c"
+D_WARN_BG = "#3d2e14"
+D_WARN_TEXT = "#F0C080"
+D_OK = "#81C784"
+D_TIP = "#3d3d20"
+D_BANNER = "#3d2e14"
+D_ROW_UNPLACED = "#4a4a4a"
+D_ROW_LOWCONF = "#6b5320"
+D_ROW_CONFLICT = "#6b3030"
+
 # (foreground, background) pairs that carry text
 TEXT_PAIRS = {
     "body": (TEXT, WINDOW),
@@ -62,6 +95,29 @@ TEXT_PAIRS = {
     "q-warn": (Q_WARN_TEXT, Q_WARN_BG),
     "q-accent": (Q_ON_ACCENT, Q_ACCENT),
     "q-changed": (Q_TEXT, Q_SELECT),
+    "btn": (Q_ON_ACCENT, BTN_FACE),
+    "btn-disabled-theme": (BTN_DISABLED_TEXT, BTN_FACE),
+    "btn-disabled": (BTN_ON_DISABLED, BTN_DISABLED_FACE),
+    "seg-unselected": (Q_ON_ACCENT, BTN_DISABLED_FACE),
+    "d-body": (D_TEXT, D_WINDOW),
+    "d-muted": (D_MUTED, D_WINDOW),
+    "d-ok": (D_OK, D_WINDOW),
+    "d-warn": (D_WARN_TEXT, D_WINDOW),
+    "d-banner": (D_WARN_TEXT, D_BANNER),
+    "d-tip": (D_TEXT, D_TIP),
+    "d-row": (D_TEXT, D_FIELD),
+    "d-row-unplaced": (D_TEXT, D_ROW_UNPLACED),
+    "d-row-lowconf": (D_TEXT, D_ROW_LOWCONF),
+    "d-row-conflict": (D_TEXT, D_ROW_CONFLICT),
+    "d-panel": (D_TEXT, D_PANEL),
+    "d-muted-panel": (D_MUTED, D_PANEL),
+    "d-select": (D_TEXT, D_SELECT),
+    "d-warn-panel": (D_WARN_TEXT, D_WARN_BG),
+    "d-accent": (Q_ON_ACCENT, Q_ACCENT),
+    "d-btn": (Q_ON_ACCENT, BTN_FACE_DARK),
+    "d-btn-disabled-theme": (BTN_DISABLED_TEXT_DARK, BTN_FACE_DARK),
+    "d-btn-disabled": (BTN_DISABLED_TEXT, BTN_DISABLED_FACE_DARK),
+    "d-seg-unselected": (Q_ON_ACCENT, BTN_FACE_DARK),
 }
 
 

@@ -6,32 +6,35 @@ import tkinter as tk
 from tkinter import ttk
 
 from chaptertools.gui import palette
+from chaptertools.gui.theme import require_customtkinter
 
 from .summary import stage_summary
 
+ctk = require_customtkinter()
 
-class ChainPanel(ttk.Frame):
+
+class ChainPanel(ctk.CTkFrame):
     """The left column. Arrow keys move the selection; Space toggles it."""
 
     def __init__(self, master, chain, enabled_vars, on_select,
                  on_preset, on_save, on_restore, on_rename, on_delete):
-        super().__init__(master, style="Panel.TFrame", padding=4)
+        super().__init__(master, fg_color=palette.Q_PANEL, corner_radius=0)
         self.chain = chain
         self.on_select = on_select
         self.on_preset = on_preset
         self._selected = 0
         self.columnconfigure(0, weight=1)
 
-        presets = ttk.Frame(self, style="Panel.TFrame")
-        presets.grid(row=0, column=0, sticky="ew")
+        presets = ctk.CTkFrame(self, fg_color=palette.Q_PANEL, corner_radius=0)
+        presets.grid(row=0, column=0, sticky="ew", padx=4, pady=4)
         presets.columnconfigure(0, weight=1)
         self.preset_var = tk.StringVar()
         self.preset_box = ttk.Combobox(
             presets, textvariable=self.preset_var, width=18, state="readonly")
         self.preset_box.grid(row=0, column=0, sticky="ew")
         self.preset_box.bind("<<ComboboxSelected>>", lambda _e: on_preset(self.preset_var.get()))
-        ttk.Button(presets, text="Save as\u2026", command=on_save).grid(
-            row=0, column=1, padx=4)
+        ctk.CTkButton(presets, text="Save as\u2026", width=90, height=28,
+                      command=on_save).grid(row=0, column=1, padx=4)
         self.menu = tk.Menu(self, tearoff=0)
         self.menu.add_command(label="Restore defaults", command=on_restore)
         self.menu.add_command(label="Rename", command=on_rename)
@@ -40,13 +43,15 @@ class ChainPanel(ttk.Frame):
         ttk.Menubutton(presets, text="\u22ef", menu=self.menu, width=3).grid(
             row=0, column=2)
         self.status_var = tk.StringVar(value="")
-        ttk.Label(self, textvariable=self.status_var, style="Muted.TLabel",
-                  wraplength=300, justify="left").grid(row=1, column=0, sticky="w", pady=(2, 4))
-        ttk.Label(self, text="Signal chain", style="Muted.TLabel").grid(
-            row=2, column=0, sticky="w")
+        ctk.CTkLabel(self, textvariable=self.status_var,
+                     text_color=palette.Q_MUTED, wraplength=300,
+                     justify="left", anchor="w", text="").grid(
+            row=1, column=0, sticky="w", padx=4, pady=(2, 4))
+        ctk.CTkLabel(self, text="Signal chain", text_color=palette.Q_MUTED,
+                     anchor="w").grid(row=2, column=0, sticky="w", padx=4)
 
-        host = ttk.Frame(self, style="Panel.TFrame")
-        host.grid(row=3, column=0, sticky="nsew")
+        host = ctk.CTkFrame(self, fg_color=palette.Q_PANEL, corner_radius=0)
+        host.grid(row=3, column=0, sticky="nsew", padx=4)
         self.rowconfigure(3, weight=1)
         self.canvas = tk.Canvas(
             host, height=80, highlightthickness=0, background=palette.Q_PANEL)
@@ -56,7 +61,8 @@ class ChainPanel(ttk.Frame):
         scroll.grid(row=0, column=1, sticky="ns")
         host.rowconfigure(0, weight=1)
         host.columnconfigure(0, weight=1)
-        self.inner = ttk.Frame(self.canvas, style="Panel.TFrame")
+        self.inner = ctk.CTkFrame(self.canvas, fg_color=palette.Q_PANEL,
+                                  corner_radius=0)
         self.inner.columnconfigure(0, weight=1)
         self._window = self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
         self.inner.bind("<Configure>", self._fit_scroll)
@@ -152,27 +158,30 @@ class ChainRow:
         keys = keys or master
         self._selected = False
         self._modified = False
-        self.frame = ttk.Frame(master, style="Panel.TFrame", padding=(2, 1))
+        self.frame = ctk.CTkFrame(master, fg_color=palette.Q_PANEL, corner_radius=4)
         self.frame.columnconfigure(2, weight=1)
-        self.frame.configure(takefocus=True)
-        self.index_label = ttk.Label(self.frame, text=str(index + 1), width=3,
-                                     style="ChainMuted.TLabel")
-        self.index_label.grid(row=0, column=0, sticky="w")
-        self.name_label = ttk.Label(self.frame, text=stage.title, style="Chain.TLabel")
+        self.index_label = ctk.CTkLabel(
+            self.frame, text=str(index + 1), width=28,
+            text_color=palette.Q_MUTED, anchor="w")
+        self.index_label.grid(row=0, column=0, sticky="w", padx=(4, 0))
+        self.name_label = ctk.CTkLabel(
+            self.frame, text=stage.title, text_color=palette.Q_TEXT, anchor="w")
         self.name_label.grid(row=0, column=1, sticky="w")
         self.summary_var = tk.StringVar(value="")
-        self.summary = ttk.Label(self.frame, textvariable=self.summary_var,
-                                 style="ChainMono.TLabel", anchor="e")
+        self.summary = ctk.CTkLabel(
+            self.frame, textvariable=self.summary_var,
+            text_color=palette.Q_MUTED, font=ctk.CTkFont(family="monospace"),
+            anchor="e")
         self.summary.grid(row=0, column=2, sticky="ew", padx=4)
         self.dot = tk.Canvas(self.frame, width=10, height=16, highlightthickness=0,
                              background=palette.Q_PANEL)
         self.dot.grid(row=0, column=3)
         ok, _reason = stage.availability()
-        self.check = ttk.Checkbutton(
-            self.frame, variable=enabled_var, style="Chain.TCheckbutton",
+        self.check = ctk.CTkCheckBox(
+            self.frame, text="", variable=enabled_var, width=24,
             command=lambda: None,
         )
-        self.check.grid(row=0, column=4, sticky="e")
+        self.check.grid(row=0, column=4, sticky="e", padx=(0, 4))
         if not ok:
             self.check.configure(state="disabled")
         for widget in (self.frame, self.index_label, self.name_label, self.summary):
@@ -201,19 +210,15 @@ class ChainRow:
 
     def _paint(self) -> None:
         selected = self._selected
-        face = "ChainSelected.TFrame" if selected else "Panel.TFrame"
-        name = "ChainSelected.TLabel" if selected else "Chain.TLabel"
-        muted = "ChainSelectedMuted.TLabel" if selected else "ChainMuted.TLabel"
-        mono = "ChainSelectedMono.TLabel" if selected else "ChainMono.TLabel"
-        check = "ChainSelected.TCheckbutton" if selected else "Chain.TCheckbutton"
         ground = palette.Q_SELECT if selected else palette.Q_PANEL
+        muted = palette.Q_MUTED
+        text = palette.Q_TEXT
         if self.stage.bypass or not self.stage.availability()[0]:
-            name = muted
-        self.frame.configure(style=face)
-        self.index_label.configure(style=muted)
-        self.name_label.configure(style=name)
-        self.summary.configure(style=mono)
-        self.check.configure(style=check)
+            text = muted
+        self.frame.configure(fg_color=ground)
+        self.index_label.configure(text_color=muted, fg_color="transparent")
+        self.name_label.configure(text_color=text, fg_color="transparent")
+        self.summary.configure(text_color=muted, fg_color="transparent")
         self.dot.configure(background=ground)
         self.dot.delete("all")
         if self._modified:

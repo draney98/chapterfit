@@ -51,12 +51,33 @@ def decoded_duration(audio: str) -> float:
     return last or 0.0
 
 
-def stage_verify(art: Artifact, verbose: bool, real: float | None = None) -> dict:
+def stage_verify(art: Artifact, verbose: bool, real: float | None = None,
+                 concat: str | None = None) -> dict:
     """Compare the declared duration against the real one.
 
     The real length comes from the envelope pass, which already decoded the
     whole file - so this costs nothing rather than a second full decode.
+    A concat playlist (LibriVox sections) has no single Xing header to fix;
+    the envelope length is the book length.
     """
+    if concat:
+        info = {
+            "declared_duration": real or 0.0,
+            "bit_rate": 0,
+            "codec": None,
+            "sample_rate": 0,
+            "channels": None,
+            "format": "concat",
+            "decoded_duration": real or 0.0,
+            "header_error_sec": 0.0,
+            "header_error_ratio": 0.0,
+            "timeline_trustworthy": True,
+            "duration_from": "envelope",
+            "concat": os.path.basename(concat),
+        }
+        print(f"  concat playlist  decoded {hms(real or 0.0)}  "
+              f"(section files; no single header)")
+        return info
     info = probe(art.audio)
     if real is None:
         print("  decoding to measure the true length...")
@@ -90,16 +111,23 @@ def stage_verify(art: Artifact, verbose: bool, real: float | None = None) -> dic
 # stage 2 - the envelope
 # ==========================================================================
 
-def extract_envelope(audio: str, hz: int, verbose: bool):
+def extract_envelope(audio: str, hz: int, verbose: bool,
+                     concat: str | None = None):
     """Rectify, smooth and decimate to a loudness envelope.
 
     Done once. Every threshold afterwards is a query against this array
-    rather than another pass over the audio.
+    rather than another pass over the audio. ``concat`` is an ffmpeg
+    concat demuxer list (LibriVox section playlist); the math is the same.
     """
     af = (f"aresample=4000,aeval=abs(val(0)):c=same,"
           f"lowpass=f={hz // 2},aresample={hz}")
-    cmd = ["ffmpeg", "-nostdin", "-v", "error", "-i", audio, "-af", af,
-           "-ac", "1", "-f", "s16le", "-"]
+    if concat:
+        cmd = ["ffmpeg", "-nostdin", "-v", "error",
+               "-f", "concat", "-safe", "0", "-i", concat,
+               "-af", af, "-ac", "1", "-f", "s16le", "-"]
+    else:
+        cmd = ["ffmpeg", "-nostdin", "-v", "error", "-i", audio, "-af", af,
+               "-ac", "1", "-f", "s16le", "-"]
     if verbose:
         print(f"  $ {' '.join(cmd)}")
     r = subprocess.run(cmd, capture_output=True)
@@ -115,14 +143,17 @@ def extract_envelope(audio: str, hz: int, verbose: bool):
     return out
 
 
-def stage_measure(art: Artifact, hz: int, verbose: bool) -> dict:
+def stage_measure(art: Artifact, hz: int, verbose: bool,
+                  concat: str | None = None) -> dict:
     print("  extracting loudness envelope...")
-    env = extract_envelope(art.audio, hz, verbose)
+    env = extract_envelope(art.audio, hz, verbose, concat=concat)
     art.write_envelope(env)
     meta = {"hz": hz, "frames": len(env),
             "duration": len(env) / hz,
             "path": os.path.basename(art.env_path),
             "scale": "mean-rectified dBFS (relative; calibrate before use)"}
+    if concat:
+        meta["concat"] = os.path.basename(concat)
     print(f"  {len(env)} frames at {hz} Hz "
           f"({len(env)/hz/3600:.2f} h, {len(env)/1024:.0f} KiB)")
     return meta

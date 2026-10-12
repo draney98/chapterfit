@@ -17,7 +17,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from chaptertools.nfo import chapters_differ, read_nfo_chapters
 from chaptertools.util import clock, hms, package_env, parse_time
 
-from . import fonts, palette, tips
+from . import palette, tips
 from .busy import job_is_modal, opening_sentence
 from .commands import (
     META_FLAGS,
@@ -27,6 +27,7 @@ from .commands import (
     find_asin_argv,
     identify_argv,
     job_argv,
+    measure_argv,
     near_spec,
     same_source,
     whisper_argv,
@@ -48,6 +49,7 @@ from .projection import WorkflowProjection
 from .runner import Job
 from .stages import (
     BLOCKED,
+    DONE,
     STAGE_LABELS,
     DiskFacts,
     identify_verdict,
@@ -57,7 +59,10 @@ from .stages import (
 )
 from .step_rail import STAGE_STEP, STEPS, StepRail, Workspace
 from .table import CHAPTER_COLUMNS, TableViews
+from .theme import accent_colors, ctk_frame, require_customtkinter, set_enabled
 from .timeline import Timeline
+
+ctk = require_customtkinter()
 
 
 def resolve_chapterfit(python: str | None = None) -> list[str]:
@@ -112,13 +117,13 @@ def _chapter_counts(audio: str, work_dir: str | None) -> dict[str, str]:
 
 def _stack(parent):
     """One frame per step, stacked in the same cell."""
-    host = ttk.Frame(parent)
+    host = ctk_frame(parent, fg_color="transparent", corner_radius=0)
     host.pack(fill="both", expand=True)
     host.rowconfigure(0, weight=1)
     host.columnconfigure(0, weight=1)
     frames = {}
     for key in STEPS:
-        frame = ttk.Frame(host)
+        frame = ctk_frame(host, fg_color="transparent", corner_radius=0)
         frame.grid(row=0, column=0, sticky="nsew")
         frame.rowconfigure(0, weight=1)
         frame.columnconfigure(0, weight=1)
@@ -133,11 +138,16 @@ def _t(v) -> str:
     return str(v) if isinstance(v, str) and ":" in v else hms(v)
 
 
-class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
+_MODE_LABEL = {
+    "asin": "ASIN", "json": "JSON file", "emb": "Embedded", "nfo": "NFO",
+}
+
+
+class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
     """Coordinator: header, step rail, timeline, and the two stacks."""
 
     def __init__(self, master, app):
-        super().__init__(master, padding=(8, 4))
+        super().__init__(master, fg_color="transparent", corner_radius=0)
         self.app = app
         self.audio: str | None = None
         self.work_dir: str | None = None
@@ -164,14 +174,17 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
 
         self._build()
         self._watch_finish_settings()
-        style = ttk.Style(self)
-        style.configure("Accent.TButton",
-                        font=fonts.derived(self, weight="bold"))
         self._refresh()
 
     def _tip(self, widget, text: str):
         self._tips[widget] = tip = tips.tooltip(widget, text)
         return tip
+
+    def _set_identify_mode(self, mode: str) -> None:
+        self.identify_mode.set(mode)
+        seg = getattr(self, "_identify_seg", None)
+        if seg is not None:
+            seg.set(_MODE_LABEL.get(mode, "ASIN"))
 
     # ------------------------------------------------------------ widgets --
     def _build(self):
@@ -181,12 +194,13 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         self._rescan_quality = False
         self.chapters_var = tk.StringVar(value="Chapters")
 
-        head = ttk.Frame(self)
-        head.grid(row=0, column=0, sticky="ew")
+        head = ctk_frame(self, fg_color="transparent")
+        head.grid(row=0, column=0, sticky="ew", padx=8, pady=(4, 0))
         head.columnconfigure(0, weight=1)
         self.book_var = tk.StringVar(value="(nothing selected)")
-        book_lbl = ttk.Label(head, textvariable=self.book_var,
-                             font=tkfont.nametofont("TkHeadingFont", root=self))
+        book_lbl = ctk.CTkLabel(
+            head, textvariable=self.book_var, anchor="w",
+            font=ctk.CTkFont(size=14, weight="bold"))
         book_lbl.grid(row=0, column=0, sticky="w")
         self._book_label = book_lbl
         self._header_text = "(nothing selected)"
@@ -231,6 +245,13 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         from .multifile_book import MultifileBook
         self.multifile = MultifileBook(self, self.app, on_cleanup=self._open_multifile_cleanup)
         self._multifile_mode = False
+        self.section_files: list[str] = []
+        self.section_starts: list[float] = []
+        self.section_durations: list[float] = []
+        self._section_index = 0
+        self._concat_path: str | None = None
+        self._librivox_folder: str | None = None
+        self._librivox_pins_done = False
         self._bind_step_keys()
         self.show_step("scan")
 
@@ -468,39 +489,52 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
             and self._dry_hash.get(self.audio) == self._finish_hash()
 
     def set_book(self, audio: str):
-        from .multifile_book import is_multifile_book, list_audio
+        from .multifile_book import is_multifile_book, list_audio, load_librivox
 
         path = os.path.abspath(audio)
+        self._leave_multifile()
+        self.section_files = []
+        self.section_starts = []
+        self.section_durations = []
+        self._section_index = 0
+        self._concat_path = None
+        self._librivox_folder = None
+        self._librivox_pins_done = False
+
         if is_multifile_book(path):
             folder = path if os.path.isdir(path) else os.path.dirname(path)
             files = list_audio(folder)
+            self._librivox_folder = folder
+            self.section_files = files
             self.audio = files[0] if files else folder
             self.work_dir = work_dir_for(self.audio if files else folder)
+            self._load_section_timeline(folder, files, load_librivox(folder))
+            if files and self.work_dir:
+                from .librivox_book import write_ffconcat
+                self._concat_path = write_ffconcat(
+                    files, os.path.join(self.work_dir, "book.ffconcat"))
             self.app.session.book = folder
-            self.app.session.playhead = 0.0
-            self.app.session.selection = None
-            self.app.session.preview_marks = []
-            self.app.session.emit("book")
             self.book_var.set(folder)
-            self._enter_multifile(folder)
-            if hasattr(self.app, "sync_library_strip"):
-                self.app.sync_library_strip()
-            return
+            if hasattr(self, "embed_var"):
+                self.embed_var.set(False)
+        else:
+            self.audio = path
+            self.work_dir = work_dir_for(self.audio)
+            self.app.session.book = self.audio
+            self.book_var.set(self.audio)
+            if hasattr(self, "embed_var"):
+                self.embed_var.set(True)
 
-        self._leave_multifile()
-        self.audio = path
-        self.work_dir = work_dir_for(self.audio)
-        self.app.session.book = self.audio
         self.app.session.playhead = 0.0
         self.app.session.selection = None
         self.app.session.preview_marks = []
         self.app.session.emit("book")
         if hasattr(self, "timeline"):
             self.timeline.view = None
-        self.book_var.set(self.audio)
-        folder = os.path.dirname(self.audio)
-        title = os.path.basename(folder) or os.path.basename(self.audio)
-        author = os.path.basename(os.path.dirname(folder))
+        folder = (self._librivox_folder
+                  or os.path.dirname(self.audio or "") or "")
+        title = os.path.basename(folder) or os.path.basename(self.audio or "")
+        author = os.path.basename(os.path.dirname(folder)) if folder else ""
         rule = "────────"
         self.app.log(rule)
         self.app.log(f"{author} / {title}" if author else title)
@@ -518,7 +552,10 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         self._set_harvest(placeholder_harvest(self.audio))
         self._refresh()
         if getattr(self, "quality", None) is not None:
-            self.quality.set_book(self.audio, self.work_dir)
+            if self.section_files and hasattr(self.quality, "set_multifile"):
+                self.quality.set_multifile(self._librivox_folder, self.work_dir)
+            else:
+                self.quality.set_book(self.audio, self.work_dir)
         self._prefill_identify()
         self._fill_asin_list()
         self._fill_asin_query()
@@ -530,6 +567,68 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         self._maybe_autoscan()
         if hasattr(self.app, "sync_library_strip"):
             self.app.sync_library_strip()
+
+    def _load_section_timeline(self, folder: str, files: list[str],
+                               meta: dict | None) -> None:
+        """Probe each section (fall back to librivox.json playtimes)."""
+        from chaptertools.media import probe_duration
+
+        from .librivox_book import cumulative_starts
+
+        meta = meta or {}
+        sections = meta.get("sections") or []
+        durs: list[float] = []
+        for i, path in enumerate(files):
+            probed = probe_duration(path)
+            if probed and probed > 0:
+                durs.append(probed)
+                continue
+            sec = sections[i] if i < len(sections) else {}
+            durs.append(float(sec.get("duration") or 0.0))
+        self.section_durations = durs
+        self.section_starts = cumulative_starts(durs)
+        if durs and any(d > 0 for d in durs):
+            self._refresh_librivox_nfo(folder, files, meta, durs)
+
+    def _refresh_librivox_nfo(self, folder: str, files: list[str],
+                              meta: dict, durs: list[float]) -> None:
+        """Rewrite album.nfo starts from probed file lengths when they differ."""
+        from chaptertools.nfo import (
+            chapters_differ,
+            read_nfo_chapters,
+            render_nfo,
+        )
+
+        from .librivox_book import chapters_from_durations
+
+        sections = meta.get("sections") or []
+        titles = []
+        for i, path in enumerate(files):
+            sec = sections[i] if i < len(sections) else {}
+            titles.append(
+                (sec.get("title") or os.path.splitext(
+                    os.path.basename(path))[0]).strip())
+        chapters = chapters_from_durations(titles, durs)
+        nfo_path = os.path.join(folder, "album.nfo")
+        existing_ch = read_nfo_chapters(nfo_path)
+        if existing_ch and not chapters_differ(existing_ch, chapters):
+            return
+        existing_text = None
+        if os.path.isfile(nfo_path):
+            try:
+                with open(nfo_path) as handle:
+                    existing_text = handle.read()
+            except OSError:
+                existing_text = None
+        text = render_nfo(
+            existing_text, chapters,
+            meta.get("title") or os.path.basename(folder),
+            meta.get("author") or "")
+        try:
+            with open(nfo_path, "w") as handle:
+                handle.write(text)
+        except OSError as exc:
+            self.app.log(f"! could not refresh album.nfo: {exc}")
 
     def _enter_multifile(self, folder: str) -> None:
         self._multifile_mode = True
@@ -595,22 +694,22 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         if current and not getattr(self, "_identify_autofilled", False):
             return
         if label.startswith("Audnexus "):
-            self.identify_mode.set("asin")
+            self._set_identify_mode("asin")
             self.identify_value.set(label.split(" ", 1)[1].strip())
             self._identify_autofilled = True
         elif label:
             if os.path.basename(label) == "chapters.embedded.json":
-                self.identify_mode.set("emb")
+                self._set_identify_mode("emb")
             elif os.path.basename(label) == "chapters.nfo.json":
-                self.identify_mode.set("nfo")
+                self._set_identify_mode("nfo")
             elif os.path.isfile(label):
-                self.identify_mode.set("json")
+                self._set_identify_mode("json")
             else:
                 return
             self.identify_value.set(label)
             self._identify_autofilled = True
         elif (asin := top_asin(self.audio or "", self.work_dir)):
-            self.identify_mode.set("asin")
+            self._set_identify_mode("asin")
             self.identify_value.set(asin)
             self._identify_autofilled = True
         elif getattr(self, "_identify_autofilled", False):
@@ -679,7 +778,8 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         self.head_tooltip.wm_geometry(f"+{x}+{y}")
         tk.Label(self.head_tooltip, text=self.audio, background=palette.TIP,
                  foreground=palette.TEXT, font="TkDefaultFont",
-                 relief="solid", borderwidth=1, padx=4, pady=1).pack()
+                 relief="solid", borderwidth=1, padx=4, pady=1,
+                 takefocus=0).pack()
 
     def _hide_tip(self, _event=None):
         if getattr(self, "head_tooltip", None) is not None:
@@ -856,7 +956,7 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
             off([self.asin_search_btn], "Search is for the ASIN source")
         for w in self._job_controls():
             why = reasons.get(w)
-            w.state(["disabled" if why else "!disabled"])
+            set_enabled(w, not why)
             tip = self._tips.get(w)
             if tip is not None:
                 tip.reason = why
@@ -903,20 +1003,21 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         for w in self.unresolved_frame.winfo_children():
             w.destroy()
         if weak:
-            ttk.Label(self.unresolved_frame,
-                      text=f"{len(weak)} chapters unresolved:").pack(
+            ctk.CTkLabel(self.unresolved_frame,
+                         text=f"{len(weak)} chapters unresolved:").pack(
                 side="left")
             for r in weak:
                 n = r["index"] + 1
-                lbl = tk.Label(self.unresolved_frame, text=str(n),
-                               fg=palette.LINK, cursor="hand2",
-                               font=fonts.derived(self, underline=True))
+                lbl = ctk.CTkLabel(
+                    self.unresolved_frame, text=str(n),
+                    text_color=palette.LINK, cursor="hand2",
+                    font=ctk.CTkFont(underline=True))
                 lbl.pack(side="left", padx=2)
                 lbl.bind("<Button-1>",
                          lambda e, r=r: self._select_unresolved(r))
         else:
-            ttk.Label(self.unresolved_frame,
-                      text="nothing unresolved - spot-check by ear").pack(
+            ctk.CTkLabel(self.unresolved_frame,
+                         text="nothing unresolved - spot-check by ear").pack(
                 side="left")
         accent = proj.recommendation
         self.next_var.set(f"next: {accent}")
@@ -946,7 +1047,7 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         chosen = {"Listen": self.listen_btn, "Sweep probe": self.probe_btn,
                   "Sweep range": self.range_btn, "Full sweep": self.full_btn}
         for name, btn in chosen.items():
-            btn.configure(style="Accent.TButton" if name == accent else "TButton")
+            btn.configure(**accent_colors(name == accent))
 
     def _select_unresolved(self, r):
         for iid, data in self._row_data.items():
@@ -1005,6 +1106,10 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
             self._update_controls()
             return
         if stage == "identify":
+            if self.section_files:
+                # LibriVox: edition is the section files; pin and place next.
+                self._maybe_pin_section_starts()
+                return
             # Stay on Match so an edition can be chosen. Use this edition
             # is what opens Place. A later facts refresh must not jump either.
             self._auto_stage = False
@@ -1015,22 +1120,59 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
                 self.set_stage(target)
             self._auto_stage = True  # again once fresh disk facts land
         if stage == "measure" and code == 0:
+            self._write_playlist_sig()
             self._maybe_identify_from_nfo()
             if self._rescan_quality:
                 self._rescan_quality = False
                 self._scan_quality()
 
+    def _write_playlist_sig(self) -> None:
+        """Remember the section playlist so autoscan skips when unchanged."""
+        if not self.section_files or not self.work_dir or not self.audio:
+            return
+        from .librivox_book import playlist_sig
+        path = analysis_path(self.audio, self.work_dir)
+        try:
+            with open(path) as handle:
+                data = json.load(handle)
+        except (OSError, ValueError):
+            return
+        data["playlist_sig"] = list(playlist_sig(self.section_files))
+        try:
+            with open(path, "w") as handle:
+                json.dump(data, handle, separators=(",", ":"))
+        except OSError:
+            return
+        self.analysis = data
+
+    def _maybe_pin_section_starts(self) -> None:
+        """Pin every chapter at its file start, then align (LibriVox)."""
+        if self._librivox_pins_done or not self.section_starts:
+            return
+        from .librivox_book import pin_specs
+        specs = pin_specs(self.section_starts)
+        if not specs:
+            return
+        self._librivox_pins_done = True
+        argv = [*self._argv("pin")]
+        for spec in specs:
+            argv += ["--at", spec]
+        self._run("pin", argv, then=self.cmd_align, stage="resolve")
+
     # ------------------------------------------------------------- actions --
     def cmd_measure(self):
-        self._run("measure", self._argv("measure"), stage="measure")
+        self._run("measure", measure_argv(
+            self._cf, self.work_dir, self.audio,
+            concat=self._concat_path), stage="measure")
 
     def cmd_rescan(self):
         """Measure again, then refresh the loudness tiles from that file."""
         if not self.audio:
             return
         self._rescan_quality = True
-        self._run("measure", self._argv("measure", "--redo", "envelope"),
-                  stage="measure")
+        self._run("measure", measure_argv(
+            self._cf, self.work_dir, self.audio,
+            concat=self._concat_path, redo="envelope"), stage="measure")
 
     def _large_audio(self) -> bool:
         try:
@@ -1042,6 +1184,10 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         env = (self.analysis or {}).get("envelope") or {}
         if not env.get("duration"):
             return False
+        if self.section_files:
+            from .librivox_book import playlist_sig
+            stored = self.analysis.get("playlist_sig")
+            return stored == list(playlist_sig(self.section_files))
         stored = (self.analysis.get("file") or {}).get("size")
         try:
             return stored == os.path.getsize(self.audio or "")
@@ -1335,7 +1481,11 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         ident = (self.analysis.get("identification") or {}).get("chapters") or []
         if ident and not chapters_differ(ident, chapters):
             self._nfo_decided = True
+            if self.section_files:
+                self._maybe_pin_section_starts()
             return
+        # LibriVox fetch writes album.nfo: take it without asking when
+        # nothing is identified yet.
         if ident and not messagebox.askyesno(
                 "album.nfo chapters",
                 f"album.nfo has {len(chapters)} chapters that differ from "
@@ -1428,7 +1578,7 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         bar = self.problem_bar
         self._clear_problem_bar()
         chapter = row.index + 1
-        ttk.Label(bar, text=self._problem_sentence(row)).grid(
+        ctk.CTkLabel(bar, text=self._problem_sentence(row), anchor="w").grid(
             row=0, column=0, sticky="w")
         col = 1
         menu = tk.Menu(bar, tearoff=0)
@@ -1447,11 +1597,11 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
         for gap in self._candidate_gaps(row)[:1]:
             mid = float(gap["mid"])
             dur = float(gap.get("dur") or 0)
-            ttk.Label(bar, text=f"{clock(mid)} · {dur:.2f} s").grid(
+            ctk.CTkLabel(bar, text=f"{clock(mid)} · {dur:.2f} s").grid(
                 row=0, column=col, sticky="w", padx=(8, 2))
             col += 1
-            ttk.Button(
-                bar, text="Use this",
+            ctk.CTkButton(
+                bar, text="Use this", height=28, width=80,
                 command=lambda m=mid, ch=chapter: self._pin_at(ch, m),
             ).grid(row=0, column=col, sticky="w")
             col += 1
@@ -1633,7 +1783,48 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
             if v is not None and str(v) not in ("", "-"):
                 start = max(0.0, parse_time(str(v)) - 3.0)
                 break
-        self.app.play(self.audio, start=start, length=0)  # never self-stops
+        self.play_at_book_time(start or 0.0)
+
+    def play_at_book_time(self, book_t: float) -> None:
+        """Play from a book-relative time (maps across section files)."""
+        if not self.audio:
+            return
+        if not self.section_files:
+            self.app.play(self.audio, start=book_t, length=0)
+            self.app.session.set_playhead(book_t)
+            return
+        from .librivox_book import book_to_file
+        index, offset = book_to_file(
+            book_t, self.section_starts, self.section_durations)
+        index = max(0, min(index, len(self.section_files) - 1))
+        self._section_index = index
+        self.app.session.chapter_index = index
+        self.app.play(self.section_files[index], start=offset, length=0)
+        self.app.session.set_playhead(book_t)
+
+    def book_time_from_file(self, file_t: float | None) -> float | None:
+        """Convert the player's file-local clock to book time."""
+        if file_t is None:
+            return None
+        if not self.section_files:
+            return file_t
+        from .librivox_book import file_to_book
+        return file_to_book(self._section_index, file_t, self.section_starts)
+
+    def play_next_section(self) -> bool:
+        """Advance to the next section file. True when one was started."""
+        if not self.section_files:
+            return False
+        nxt = self._section_index + 1
+        if nxt >= len(self.section_files):
+            return False
+        self._section_index = nxt
+        self.app.session.chapter_index = nxt
+        start = (self.section_starts[nxt]
+                 if nxt < len(self.section_starts) else 0.0)
+        self.app.play(self.section_files[nxt], start=0.0, length=0)
+        self.app.session.set_playhead(start)
+        return True
 
     def _key_playpause(self, _event=None):
         if self.app.player.alive:
@@ -1645,7 +1836,11 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
 
     def _key_seek(self, delta):
         if self.app.player.alive:
-            self.app.player.seek(delta)
+            if self.section_files:
+                t = (self.app.session.playhead or 0.0) + delta
+                self.play_at_book_time(max(0.0, t))
+            else:
+                self.app.player.seek(delta)
         return "break"
 
     def _sync_play_btn(self):
@@ -1824,16 +2019,28 @@ class WorkflowPanel(TableViews, StagePanels, ttk.Frame):
     def _planned_actions(self) -> list[str]:
         lines = []
         if self.include_cleanup.get():
-            lines.append("render cleaned audio")
+            if self.section_files:
+                lines.append(
+                    f"clean {len(self.section_files)} section files in place")
+            else:
+                lines.append("render cleaned audio")
         if self._chapters_placed():
-            if self.embed_var.get():
+            if self.section_files:
+                lines.append("write chapters.txt and chapters.json")
+                lines.append("refresh album.nfo (section starts)")
+                lines.append("reload Audiobookshelf")
+            elif self.embed_var.get():
                 lines.append("embed chapters and tags into the file")
+                lines.append("move that file into the library")
+                lines.append("write album.nfo")
+                lines.append("reload Audiobookshelf")
+                lines.append("keep the first original")
             else:
                 lines.append("write chapters.txt and chapters.json")
-            lines.append("move that file into the library")
-            lines.append("write album.nfo")
-            lines.append("reload Audiobookshelf")
-            lines.append("keep the first original")
+                lines.append("move that file into the library")
+                lines.append("write album.nfo")
+                lines.append("reload Audiobookshelf")
+                lines.append("keep the first original")
         elif self.include_cleanup.get():
             lines.append("replace the library file with the cleaned audio")
             lines.append("keep the first original")

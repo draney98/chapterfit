@@ -215,8 +215,8 @@ def test_fetch_resume_reports_resumed_from(tmp_path, monkeypatch):
 
 
 def test_gui_does_not_import_librivox_fetch():
+
     import chaptertools.gui.app as app_mod
-    import sys
     # Ensure the module name is not pulled in by gui.app import chain
     # (a fresh check: sources.librivox_fetch must not be a required dep of app)
     src = Path(app_mod.__file__).read_text()
@@ -225,7 +225,9 @@ def test_gui_does_not_import_librivox_fetch():
 
 def test_cli_help_lists_librivox():
     from chaptertools.cli import chapterfit as cli
-    with mock.patch("sys.argv", ["chapterfit", "librivox", "search", "--help"]):
-        with pytest.raises(SystemExit) as caught:
-            cli.main()
+    with (
+        mock.patch("sys.argv", ["chapterfit", "librivox", "search", "--help"]),
+        pytest.raises(SystemExit) as caught,
+    ):
+        cli.main()
     assert caught.value.code == 0

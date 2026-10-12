@@ -3,78 +3,59 @@
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import ttk
 
 from chaptertools.gui import palette
+from chaptertools.gui.theme import require_customtkinter
 
 from .summary import close, decimals_for, format_number, parse_number, snap
 
+ctk = require_customtkinter()
 
-class ScrollableFrame(ttk.Frame):
-    """A vertical scroller. The canvas is the only widget that grows."""
+
+class ScrollableFrame(ctk.CTkScrollableFrame):
+    """A vertical scroller. Children pack into this frame."""
 
     def __init__(self, master):
-        super().__init__(master, style="Panel.TFrame")
-        self.columnconfigure(0, weight=1)
-        self.rowconfigure(0, weight=1)
-        self.canvas = tk.Canvas(self, highlightthickness=0, background=palette.Q_PANEL)
-        self.canvas.grid(row=0, column=0, sticky="nsew")
-        scroll = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
-        scroll.grid(row=0, column=1, sticky="ns")
-        self.canvas.configure(yscrollcommand=scroll.set)
-        self.body = ttk.Frame(self.canvas, style="Panel.TFrame")
-        self._window = self.canvas.create_window((0, 0), window=self.body, anchor="nw")
-        self.body.bind("<Configure>", self._fit_scroll)
-        self.canvas.bind("<Configure>", self._fit_width)
-        self.canvas.bind("<MouseWheel>", self._wheel)
-        self.canvas.bind("<Button-4>", self._wheel)
-        self.canvas.bind("<Button-5>", self._wheel)
-
-    def _fit_scroll(self, _event=None):
-        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
-
-    def _fit_width(self, event):
-        self.canvas.itemconfigure(self._window, width=event.width)
-
-    def _wheel(self, event):
-        if event.num == 4:
-            self.canvas.yview_scroll(-1, "units")
-        elif event.num == 5:
-            self.canvas.yview_scroll(1, "units")
-        else:
-            self.canvas.yview_scroll(int(-event.delta / 120), "units")
+        super().__init__(master, fg_color=palette.Q_PANEL, corner_radius=0)
+        self.body = self
 
 
-class MetricTile(ttk.Frame):
+class MetricTile(ctk.CTkFrame):
     """One analysis figure, with an optional warning face."""
 
     def __init__(self, master, title: str):
-        super().__init__(master, style="Card.TFrame", padding=4)
+        super().__init__(master, fg_color=palette.Q_PANEL, corner_radius=8,
+                         border_width=1, border_color=palette.Q_BORDER)
         self.warning = False
-        self.title = ttk.Label(self, text=title, style="MetricMuted.TLabel")
-        self.title.pack(anchor="w")
+        self.title = ctk.CTkLabel(
+            self, text=title, text_color=palette.Q_MUTED, anchor="w")
+        self.title.pack(anchor="w", padx=4, pady=(4, 0))
         self.value_var = tk.StringVar(value="\u2014")
-        self.value = ttk.Label(self, textvariable=self.value_var, style="Metric.TLabel")
-        self.value.pack(anchor="w")
+        self.value = ctk.CTkLabel(
+            self, textvariable=self.value_var, text_color=palette.Q_TEXT,
+            font=ctk.CTkFont(family="monospace"), anchor="w")
+        self.value.pack(anchor="w", padx=4)
         self.sub_var = tk.StringVar(value="")
-        self.sub = ttk.Label(self, textvariable=self.sub_var, style="MetricMuted.TLabel")
-        self.sub.pack(anchor="w")
+        self.sub = ctk.CTkLabel(
+            self, textvariable=self.sub_var, text_color=palette.Q_MUTED,
+            anchor="w", text="")
+        self.sub.pack(anchor="w", padx=4, pady=(0, 4))
 
     def set(self, value: str, sub: str = "", *, warn: bool = False) -> None:
         self.warning = warn
         self.value_var.set(value)
         self.sub_var.set(sub)
-        face = "Warn.TFrame" if warn else "Card.TFrame"
-        label = "Warn.TLabel" if warn else "Metric.TLabel"
-        muted = "WarnMuted.TLabel" if warn else "MetricMuted.TLabel"
-        self.configure(style=face)
-        self.title.configure(style=muted)
-        self.value.configure(style=label)
-        self.sub.configure(style=muted)
+        face = palette.Q_WARN_BG if warn else palette.Q_PANEL
+        text = palette.Q_WARN_TEXT if warn else palette.Q_TEXT
+        muted = palette.Q_WARN_TEXT if warn else palette.Q_MUTED
+        self.configure(fg_color=face)
+        self.title.configure(text_color=muted)
+        self.value.configure(text_color=text)
+        self.sub.configure(text_color=muted)
 
 
-class ParamRow(ttk.Frame):
-    """Label, scale, and a spinbox that share one value.
+class ParamRow(ctk.CTkFrame):
+    """Label, slider, and an entry that share one value.
 
     The reset control keeps its column even when the value matches the
     preset, so the row does not jump. EQ uses the compact layout: the
@@ -83,7 +64,7 @@ class ParamRow(ttk.Frame):
 
     def __init__(self, master, stage, spec, baseline, on_edit, *,
                  compact: bool = False, enabled: bool = True):
-        super().__init__(master, style="Panel.TFrame")
+        super().__init__(master, fg_color=palette.Q_PANEL, corner_radius=0)
         self.stage = stage
         self.spec = spec
         self.baseline = baseline
@@ -97,26 +78,27 @@ class ParamRow(ttk.Frame):
         self.scale_var = tk.DoubleVar(value=float(current))
         self.text_var = tk.StringVar(value=format_number(
             current, decimals, spec.unit, ratio=ratio))
-        label_style = "Panel.TLabel" if enabled else "Dim.TLabel"
-        self.label = ttk.Label(
-            self, text=spec.label, style=label_style,
-            width=12 if compact else 18, anchor="w")
+        label_color = palette.Q_TEXT if enabled else palette.Q_MUTED
+        self.label = ctk.CTkLabel(
+            self, text=spec.label, text_color=label_color,
+            width=100 if compact else 140, anchor="w")
         state = "normal" if enabled else "disabled"
-        self.scale = ttk.Scale(
-            self, from_=spec.minimum, to=spec.maximum, variable=self.scale_var,
-            command=self._from_scale,
+        self.scale = ctk.CTkSlider(
+            self, from_=spec.minimum, to=spec.maximum,
+            variable=self.scale_var, command=self._from_scale,
+            state=state,
         )
-        self.scale.configure(state=state)
         self.scale.bind("<Double-Button-1>", self._reset_event)
         self.scale.bind("<MouseWheel>", self._wheel)
         self.scale.bind("<Button-4>", self._wheel)
         self.scale.bind("<Button-5>", self._wheel)
-        self.reset = ttk.Button(self, text="", width=2, style="Quality.Reset.TButton",
-                                command=self.reset_to_baseline)
+        self.reset = ctk.CTkButton(
+            self, text="", width=28, height=24, command=self.reset_to_baseline)
         if compact:
             self.label.grid(row=0, column=0, sticky="w")
-            self.value_label = ttk.Label(self, textvariable=self.text_var,
-                                         style="Mono.TLabel", width=12, anchor="e")
+            self.value_label = ctk.CTkLabel(
+                self, textvariable=self.text_var,
+                font=ctk.CTkFont(family="monospace"), width=100, anchor="e")
             self.value_label.grid(row=0, column=1, sticky="e")
             self.reset.grid(row=0, column=2, sticky="e")
             self.scale.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(0, 2))
@@ -124,11 +106,9 @@ class ParamRow(ttk.Frame):
         else:
             self.label.grid(row=0, column=0, sticky="w")
             self.scale.grid(row=0, column=1, sticky="ew", padx=4)
-            self.spin = ttk.Spinbox(
-                self, textvariable=self.text_var, width=10,
-                from_=spec.minimum, to=spec.maximum, increment=spec.step or 1,
-                command=self._from_spin, state=state, justify="right",
-            )
+            self.spin = ctk.CTkEntry(
+                self, textvariable=self.text_var, width=90, state=state,
+                justify="right")
             self.spin.grid(row=0, column=2, sticky="e", padx=(0, 4))
             self.spin.bind("<FocusOut>", lambda _e: self._from_spin())
             self.spin.bind("<Return>", lambda _e: self._from_spin())
@@ -143,7 +123,8 @@ class ParamRow(ttk.Frame):
     def set_dim(self, dim: bool) -> None:
         if str(self.scale.cget("state")) == "disabled":
             return
-        self.label.configure(style="Dim.TLabel" if dim else "Panel.TLabel")
+        self.label.configure(
+            text_color=palette.Q_MUTED if dim else palette.Q_TEXT)
 
     def sync(self) -> None:
         value = self.stage.params[self.spec.key]
@@ -203,25 +184,28 @@ class ParamRow(ttk.Frame):
         self.reset.configure(text="\u21ba" if changed else "",
                              state="normal" if changed else "disabled")
         if self.spin is not None:
-            self.spin.configure(style="Changed.TSpinbox" if changed else "TSpinbox")
+            self.spin.configure(
+                border_color=palette.Q_ACCENT if changed else palette.Q_BORDER)
 
 
-class ChoiceRow(ttk.Frame):
+class ChoiceRow(ctk.CTkFrame):
     """A combobox with a field label and no second copy of the value."""
 
     def __init__(self, master, label, values, current, on_pick, *, enabled=True):
-        super().__init__(master, style="Panel.TFrame")
+        from tkinter import ttk
+        super().__init__(master, fg_color=palette.Q_PANEL, corner_radius=0)
         self.on_pick = on_pick
         self.values = list(values)
-        ttk.Label(self, text=label, style="Panel.TLabel", width=18,
-                  anchor="w").pack(side="left")
+        ctk.CTkLabel(self, text=label, text_color=palette.Q_TEXT,
+                     width=140, anchor="w").pack(side="left")
         self.var = tk.StringVar(value=current)
         state = "readonly" if enabled else "disabled"
         self.box = ttk.Combobox(self, textvariable=self.var, values=self.values,
                                 width=22, state=state)
         self.box.pack(side="left", fill="x", expand=True)
         self.box.bind("<<ComboboxSelected>>", self._picked)
-        self.reset = ttk.Button(self, text="", width=2, command=self._reset)
+        self.reset = ctk.CTkButton(self, text="", width=28, height=24,
+                                   command=self._reset)
         self.reset.pack(side="right")
         self.baseline = current
         self._show_reset()

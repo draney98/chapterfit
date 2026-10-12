@@ -13,8 +13,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from datetime import date
-from typing import Callable
 
 LV_API = "https://librivox.org/api/feed/audiobooks"
 IA_META = "https://archive.org/metadata/"
@@ -434,7 +434,7 @@ def build_plan(lv_id: int | str, library: str, set_name: str | None = None,
     catalog_nums = [int(s.get("section_number") or 0) for s in sections]
     file_nums = [_filename_number(name) for name in playlist]
     disagree = []
-    for cat, fname, src in zip(catalog_nums, file_nums, playlist):
+    for cat, fname, src in zip(catalog_nums, file_nums, playlist, strict=True):
         if fname is not None and fname != cat:
             disagree.append({"catalog": cat, "filename": fname, "source": src})
     if disagree:
@@ -452,7 +452,7 @@ def build_plan(lv_id: int | str, library: str, set_name: str | None = None,
     dest = os.path.join(os.path.abspath(library), _safe_name(author),
                         _safe_name(title))
     planned_files = []
-    for section, src in zip(sections, playlist):
+    for section, src in zip(sections, playlist, strict=True):
         num = int(section.get("section_number") or 0)
         sec_title = (section.get("title") or f"Section {num}").strip()
         nn = f"{num:02d}"

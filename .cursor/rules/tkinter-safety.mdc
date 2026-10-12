@@ -1,0 +1,11 @@
+---
+description: Tkinter safety rules
+globs: "**/*.py"
+alwaysApply: false
+---
+
+- Never call grab_set_global() or `grab -global`. Use grab_set() (local) only when a modal dialog is truly needed.
+- Prefer non-modal windows. Do not use grab_set() for convenience.
+- Avoid tk_popup() and tk.Menu popups without a release pattern: always wrap with try/finally calling menu.grab_release().
+- Do not use overrideredirect(True) windows that take focus or grabs.
+- When debugging, assume breakpoints can fire while a menu or dropdown is open; keep event handlers (<Motion>, <FocusOut>, after callbacks) short and free of blocking calls.

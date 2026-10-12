@@ -5,10 +5,13 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
 
-from chaptertools.gui import tips
+from chaptertools.gui import palette, tips
+from chaptertools.gui.theme import require_customtkinter
 
 from .summary import format_number
 from .widgets import MetricTile
+
+ctk = require_customtkinter()
 
 _ADVICE = (
     "The background noise changes across this file. "
@@ -16,22 +19,23 @@ _ADVICE = (
 )
 
 
-class AnalysisFrame(ttk.Frame):
+class AnalysisFrame(ctk.CTkFrame):
     """The top strip. The legend is a row under the canvas, never drawn on it."""
 
     def __init__(self, master, on_rescan, on_turn_on, on_range):
-        super().__init__(master, style="Quality.TFrame")
+        super().__init__(master, fg_color=palette.Q_GROUND, corner_radius=0)
         self.columnconfigure(0, weight=1)
         self.selection = None
         self._report = {}
 
-        header = ttk.Frame(self, style="Quality.TFrame")
+        header = ctk.CTkFrame(self, fg_color=palette.Q_GROUND, corner_radius=0)
         header.grid(row=0, column=0, sticky="ew")
         header.columnconfigure(1, weight=1)
-        ttk.Label(header, text="Analysis", style="Ground.TLabel").grid(
-            row=0, column=0, sticky="w")
+        ctk.CTkLabel(header, text="Analysis", text_color=palette.Q_TEXT,
+                     anchor="w").grid(row=0, column=0, sticky="w")
         self.source_var = tk.StringVar(value="No book selected")
-        ttk.Label(header, textvariable=self.source_var, style="GroundMuted.TLabel").grid(
+        ctk.CTkLabel(header, textvariable=self.source_var,
+                     text_color=palette.Q_MUTED, anchor="w", text="").grid(
             row=0, column=1, sticky="w", padx=8)
         menu = tk.Menu(header, tearoff=0)
         menu.add_command(label="Re-scan", command=on_rescan)
@@ -39,7 +43,7 @@ class AnalysisFrame(ttk.Frame):
         more.grid(row=0, column=2, sticky="e")
         tips.tooltip(more, "measure the file again")
 
-        tiles = ttk.Frame(self, style="Quality.TFrame")
+        tiles = ctk.CTkFrame(self, fg_color=palette.Q_GROUND, corner_radius=0)
         tiles.grid(row=1, column=0, sticky="w", pady=(4, 0))
         self.tiles = {}
         for index, (key, title) in enumerate((
@@ -52,13 +56,15 @@ class AnalysisFrame(ttk.Frame):
             tile.grid(row=index // 2, column=index % 2, sticky="nsew", padx=2, pady=2)
             self.tiles[key] = tile
 
-        self.advice = ttk.Frame(self, style="Warn.TFrame", padding=4)
+        self.advice = ctk.CTkFrame(
+            self, fg_color=palette.Q_WARN_BG, corner_radius=8)
         self.advice.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(4, 0))
         self.advice.columnconfigure(0, weight=1)
-        ttk.Label(self.advice, text=_ADVICE, style="Warn.TLabel",
-                  wraplength=640, justify="left").grid(row=0, column=0, sticky="w")
-        ttk.Button(self.advice, text="Turn it on", command=on_turn_on).grid(
-            row=0, column=1, sticky="e", padx=(8, 0))
+        ctk.CTkLabel(self.advice, text=_ADVICE, text_color=palette.Q_WARN_TEXT,
+                     wraplength=640, justify="left", anchor="w").grid(
+            row=0, column=0, sticky="w", padx=4, pady=4)
+        ctk.CTkButton(self.advice, text="Turn it on", command=on_turn_on,
+                      height=28).grid(row=0, column=1, sticky="e", padx=(8, 4))
         self.advice.grid_remove()
 
     def set_source(self, text: str) -> None:
@@ -100,5 +106,3 @@ def _metric(value, unit: str) -> str:
     if not isinstance(value, (int, float)):
         return "\u2014"
     return format_number(value, 1, unit)
-
-

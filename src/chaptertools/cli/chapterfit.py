@@ -149,8 +149,14 @@ def cmd_measure(args):
     print(f"\n=== chapterfit {__version__} - measure "
           f"{os.path.basename(art.audio)} ===")
 
+    concat = getattr(args, "concat", None) or None
+    if concat and not os.path.isfile(concat):
+        die(f"no such concat list: {concat}")
+
     # ---- envelope (the only expensive step) -----------------------------
     env_sig = {"hz": args.hz}
+    if concat:
+        env_sig["concat"] = os.path.abspath(concat)
     have_env = (art.valid("envelope", env_sig)
                 and os.path.exists(art.env_path)
                 and "envelope" not in redo)
@@ -160,7 +166,9 @@ def cmd_measure(args):
         print(f"  cached: {e['frames']} frames at {e['hz']} Hz "
               f"({e['duration']/3600:.2f} h) - skipping extraction")
     else:
-        art.put("envelope", stage_measure(art, args.hz, args.verbose), env_sig)
+        art.put("envelope",
+                stage_measure(art, args.hz, args.verbose, concat=concat),
+                env_sig)
         # anything derived from the envelope is now stale
         for k in ("calibration", "gaps", "fingerprint",
                   "identification", "alignment"):
@@ -170,6 +178,8 @@ def cmd_measure(args):
     # ---- verify, using the duration the envelope already established ----
     print("\n[2/5] verify timeline")
     src_sig = {"env": round(env_dur, 3)}
+    if concat:
+        src_sig["concat"] = os.path.abspath(concat)
     if art.valid("source", src_sig) and "verify" not in redo:
         sinfo = art.data["source"]
         print(f"  cached: declared {hms(sinfo['declared_duration'])} vs "
@@ -178,7 +188,9 @@ def cmd_measure(args):
         if not sinfo.get("timeline_trustworthy"):
             print("  ! header duration is wrong - see the earlier warning")
     else:
-        art.put("source", stage_verify(art, args.verbose, env_dur), src_sig)
+        art.put("source",
+                stage_verify(art, args.verbose, env_dur, concat=concat),
+                src_sig)
 
     # ---- calibration ----------------------------------------------------
     print("\n[3/5] calibrate")
@@ -508,6 +520,9 @@ def main():
                    help="shortest tape side to look for, minutes")
     p.add_argument("--side-max", type=float,
                    help="longest tape side to look for, minutes")
+    p.add_argument("--concat", metavar="LIST",
+                   help="ffmpeg concat demuxer list of section files "
+                        "(LibriVox playlist); envelope spans the whole book")
     p.add_argument("--redo", action="append", default=[],
                    choices=["envelope", "verify", "calibrate", "gaps",
                             "structure", "all"],

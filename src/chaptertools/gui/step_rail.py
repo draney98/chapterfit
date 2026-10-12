@@ -5,8 +5,12 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
 
+from . import palette
 from .stages import ATTENTION, BLOCKED, DONE, PENDING
+from .theme import ctk_frame, require_customtkinter
 from .tips import tooltip
+
+ctk = require_customtkinter()
 
 _FIX = {
     "identify first": "On Match, Search for the book, then choose an edition.",
@@ -33,52 +37,59 @@ STAGE_STEP = {
     "finalize": "finish",
 }
 
-_ACCENT = "#4A6984"
-_IDLE_BG = "#E9E7E2"
-_CURRENT_BG = "#FFFFFF"
-_DONE_FG = "#2E7D32"
+_ACCENT = palette.RAIL_ACCENT
+_IDLE_BG = palette.RAIL_IDLE
+_CURRENT_BG = palette.RAIL_CURRENT
+_DONE_FG = palette.RAIL_DONE
 
 
-class StepRail(ttk.Frame):
+class StepRail(ctk.CTkFrame):
     def __init__(self, master, on_pick):
-        super().__init__(master)
+        super().__init__(master, fg_color="transparent", corner_radius=0)
         self.on_pick = on_pick
-        self._buttons: dict[str, tk.Frame] = {}
-        self._title: dict[str, tk.Label] = {}
+        self._buttons: dict[str, ctk.CTkFrame] = {}
+        self._title: dict[str, ctk.CTkLabel] = {}
         self._subs: dict[str, tk.StringVar] = {}
         self._tips: dict[str, list] = {}
         self._current = ""
         style = ttk.Style(self)
-        style.configure("RailGap.TSeparator", background="#C8C5BE")
+        style.configure("RailGap.TSeparator", background=palette.BORDER)
         for index, key in enumerate(STEPS):
             if key == "cleanup":
                 ttk.Separator(self, orient="vertical", style="RailGap.TSeparator").grid(
                     row=0, column=index + 1, sticky="ns", padx=8, pady=2)
             col = index if key != "cleanup" else index + 2
-            cell = tk.Frame(self, width=200, height=52, bd=0, highlightthickness=0,
-                            bg=_IDLE_BG, cursor="hand2")
-            cell.grid(row=0, column=col, sticky="nsew", padx=0)
+            # Fixed shell; compact label heights so title+sub fit (CTkLabel
+            # defaults to height=28 and would clip inside 52 px).
+            cell = ctk.CTkFrame(
+                self, width=140, height=52, corner_radius=8,
+                fg_color=_IDLE_BG, cursor="hand2")
+            cell.grid(row=0, column=col, sticky="ew", padx=2, pady=2)
             cell.grid_propagate(False)
             cell.columnconfigure(0, weight=1)
-            title = tk.Label(
-                cell, text=STEP_LABELS[key], anchor="w",
-                font=("", 11, "bold"), bg=_IDLE_BG, padx=10, pady=4)
-            title.grid(row=0, column=0, sticky="ew")
+            cell.rowconfigure(2, weight=1)
+            title = ctk.CTkLabel(
+                cell, text=STEP_LABELS[key], anchor="w", height=18,
+                font=ctk.CTkFont(size=13, weight="bold"),
+                text_color=palette.TEXT, fg_color="transparent")
+            title.grid(row=0, column=0, sticky="ew", padx=10, pady=(6, 0))
             var = tk.StringVar(value="")
             self._subs[key] = var
-            sub = tk.Label(
-                cell, textvariable=var, anchor="w",
-                font=("", 9), fg="#3d3d3d", bg=_IDLE_BG, padx=22)
-            sub.grid(row=1, column=0, sticky="ew")
-            bar = tk.Frame(cell, height=2, bg="#C8C5BE", bd=0)
-            bar.grid(row=2, column=0, sticky="ew")
+            sub = ctk.CTkLabel(
+                cell, textvariable=var, anchor="w", height=16,
+                font=ctk.CTkFont(size=11),
+                text_color=palette.MUTED, fg_color="transparent")
+            sub.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 2))
+            bar = ctk.CTkFrame(
+                cell, width=1, height=2, corner_radius=0, fg_color=palette.BORDER)
+            bar.grid(row=3, column=0, sticky="sew")
             cell._bar = bar  # noqa: SLF001
             for widget in (cell, title, sub):
                 widget.bind("<Button-1>", lambda _e, k=key: self.on_pick(k))
             self._buttons[key] = cell
             self._title[key] = title
             self._tips[key] = [tooltip(cell, ""), tooltip(title, ""), tooltip(sub, "")]
-            self.columnconfigure(col, weight=0)
+            self.columnconfigure(col, weight=1, minsize=120)
 
     def update(self, states: dict, step: str, cleanup: str,
                finish_detail: str | None = None) -> None:
@@ -101,9 +112,8 @@ class StepRail(ttk.Frame):
                     sub = finish_detail
                     if finish_detail.startswith("needs Place"):
                         state = BLOCKED
-                    elif finish_detail.startswith("needs a dry run"):
-                        state = "pending"
-                    elif finish_detail.startswith("ready"):
+                    elif (finish_detail.startswith("needs a dry run")
+                          or finish_detail.startswith("ready")):
                         state = "pending"
                     elif finish_detail.startswith("applied"):
                         state = DONE
@@ -115,9 +125,9 @@ class StepRail(ttk.Frame):
             title = f"{mark}  {STEP_LABELS[key]}"
             self._title[key].configure(text=title)
             if state == DONE:
-                self._title[key].configure(fg=_DONE_FG)
+                self._title[key].configure(text_color=_DONE_FG)
             else:
-                self._title[key].configure(fg="#1a1a1a")
+                self._title[key].configure(text_color=palette.TEXT)
             self._subs[key].set(sub)
             self._paint(key, key == step)
             hint = blocked_hint(key, states)
@@ -130,13 +140,10 @@ class StepRail(ttk.Frame):
         cell = self._buttons[key]
         bg = _CURRENT_BG if current else _IDLE_BG
         bar_h = 3 if current else 2
-        bar_bg = _ACCENT if current else "#C8C5BE"
-        cell.configure(bg=bg)
-        self._title[key].configure(bg=bg)
-        for child in cell.winfo_children():
-            if isinstance(child, tk.Label):
-                child.configure(bg=bg)
-        cell._bar.configure(height=bar_h, bg=bar_bg)  # noqa: SLF001
+        bar_bg = _ACCENT if current else palette.BORDER
+        cell.configure(fg_color=bg)
+        self._title[key].configure(fg_color="transparent")
+        cell._bar.configure(height=bar_h, fg_color=bar_bg)  # noqa: SLF001
 
 
 def blocked_hint(key: str, states: dict) -> str:
@@ -163,13 +170,13 @@ def _fallback(key: str, state: str) -> str:
     return "not run"
 
 
-class Workspace(ttk.Frame):
+class Workspace(ctk.CTkFrame):
     """Main and inspector. Side by side from 1500 px, stacked below that."""
 
     def __init__(self, master):
-        super().__init__(master)
-        self.main = ttk.Frame(self)
-        self.inspector = ttk.Frame(self)
+        super().__init__(master, fg_color="transparent", corner_radius=0)
+        self.main = ctk_frame(self, fg_color="transparent", corner_radius=0)
+        self.inspector = ctk_frame(self, fg_color="transparent", corner_radius=0)
         self.main.grid(row=0, column=0, sticky="nsew")
         self.inspector.grid(row=0, column=1, sticky="nsew")
         self.columnconfigure(0, weight=3)

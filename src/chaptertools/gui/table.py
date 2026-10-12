@@ -7,6 +7,9 @@ import tkinter.font as tkfont
 from tkinter import ttk
 
 from . import fonts, palette
+from .theme import ctk_frame, require_customtkinter
+
+ctk = require_customtkinter()
 
 CADENCE_WINDOW = 300.0
 
@@ -172,7 +175,7 @@ class TableViews:
             self.tree.column(col, minwidth=need, width=need)
 
     def _build_chapters_tab(self, parent):
-        tab = ttk.Frame(parent)
+        tab = ctk_frame(parent, fg_color="transparent", corner_radius=0)
         tab.columnconfigure(0, weight=1)
         tab.rowconfigure(0, weight=1)
         cols = [c[0] for c in CHAPTER_COLUMNS]
@@ -200,35 +203,42 @@ class TableViews:
                         ("KP_Enter", self._toggle_open_row),
                         ("Delete", lambda e: self.cmd_unpin())):
             self.tree.bind(seq, fn)
-        foot = ttk.Frame(tab)
+        foot = ctk_frame(tab, fg_color="transparent")
         foot.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(2, 0))
-        legend = ttk.Frame(foot)
+        legend = ctk_frame(foot, fg_color="transparent")
         self.chapter_filter = tk.StringVar(value="all")
         self.filter_box = ttk.Combobox(
             legend, width=14, state="readonly", textvariable=self.chapter_filter,
             values=("all", "problems", "lowconf", "unplaced"))
         self.filter_box.pack(side="left", padx=(0, 8))
         self.filter_box.bind("<<ComboboxSelected>>", lambda _e: self._refresh())
+        chips = ctk_frame(legend, fg_color="transparent")
+        chips.pack(side="top", anchor="w")
         for color, text in ((palette.ROW_UNPLACED, "unplaced"),
-                            (palette.ROW_LOWCONF,
-                             "below minimum confidence (withheld)"),
-                            (palette.ROW_CONFLICT,
-                             "conflicting pin (! in Pin)")):
-            tk.Label(legend, text="   ", background=color, relief="solid",
-                     borderwidth=1).pack(side="left", padx=(0, 4))
-            ttk.Label(legend, text=text).pack(side="left", padx=(0, 12))
-        ttk.Label(legend, text="?N = not written to the file").pack(
-            side="left")
-        self.shortcut_label = ttk.Label(foot, text=SHORTCUTS,
-                                        foreground=palette.MUTED)
+                            (palette.ROW_LOWCONF, "low conf (withheld)"),
+                            (palette.ROW_CONFLICT, "pin conflict")):
+            ctk.CTkFrame(chips, width=16, height=14, fg_color=color,
+                         corner_radius=2, border_width=1,
+                         border_color=palette.BORDER).pack(
+                side="left", padx=(0, 4))
+            ctk.CTkLabel(chips, text=text, height=16,
+                         text_color=palette.MUTED).pack(
+                side="left", padx=(0, 12))
+        ctk.CTkLabel(legend, text="?N = not written to the file", height=16,
+                     text_color=palette.MUTED).pack(side="top", anchor="w")
+        self.shortcut_label = ctk.CTkLabel(
+            foot, text=SHORTCUTS, text_color=palette.MUTED, anchor="w",
+            height=16)
         self._table_legend = legend
         self._foot_split = None
+        foot.columnconfigure(0, weight=1)
         foot.bind("<Configure>", self._layout_foot)
         self._layout_foot()
         self.conflict_note = tk.StringVar(value="")
-        self.conflict_label = ttk.Label(tab, textvariable=self.conflict_note,
-                                        foreground=palette.WARN)
-        self.problem_bar = ttk.Frame(tab)
+        self.conflict_label = ctk.CTkLabel(
+            tab, textvariable=self.conflict_note, text_color=palette.WARN,
+            anchor="w", text="")
+        self.problem_bar = ctk_frame(tab, fg_color="transparent")
         self.problem_bar.grid(row=2, column=0, columnspan=2, sticky="ew",
                               pady=(4, 0))
         self.problem_bar.grid_remove()
@@ -238,13 +248,17 @@ class TableViews:
     def _layout_foot(self, event=None):
         legend, keys = self._table_legend, self.shortcut_label
         width = event.width if event else 10 ** 6
-        split = legend.winfo_reqwidth() + keys.winfo_reqwidth() + 24 > width
+        # Always stack shortcuts under the legend when the foot is narrow;
+        # prefer stacked layout so chips and keys never collide.
+        split = width < 900 or (
+            legend.winfo_reqwidth() + keys.winfo_reqwidth() + 24 > width)
         if split == self._foot_split:
             return
         self._foot_split = split
         legend.grid(row=0, column=0, sticky="w")
         if split:
-            keys.grid(row=1, column=0, sticky="w", padx=0)
+            keys.grid(row=1, column=0, sticky="w", padx=0, pady=(2, 0))
+            legend.master.columnconfigure(1, weight=0)
         else:
             keys.grid(row=0, column=1, sticky="e", padx=(24, 0))
             legend.master.columnconfigure(1, weight=1)

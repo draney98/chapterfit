@@ -301,7 +301,7 @@ class StageBar(ttk.Frame):
         tk.Label(self._tip, text=st.get("why") or "click to open",
                  background=palette.TIP, foreground=palette.TEXT,
                  font="TkDefaultFont", relief="solid", borderwidth=1,
-                 padx=4, pady=1).pack()
+                 padx=4, pady=1, takefocus=0).pack()
 
     def _hide_tip(self):
         if self._tip is not None:

@@ -43,6 +43,16 @@ def job_argv(prefix: list[str], work_dir: str, *extra: str, audio: str) -> list[
     return [*prefix, "--work-dir", work_dir, *extra, audio]
 
 
+def measure_argv(prefix: list[str], work_dir: str, audio: str, *,
+                 concat: str | None = None, redo: str | None = None) -> list[str]:
+    extra = ["measure"]
+    if redo:
+        extra += ["--redo", redo]
+    if concat:
+        extra += ["--concat", concat]
+    return job_argv(prefix, work_dir, *extra, audio=audio)
+
+
 def near_spec(raw: str, analysis: dict) -> str | None:
     """Normalize CH=TIME, or map a bare TIME onto the nearest chapter."""
     raw = raw.strip()

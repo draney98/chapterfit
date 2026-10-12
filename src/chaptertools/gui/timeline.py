@@ -13,13 +13,16 @@ from chaptertools.util import hms
 
 from . import palette, tips
 from .table import gap_marks
+from .theme import ctk_frame, require_customtkinter
+
+ctk = require_customtkinter()
 
 _HEIGHT = 96
 
 
-class Timeline(ttk.Frame):
+class Timeline(ctk.CTkFrame):
     def __init__(self, master, app):
-        super().__init__(master)
+        super().__init__(master, fg_color="transparent", corner_radius=0)
         self.app = app
         self.mode = tk.StringVar(value="cadence")
         self.view: tuple[float, float] | None = None
@@ -30,11 +33,11 @@ class Timeline(ttk.Frame):
         self._tip = None
         self.columnconfigure(0, weight=1)
 
-        bar = ttk.Frame(self)
+        bar = ctk_frame(self, fg_color="transparent")
         bar.grid(row=0, column=0, sticky="ew")
         self.legend = tk.StringVar(value="")
-        ttk.Label(bar, textvariable=self.legend, foreground=palette.MUTED).pack(
-            side="left")
+        ctk.CTkLabel(bar, textvariable=self.legend,
+                     text_color=palette.MUTED, text="").pack(side="left")
         menu = tk.Menu(bar, tearoff=0)
         menu.add_radiobutton(
             label="Similar by chapter cadence", variable=self.mode,
@@ -291,6 +294,11 @@ class Timeline(ttk.Frame):
         self.redraw()
 
     def _seek(self, seconds: float) -> None:
+        workflow = getattr(self.app, "workflow", None)
+        if workflow is not None and getattr(workflow, "section_files", None):
+            workflow.play_at_book_time(seconds)
+            self.app.player_bar.update_time(seconds)
+            return
         self.app.session.set_playhead(seconds)
         if self.app.player.alive:
             self.app.player.seek_to(seconds)
@@ -328,7 +336,8 @@ class Timeline(ttk.Frame):
         tip.wm_overrideredirect(True)
         tip.wm_geometry(f"+{self.winfo_pointerx() + 8}+{self.winfo_rooty() - 8}")
         tk.Label(tip, text=text, background=palette.TIP, foreground=palette.TEXT,
-                 relief="solid", borderwidth=1, padx=4, pady=1).pack()
+                 relief="solid", borderwidth=1, padx=4, pady=1,
+                 takefocus=0).pack()
         self._tip = tip
 
 

@@ -9,6 +9,8 @@ import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 
 from chaptertools.audio_quality import quality_status
+from chaptertools.gui import palette
+from chaptertools.gui.theme import equalize_segments, require_customtkinter
 from chaptertools.util import hms
 
 from .analysis_view import AnalysisFrame
@@ -17,16 +19,18 @@ from .detail_view import DetailPanel
 from .footer_view import FooterBar
 from .styles import install
 
+ctk = require_customtkinter()
+
 PREVIEW_SECONDS = 30.0
 _MODIFIED = "Modified \u2014 Save as\u2026 to keep these settings"
 
 
-class QualityTab(ttk.Frame):
+class QualityTab(ctk.CTkFrame):
     """Notebook page. ``chain_rows`` is one frame per stage, in chain order."""
 
     def __init__(self, master, app, workflow):
         install(master)
-        super().__init__(master, style="Quality.TFrame")
+        super().__init__(master, fg_color=palette.Q_GROUND, corner_radius=0)
         self.app = app
         self.workflow = workflow
         self.audio = None
@@ -49,7 +53,7 @@ class QualityTab(ttk.Frame):
         ok, reason = quality_status()
         self.available = ok
         if not ok:
-            ttk.Label(self, text=reason, wraplength=640, justify="left").pack(
+            ctk.CTkLabel(self, text=reason, wraplength=640, justify="left", anchor="w").pack(
                 anchor="w", padx=8, pady=8)
             self.jobs = _IdleJobs()
             return
@@ -201,7 +205,7 @@ class QualityTab(ttk.Frame):
         self._include_at_finish = None
         if self.workflow is not None and hasattr(self.workflow, "bitrate_var"):
             self.footer.bitrate_var = self.workflow.bitrate_var
-            self._include_at_finish = ttk.Checkbutton(
+            self._include_at_finish = ctk.CTkSwitch(
                 self.chain_panel, text="Include at Finish",
                 variable=self.workflow.include_cleanup,
                 command=self.workflow._sync_cleanup_choice,
@@ -221,39 +225,39 @@ class QualityTab(ttk.Frame):
 
     def _build_multifile_bar(self) -> None:
         """Write bar for multi-file books (Part 4). Hidden unless multifile."""
-        bar = ttk.Frame(self, style="Quality.TFrame", padding=4)
+        bar = ctk.CTkFrame(self, fg_color=palette.Q_GROUND, corner_radius=0)
         self._mf_bar = bar
         bar.columnconfigure(1, weight=1)
-        self._mf_back = ttk.Button(
-            bar, text="← Book", command=self._back_to_multifile)
-        self._mf_back.grid(row=0, column=0, sticky="w")
+        self._mf_back = ctk.CTkButton(
+            bar, text="← Book", command=self._back_to_multifile, height=28, width=80)
+        self._mf_back.grid(row=0, column=0, sticky="w", padx=4, pady=4)
         self._mf_status = tk.StringVar(value="")
-        ttk.Label(bar, textvariable=self._mf_status).grid(
+        ctk.CTkLabel(bar, textvariable=self._mf_status, anchor="w", text="").grid(
             row=0, column=1, sticky="w", padx=8)
-        ttk.Label(bar, text="MP3").grid(row=0, column=2, sticky="e")
+        ctk.CTkLabel(bar, text="MP3").grid(row=0, column=2, sticky="e")
         bitrates = ("48k", "64k", "96k", "128k", "160k", "192k", "256k", "320k")
         self._mf_bitrate = tk.StringVar(value="128k")
         ttk.Combobox(bar, textvariable=self._mf_bitrate, values=bitrates,
                      width=6, state="readonly").grid(row=0, column=3, padx=4)
-        ttk.Button(bar, text="Dry run", command=self.cmd_multifile_dry).grid(
-            row=0, column=4, padx=4)
-        self._mf_clean_btn = ttk.Button(
+        ctk.CTkButton(bar, text="Dry run", command=self.cmd_multifile_dry,
+                      height=28, width=80).grid(row=0, column=4, padx=4)
+        self._mf_clean_btn = ctk.CTkButton(
             bar, text="Clean all files", command=self.cmd_multifile_clean,
-            state="disabled")
-        self._mf_clean_btn.grid(row=0, column=5, sticky="e")
+            state="disabled", height=28)
+        self._mf_clean_btn.grid(row=0, column=5, sticky="e", padx=4)
         # Across-files loudness choice
-        across = ttk.Frame(bar, style="Quality.TFrame")
-        across.grid(row=1, column=0, columnspan=6, sticky="w", pady=(4, 0))
-        ttk.Label(across, text="Across files").pack(side="left")
-        ttk.Radiobutton(
-            across, text="Level each file to the target",
-            value="each", variable=self._across_files,
-            command=self._mf_settings_changed).pack(side="left", padx=(8, 0))
-        ttk.Radiobutton(
-            across, text="One gain for the whole book",
-            value="whole", variable=self._across_files,
-            command=self._mf_settings_changed).pack(side="left", padx=(8, 0))
-        self._mf_strip = tk.Canvas(bar, height=28, bg="#E9E7E2",
+        across = ctk.CTkFrame(bar, fg_color=palette.Q_GROUND, corner_radius=0)
+        across.grid(row=1, column=0, columnspan=6, sticky="w", pady=(4, 0), padx=4)
+        ctk.CTkLabel(across, text="Across files").pack(side="left")
+        self._across_seg = ctk.CTkSegmentedButton(
+            across,
+            values=["Level each file to the target", "One gain for the whole book"],
+            command=self._on_across_seg, height=28, border_width=None,
+            dynamic_resizing=False, width=480)
+        self._across_seg.set("Level each file to the target")
+        self._across_seg.pack(side="left", padx=(8, 0))
+        equalize_segments(self._across_seg)
+        self._mf_strip = tk.Canvas(bar, height=28, bg=palette.RAIL_IDLE,
                                    highlightthickness=0)
         self._mf_strip.grid(row=2, column=0, columnspan=6, sticky="ew",
                             pady=(4, 0))
@@ -828,9 +832,7 @@ class QualityTab(ttk.Frame):
         bitrate = "128k"
         if "64" in set_name:
             bitrate = "64k"
-        elif "128" in set_name:
-            bitrate = "128k"
-        elif "VBR" in set_name.upper():
+        elif "128" in set_name or "VBR" in set_name.upper():
             bitrate = "128k"
         self._mf_bitrate.set(bitrate)
         if self.audio:
@@ -867,6 +869,11 @@ class QualityTab(ttk.Frame):
         if self.workflow is not None:
             self.workflow.return_from_multifile_cleanup()
 
+    def _on_across_seg(self, label: str) -> None:
+        self._across_files.set(
+            "whole" if label.startswith("One gain") else "each")
+        self._mf_settings_changed()
+
     def _mf_settings_changed(self) -> None:
         self._mf_dry_ok = False
         self._mf_clean_btn.configure(state="disabled")
@@ -894,7 +901,9 @@ class QualityTab(ttk.Frame):
 
     def _mf_scan_job(self, files, work, cancel, progress):
         from chaptertools.audio_quality.analysis import (
-            quality_json_path, save_report, scan_wav,
+            quality_json_path,
+            save_report,
+            scan_wav,
         )
         from chaptertools.audio_quality.worker import ensure_decoded
 
@@ -971,9 +980,10 @@ class QualityTab(ttk.Frame):
                       cancel, progress):
         from datetime import date
 
-        from chaptertools.audio_quality.stages import default_chain
         from chaptertools.audio_quality.worker import (
-            process_file, replace_library, output_mp3_path,
+            output_mp3_path,
+            process_file,
+            replace_library,
         )
 
         # Optional whole-book gain: measure first file's needed gain and reuse
@@ -1033,9 +1043,9 @@ class QualityTab(ttk.Frame):
         w = max(c.winfo_width(), 100)
         bw = max(4, w / len(files))
         colors = {
-            "waiting": "#C8C5BE",
-            "rendering": "#4A6984",
-            "done": "#2E7D32",
+            "waiting": palette.BORDER,
+            "rendering": palette.RAIL_ACCENT,
+            "done": palette.RAIL_DONE,
             "failed": "#B00020",
         }
         for i, path in enumerate(files):
@@ -1049,7 +1059,7 @@ class QualityTab(ttk.Frame):
                 h = max(8, min(24, int(24 + (lufs + 10))))
             x = i * bw
             c.create_rectangle(x, 28 - h, x + bw - 1, 28,
-                               fill=colors.get(state, "#C8C5BE"), outline="")
+                               fill=colors.get(state, palette.BORDER), outline="")
 
     def _apply_mf_reports(self, reports: dict) -> None:
         self._multifile_reports = reports or {}

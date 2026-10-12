@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import tkinter as tk
 from dataclasses import replace
-from tkinter import messagebox, ttk
+from tkinter import messagebox
 
 from chaptertools.gui import palette
+from chaptertools.gui.theme import require_customtkinter
 
 from .summary import close
 from .widgets import ChoiceRow, ParamRow, ScrollableFrame
+
+ctk = require_customtkinter()
 
 _INSTALL = "./runme.sh"
 
@@ -38,12 +41,12 @@ _EQ_BANDS = (
 )
 
 
-class DetailPanel(ttk.Frame):
+class DetailPanel(ctk.CTkFrame):
     """Header plus a scroller that holds only the selected stage."""
 
     def __init__(self, master, enabled_vars, on_edit, on_reset_stage, on_learn,
                  on_choice=None):
-        super().__init__(master, style="Panel.TFrame", padding=4)
+        super().__init__(master, fg_color=palette.Q_PANEL, corner_radius=0)
         self.enabled_vars = enabled_vars
         self.on_edit = on_edit
         self.on_reset_stage = on_reset_stage
@@ -57,11 +60,11 @@ class DetailPanel(ttk.Frame):
         self.multifile = False
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
-        self.header = ttk.Frame(self, style="Panel.TFrame")
-        self.header.grid(row=0, column=0, sticky="ew")
+        self.header = ctk.CTkFrame(self, fg_color=palette.Q_PANEL, corner_radius=0)
+        self.header.grid(row=0, column=0, sticky="ew", padx=4, pady=4)
         self.header.columnconfigure(0, weight=1)
         self.scroller = ScrollableFrame(self)
-        self.scroller.grid(row=1, column=0, sticky="nsew")
+        self.scroller.grid(row=1, column=0, sticky="nsew", padx=4, pady=(0, 4))
         self._rows = []
 
     def show(self, stage, baseline: dict, *, selection, recommend: bool) -> None:
@@ -73,20 +76,21 @@ class DetailPanel(ttk.Frame):
         for child in self.header.winfo_children():
             child.destroy()
         ok, _reason = stage.availability()
-        title = ttk.Label(self.header, text=stage.title, style="Panel.TLabel")
+        title = ctk.CTkLabel(self.header, text=stage.title, text_color=palette.Q_TEXT,
+                             anchor="w")
         title.grid(row=0, column=0, sticky="w")
-        self.enabled_check = ttk.Checkbutton(
+        self.enabled_check = ctk.CTkCheckBox(
             self.header, text="Enabled", variable=self.enabled_var,
-            style="Panel.TCheckbutton",
         )
         self.enabled_check.grid(row=0, column=1, sticky="e")
         if not ok:
             self.enabled_check.configure(state="disabled")
-        ttk.Button(self.header, text="Reset to preset",
-                   command=lambda: self.on_reset_stage(stage)).grid(
+        ctk.CTkButton(self.header, text="Reset to preset", height=28,
+                      command=lambda: self.on_reset_stage(stage)).grid(
             row=0, column=2, sticky="e", padx=(8, 0))
-        ttk.Label(self.header, text=DESCRIPTIONS.get(stage.name, ""),
-                  style="Muted.TLabel").grid(row=1, column=0, columnspan=3, sticky="w")
+        ctk.CTkLabel(self.header, text=DESCRIPTIONS.get(stage.name, ""),
+                     text_color=palette.Q_MUTED, anchor="w").grid(
+            row=1, column=0, columnspan=3, sticky="w")
         for child in self.scroller.body.winfo_children():
             child.destroy()
         self._rows = []
@@ -143,22 +147,22 @@ class DetailPanel(ttk.Frame):
         row.grid(row=0, column=0, sticky="ew", pady=2)
         self._rows.append(row)
         if self.multifile:
-            ttk.Label(
+            ctk.CTkLabel(
                 body,
                 text="Denoise runs per file (noise is re-estimated for each).",
-                style="Muted.TLabel",
+                text_color=palette.Q_MUTED,
             ).grid(row=1, column=0, sticky="w", pady=2)
         else:
             self._bool(body, stage, per_seg, 1, recommend=self.recommend,
                        baseline=base.get("per_segment", per_seg.default))
         note = "Select a quiet stretch on the timeline first"
         learn_state = "normal" if self.selection else "disabled"
-        block = ttk.Frame(body, style="Panel.TFrame")
+        block = ctk.CTkFrame(body, fg_color=palette.Q_PANEL, corner_radius=0)
         block.grid(row=2, column=0, sticky="ew", pady=2)
-        ttk.Button(block, text="Learn from selection", command=self.on_learn,
+        ctk.CTkButton(block, text="Learn from selection", command=self.on_learn,
                    state=learn_state).pack(side="left")
         if not self.selection:
-            ttk.Label(block, text=note, style="Muted.TLabel").pack(side="left", padx=8)
+            ctk.CTkLabel(block, text=note, text_color=palette.Q_MUTED).pack(side="left", padx=8)
         slider = ParamRow(body, stage, strength, base.get("strength", strength.default),
                           self.on_edit)
         slider.grid(row=3, column=0, sticky="ew", pady=2)
@@ -166,7 +170,7 @@ class DetailPanel(ttk.Frame):
 
     def _eq(self, stage) -> None:
         body = self.scroller.body
-        grid = ttk.Frame(body, style="Panel.TFrame")
+        grid = ctk.CTkFrame(body, fg_color=palette.Q_PANEL, corner_radius=0)
         grid.grid(row=1, column=0, sticky="ew")
         for column in range(2):
             grid.columnconfigure(column, weight=1)
@@ -178,10 +182,10 @@ class DetailPanel(ttk.Frame):
         trim_row.grid(row=0, column=0, sticky="ew", pady=(0, 4))
         self._rows.append(trim_row)
         for index, (title, hint, fields) in enumerate(_EQ_BANDS):
-            card = ttk.Frame(grid, style="Card.TFrame", padding=4)
+            card = ctk.CTkFrame(grid, fg_color=palette.Q_PANEL, corner_radius=8, border_width=1, border_color=palette.Q_BORDER)
             card.grid(row=index // 2, column=index % 2, sticky="nsew", padx=2, pady=2)
-            ttk.Label(card, text=title, style="Panel.TLabel").pack(anchor="w")
-            ttk.Label(card, text=hint, style="Muted.TLabel").pack(anchor="w")
+            ctk.CTkLabel(card, text=title, text_color=palette.Q_TEXT).pack(anchor="w")
+            ctk.CTkLabel(card, text=hint, text_color=palette.Q_MUTED).pack(anchor="w")
             for key, label in fields:
                 spec = replace(specs[key], label=label)
                 row = ParamRow(card, stage, spec, base.get(key, spec.default),
@@ -197,9 +201,9 @@ class DetailPanel(ttk.Frame):
         choice.set_baseline(_shape_label(base.get("air_shape", shape.default)))
         choice.grid(row=2, column=0, sticky="ew", pady=(6, 2))
         self._rows.append(choice)
-        self.flat_note = ttk.Label(
+        self.flat_note = ctk.CTkLabel(
             body, text="All gains at 0 dB \u2014 the EQ is currently flat and has no effect.",
-            style="Muted.TLabel",
+            text_color=palette.Q_MUTED,
         )
         self.flat_note.grid(row=3, column=0, sticky="w", pady=(4, 0))
         self._show_flat()
@@ -224,7 +228,7 @@ class DetailPanel(ttk.Frame):
     def _bool(self, body, stage, spec, row_index, *, recommend: bool, baseline=None) -> None:
         if baseline is None:
             baseline = (self.baseline or {}).get("params", {}).get(spec.key, spec.default)
-        row = ttk.Frame(body, style="Panel.TFrame")
+        row = ctk.CTkFrame(body, fg_color=palette.Q_PANEL, corner_radius=0)
         row.grid(row=row_index, column=0, sticky="w", pady=2)
         var = tk.BooleanVar(value=bool(stage.params[spec.key]))
 
@@ -236,11 +240,12 @@ class DetailPanel(ttk.Frame):
             )
             self.on_edit()
 
-        ttk.Checkbutton(row, text=spec.label, variable=var, command=_set,
-                        style="Panel.TCheckbutton").pack(side="left")
+        ctk.CTkCheckBox(row, text=spec.label, variable=var, command=_set,
+                        ).pack(side="left")
         if recommend and not stage.params[spec.key]:
-            ttk.Label(row, text="recommended", style="Muted.TLabel").pack(side="left", padx=6)
-        reset = ttk.Button(row, text="", width=2, command=lambda: _reset())
+            ctk.CTkLabel(row, text="recommended", text_color=palette.Q_MUTED).pack(side="left", padx=6)
+        reset = ctk.CTkButton(row, text="", width=28, height=24,
+                              command=lambda: _reset())
         reset.pack(side="left", padx=4)
 
         def _reset():
@@ -313,15 +318,15 @@ def _shape_label(value) -> str:
 def _install_note(master) -> tk.Frame:
     box = tk.Frame(master, background=palette.Q_PANEL,
                    highlightbackground=palette.Q_BORDER, highlightthickness=1)
-    ttk.Label(
+    ctk.CTkLabel(
         box,
         text="Neural enhance needs resemble-enhance. Its only release requires "
              "torch 2.1.1, which has no Python 3.12 wheel, so this stage "
              "cannot be installed here. ./runme.sh still installs DeepFilterNet "
              "for neural denoise.",
-        style="Muted.TLabel", wraplength=420, justify="left",
+        text_color=palette.Q_MUTED, wraplength=420, justify="left",
     ).pack(anchor="w", padx=8, pady=(8, 4))
-    ttk.Button(box, text="Install neural extra\u2026", command=_show_install).pack(
+    ctk.CTkButton(box, text="Install neural extra\u2026", command=_show_install).pack(
         anchor="w", padx=8, pady=(0, 8))
     return box
 
