@@ -203,14 +203,14 @@ class QualityTab(ctk.CTkFrame):
         )
         self.footer.grid(row=2, column=0, sticky="ew")
         self._include_at_finish = None
-        if self.workflow is not None and hasattr(self.workflow, "bitrate_var"):
+        if self.workflow is not None and hasattr(self.workflow, "include_cleanup"):
             self.footer.bitrate_var = self.workflow.bitrate_var
-            self._include_at_finish = ctk.CTkSwitch(
-                self.chain_panel, text="Include at Finish",
+            from chaptertools.gui.ui_kit import toggle
+            self._include_at_finish = toggle(
+                self.footer, "Include at Finish",
                 variable=self.workflow.include_cleanup,
-                command=self.workflow._sync_cleanup_choice,
-            )
-            self._include_at_finish.grid(row=4, column=0, sticky="w", pady=(2, 0))
+                command=self.workflow._sync_cleanup_choice)
+            self._include_at_finish.grid(row=0, column=0, sticky="w", padx=8, pady=4)
         self._multifile = False
         self._multifile_folder = ""
         self._multifile_files: list[str] = []
@@ -691,17 +691,20 @@ class QualityTab(ctk.CTkFrame):
     def _show_source(self) -> None:
         from chaptertools.audio_quality.worker import nearest_bitrate, source_facts
         facts = source_facts(self.audio) if self.audio else {}
-        name = os.path.basename(self.audio) if self.audio else ""
-        from chaptertools.gui.projection import audio_duration
-        duration = audio_duration(self.workflow.analysis or {}) or facts.get("duration")
         rate = facts.get("sample_rate")
         channels = facts.get("channels")
-        blank = "\u2014"
-        clock = hms(duration) if duration else blank
-        rate_text = rate or blank
-        channel_text = channels or blank
+        if isinstance(rate, int) and rate >= 1000:
+            rate_text = f"{rate / 1000:g} kHz"
+        else:
+            rate_text = f"{rate} Hz" if rate else ""
+        if channels == 1:
+            channel_text = "mono"
+        elif channels:
+            channel_text = f"{channels} ch"
+        else:
+            channel_text = ""
         self.analysis.set_source(
-            f"{name}    {clock}    {rate_text} Hz    {channel_text} ch")
+            " · ".join(part for part in (rate_text, channel_text) if part))
         if facts.get("bit_rate"):
             self.footer.bitrate_var.set(nearest_bitrate(facts["bit_rate"]))
         self._refresh_status()

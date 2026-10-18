@@ -89,8 +89,8 @@ def test_measure_and_identify_copy():
         },
     }
     p = WorkflowProjection(art, 0.5, DiskFacts(), audio="/tmp/Book.mp3")
-    assert "2 gaps in 1 length populations" in p.measure_text
-    assert "41 around 3.2 s" in p.measure_text
+    assert "2 pauses found" in p.measure_text
+    assert "The longest 41 are about 3.2 s" in p.measure_text
     assert "-write_xing 1" in p.measure_text and "Book.fixed.mp3" in p.measure_text
     assert p.identify_button == "Check"
     assert "rate spread 9.0%" in p.identify_text

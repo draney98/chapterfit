@@ -42,7 +42,9 @@ class AnalysisFrame(ctk.CTkFrame):
         tips.tooltip(rescan, "measure the file again")
 
         tiles = ctk.CTkFrame(self, fg_color=palette.Q_GROUND, corner_radius=0)
-        tiles.grid(row=1, column=0, sticky="w", pady=(4, 0))
+        tiles.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        for col in range(4):
+            tiles.columnconfigure(col, weight=1, uniform="metric")
         self.tiles = {}
         for index, (key, title) in enumerate((
             ("integrated_lufs", "Integrated"),
@@ -51,7 +53,7 @@ class AnalysisFrame(ctk.CTkFrame):
             ("dynamic_range_db", "Dynamic range"),
         )):
             tile = MetricTile(tiles, title)
-            tile.grid(row=index // 2, column=index % 2, sticky="nsew", padx=2, pady=2)
+            tile.grid(row=0, column=index, sticky="nsew", padx=2, pady=2)
             self.tiles[key] = tile
 
         self.advice = ctk.CTkFrame(
@@ -61,7 +63,8 @@ class AnalysisFrame(ctk.CTkFrame):
         ctk.CTkLabel(self.advice, text=_ADVICE, text_color=palette.Q_WARN_TEXT,
                      wraplength=640, justify="left", anchor="w").grid(
             row=0, column=0, sticky="w", padx=4, pady=4)
-        primary(self.advice, "Turn it on", command=on_turn_on).grid(
+        primary(self.advice, "Use per-segment noise estimate",
+                command=on_turn_on, width=280).grid(
             row=0, column=1, sticky="e", padx=(8, 4))
         self.advice.grid_remove()
 

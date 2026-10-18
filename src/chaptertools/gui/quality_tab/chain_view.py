@@ -54,22 +54,9 @@ class ChainPanel(ctk.CTkFrame):
         ctk.CTkLabel(self, text="Signal chain", text_color=palette.Q_MUTED,
                      anchor="w").grid(row=2, column=0, sticky="w", padx=4)
 
-        host = ctk.CTkFrame(self, fg_color=palette.Q_PANEL, corner_radius=0)
-        host.grid(row=3, column=0, sticky="nsew", padx=4)
-        self.rowconfigure(3, weight=1)
-        self.canvas = tk.Canvas(
-            host, height=80, highlightthickness=0, background=palette.Q_PANEL)
-        from chaptertools.gui.ui_kit import vscroll
-        self.canvas.grid(row=0, column=0, sticky="nsew")
-        vscroll(host, self.canvas, row=0, column=1, sticky="ns")
-        host.rowconfigure(0, weight=1)
-        host.columnconfigure(0, weight=1)
-        self.inner = ctk.CTkFrame(self.canvas, fg_color=palette.Q_PANEL,
-                                  corner_radius=0)
+        self.inner = ctk.CTkFrame(self, fg_color=palette.Q_PANEL, corner_radius=0)
+        self.inner.grid(row=3, column=0, sticky="ew", padx=4, pady=(0, 4))
         self.inner.columnconfigure(0, weight=1)
-        self._window = self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
-        self.inner.bind("<Configure>", self._fit_scroll)
-        self.canvas.bind("<Configure>", self._fit_width)
 
         self.rows = []
         for index, stage in enumerate(chain.stages):
@@ -101,20 +88,6 @@ class ChainPanel(ctk.CTkFrame):
         self._paint_selection()
         frame = self.rows[self._selected].frame
         frame.focus_set()
-        self.canvas.update_idletasks()
-        height = max(self.inner.winfo_reqheight(), 1)
-        self.canvas.yview_moveto(frame.winfo_y() / height)
-
-    def _fit_scroll(self, _event=None) -> None:
-        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
-
-    def _fit_width(self, event) -> None:
-        need = event.width
-        for row in self.rows:
-            need = max(need, row.frame.winfo_reqwidth())
-        self.canvas.itemconfigure(self._window, width=need)
-        if need > self.canvas.winfo_width():
-            self.canvas.configure(width=need)
 
     def move(self, delta: int) -> None:
         self.select(self._selected + delta)
@@ -167,8 +140,10 @@ class ChainRow:
             self.frame, text=str(index + 1), width=28,
             text_color=palette.Q_MUTED, anchor="w")
         self.index_label.grid(row=0, column=0, sticky="w", padx=(4, 0))
+        from chaptertools.gui.ui_kit import BODY, C, font
         self.name_label = ctk.CTkLabel(
-            self.frame, text=stage.title, text_color=palette.Q_TEXT, anchor="w")
+            self.frame, text=stage.title, text_color=palette.Q_TEXT, anchor="w",
+            font=font(BODY))
         self.name_label.grid(row=0, column=1, sticky="w")
         self.summary_var = tk.StringVar(value="")
         self.summary = ctk.CTkLabel(
@@ -187,6 +162,9 @@ class ChainRow:
         self.check.grid(row=0, column=4, sticky="e", padx=(0, 4))
         if not ok:
             self.check.configure(state="disabled")
+            self.check.grid_remove()
+            self.name_label.configure(text_color=C["disabled"])
+            self.summary_var.set("not installed")
         for widget in (self.frame, self.index_label, self.name_label, self.summary):
             widget.bind("<Button-1>", self._click)
             widget.bind("<Up>", keys._keys)
@@ -196,6 +174,9 @@ class ChainRow:
         self.check.bind("<Down>", keys._keys)
 
     def refresh(self, summary: str) -> None:
+        if not self.stage.availability()[0]:
+            summary = "not installed"
+            self.check.grid_remove()
         self.summary_var.set(summary)
         self._paint()
 
@@ -216,8 +197,9 @@ class ChainRow:
         ground = palette.Q_SELECT if selected else palette.Q_PANEL
         muted = palette.Q_MUTED
         text = palette.Q_TEXT
-        if self.stage.bypass or not self.stage.availability()[0]:
-            text = muted
+        if not self.stage.availability()[0]:
+            from chaptertools.gui.ui_kit import C
+            text = C["disabled"]
         self.frame.configure(fg_color=ground)
         self.index_label.configure(text_color=muted, fg_color="transparent")
         self.name_label.configure(text_color=text, fg_color="transparent")

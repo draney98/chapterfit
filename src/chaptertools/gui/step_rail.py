@@ -248,8 +248,8 @@ class Workspace(ctk.CTkFrame):
         else:
             self.columnconfigure(0, weight=1)
             self.columnconfigure(1, minsize=0, weight=0)
-            self.rowconfigure(0, weight=3)
-            self.rowconfigure(1, weight=1)
+            self.rowconfigure(0, weight=1)
+            self.rowconfigure(1, weight=0)
             self.main.grid(row=0, column=0, columnspan=2, sticky="nsew",
                            padx=pad, pady=(pad, pad // 2))
             self.inspector.grid(row=1, column=0, columnspan=2, sticky="nsew",

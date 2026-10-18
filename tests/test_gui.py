@@ -1349,8 +1349,8 @@ def test_measure_result_shows_populations_and_header_fix(tmp_path):
         _write_artifact(wf, art)
         wf._refresh()
         text = wf.measure_result.get()
-        assert "2 length populations" in text
-        assert "41 around 3.2 s" in text
+        assert "1 pause found" in text
+        assert "The longest 41 are about 3.2 s" in text
         assert "-write_xing 1" in text and "Book.fixed.mp3" in text
         assert wf.copy_fix_btn.winfo_manager() == "grid"
         art["source"]["timeline_trustworthy"] = True
@@ -1526,13 +1526,15 @@ def test_table_tint_and_font_pins(tmp_path):
         # lighter grey for unplaced chapters
         assert wf.tree.tag_configure("unplaced").get("background") \
             == "#b0b0b0"
-        # chapter table font is +2 over the UI default (resolved from the
-        # named font the style stores)
+        # Chapter table is 15 px (one step over the 14 px body, under the
+        # 16 px ceiling) with a 30 px row.
         base = int(tkfont.nametofont("TkDefaultFont", root=app).cget("size"))
         style = ttk.Style(wf)
         got = style.configure("Chapter.Treeview", "font")
         named = tkfont.nametofont(str(got), root=app)
-        assert int(named.cget("size")) == base + 2
+        assert int(named.cget("size")) == 15
+        assert base == 14
+        assert int(style.configure("Chapter.Treeview", "rowheight")) == 30
     finally:
         app.destroy()
 

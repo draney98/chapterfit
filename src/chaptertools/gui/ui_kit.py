@@ -77,6 +77,50 @@ def fmt_int(value: int) -> str:
     return f"{int(value):,}"
 
 
+def fmt_fit(score) -> str:
+    """One decimal for an alignment fit score.
+
+    The stored value is the trial score (a consistent edition is at
+    least 5). It is not a 0–1 fraction or a percentage.
+    """
+    return f"{float(score):.1f}"
+
+
+def ellipsize(text: str, measure, width: int) -> str:
+    """End a string with … so it fits `width` pixels."""
+    if not text or width <= 0 or measure(text) <= width:
+        return text
+    ell = "…"
+    if measure(ell) > width:
+        return ell
+    lo, hi = 0, len(text)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if measure(text[:mid] + ell) <= width:
+            lo = mid
+        else:
+            hi = mid - 1
+    return text[:lo] + ell
+
+
+def option_menu(parent, variable, values, **kw):
+    """A standard-height menu that is not an accent button."""
+    return ctk.CTkOptionMenu(
+        parent, variable=variable, values=list(values),
+        font=font(BODY), fg_color=C["panel"], button_color=C["border"],
+        button_hover_color=C["sunken"], text_color=C["text"],
+        dropdown_fg_color=C["panel"], dropdown_text_color=C["text"],
+        **kw)
+
+
+def toggle(parent, text, variable=None, command=None, **kw):
+    return ctk.CTkSwitch(
+        parent, text=text, variable=variable, command=command,
+        font=font(BODY), text_color=C["text"],
+        fg_color=C["border"], progress_color=C["accent"],
+        button_color=C["panel"], **kw)
+
+
 def font(size=BODY, weight="normal", mono=False, underline=False):
     return ctk.CTkFont(
         family=MONO if mono else FONT, size=ctk_px(size), weight=weight,

@@ -381,7 +381,7 @@ def _style_ttk(root: tk.Misc) -> None:
               foreground=[("active", p["text"])])
     style.configure("Chapter.Treeview", background=p["field_bg"],
                     fieldbackground=p["field_bg"], foreground=p["field_fg"],
-                    rowheight=row_h)
+                    rowheight=30)
     style.configure("TScrollbar", background=p["surface_alt"],
                     troughcolor=p["bg"], bordercolor=p["border"],
                     arrowcolor=p["text"])

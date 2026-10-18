@@ -58,7 +58,25 @@ class StagePanels:
             row, "Re-scan", command=self.cmd_rescan, width=_btn_width("Re-scan"))
         rescan.grid(row=0, column=2, sticky="e", padx=(8, 0))
         self._tip(rescan, "measure this file again, including loudness and noise")
-        self.measure_result = self._result_line(p, row=1, colspan=1)
+        from chaptertools.gui.ui_kit import BODY, PAD, body, font, panel, section
+        card = panel(p)
+        card.grid(row=1, column=0, sticky="ew", pady=(PAD, 0))
+        card.columnconfigure(0, weight=1)
+        section(card, "RESULT").grid(
+            row=0, column=0, sticky="w", padx=PAD, pady=(PAD, 0))
+        self.measure_result = tk.StringVar(value="")
+        result = body(card, "")
+        result.configure(textvariable=self.measure_result, wraplength=720)
+        result.grid(row=1, column=0, sticky="ew", padx=PAD, pady=(PAD // 2, 0))
+        from chaptertools.gui.ui_kit import small
+        self.duration_note = small(card, "")
+        self.duration_note.grid(
+            row=2, column=0, sticky="w", padx=PAD, pady=(PAD // 2, 0))
+        self.duration_note.grid_remove()
+        nxt = ctk.CTkLabel(
+            card, text="next: Match", text_color=palette.OK,
+            font=font(BODY, "bold"), anchor="w")
+        nxt.grid(row=3, column=0, sticky="w", padx=PAD, pady=(PAD // 2, PAD))
         self._tip(self.measure_btn, "decode the whole file once: envelope, "
                   "timeline check, calibration, and the gap list")
         from chaptertools.gui.ui_kit import secondary
@@ -217,23 +235,24 @@ class StagePanels:
         self._identify_mode_changed()
 
     def _panel_align(self, host):
+        from chaptertools.gui.ui_kit import BODY, font
         p = ctk_frame(host, fg_color="transparent", corner_radius=0)
-        p.columnconfigure(3, weight=1)
-        ctk.CTkLabel(p, text="Minimum confidence:").grid(row=0, column=0,
-                                                         sticky="w")
+        p.columnconfigure(1, weight=1)
+        ctk.CTkLabel(p, text="Minimum confidence", width=90, anchor="w",
+                     font=font(BODY)).grid(row=0, column=0, sticky="w")
         self.min_conf = tk.DoubleVar(value=0.5)
         self.min_conf.trace_add("write", lambda *_: self._refresh_soon())
         self.min_conf_spin = ttk.Spinbox(p, from_=0.0, to=1.0, increment=0.05,
                                          width=5, textvariable=self.min_conf)
         self.min_conf_spin.grid(row=0, column=1, sticky="w")
-        ctk.CTkLabel(p, text="Hints:").grid(row=0, column=2, sticky="ne",
-                                            padx=(10, 2))
+        self.align_btn = self._primary(p, 0, 2, "Align", self.cmd_align)
+        ctk.CTkLabel(p, text="Hints", width=90, anchor="nw",
+                     font=font(BODY)).grid(row=1, column=0, sticky="nw", pady=(6, 0))
         self.near_var = tk.StringVar()
-        self.hints_box = tk.Text(p, height=3, width=18, wrap="none")
-        self.hints_box.grid(row=0, column=3, sticky="ew")
+        self.hints_box = tk.Text(p, height=3, width=18, wrap="word")
+        self.hints_box.grid(row=1, column=1, columnspan=2, sticky="ew", pady=(6, 0))
         self._tip(self.hints_box, "one CH=TIME per line, for example 12=3:45:00")
-        self.align_btn = self._primary(p, 0, 4, "Align", self.cmd_align)
-        self.align_result = self._result_line(p, row=1, colspan=5)
+        self.align_result = self._result_line(p, row=2, colspan=3)
         self._tip(self.align_btn, "place every published chapter on a "
                   "real gap, keeping local reading rate consistent")
         self._tip(self.min_conf_spin, "chapters below this confidence are "
@@ -252,11 +271,16 @@ class StagePanels:
         self.unresolved_frame = ctk_frame(summary, fg_color="transparent")
         self.unresolved_frame.pack(side="top", anchor="w", fill="x")
         self.next_var = tk.StringVar(value="")
-        from chaptertools.gui.ui_kit import BODY, font
+        from chaptertools.gui.ui_kit import BODY, font, text_button
+        row = ctk_frame(summary, fg_color="transparent")
+        row.pack(side="top", anchor="w")
         self.next_label = ctk.CTkLabel(
-            summary, textvariable=self.next_var, text_color=palette.OK,
+            row, text="next:", text_color=palette.OK,
             font=font(BODY, "bold"), anchor="w")
-        self.next_label.pack(side="top", anchor="w")
+        self.next_label.pack(side="left")
+        self._next_jump = text_button(
+            row, "", command=self._jump_next, width=140)
+        self._next_jump.pack(side="left", padx=(4, 0))
         inner = getattr(self._resolve_scroll, "_scrollable_frame", None)
         if inner is not None:
             inner.bind(
@@ -270,25 +294,31 @@ class StagePanels:
             row=0, column=0, columnspan=3, sticky="w", padx=8, pady=(6, 2))
         self._resolve_left = left
         left.columnconfigure(0, minsize=110)
-        left.columnconfigure(1, weight=1)
-        left.columnconfigure(2, weight=1)
+        left.columnconfigure(2, minsize=130)
+        left.columnconfigure(3, weight=1)
 
         def option(row, label, button, cmd, cost_var, status_var, tip,
                    control=None, pack_side="left"):
-            ctk.CTkLabel(left, text=label, height=20, anchor="e").grid(
+            del pack_side
+            ctk.CTkLabel(left, text=label.rstrip(":"), height=20, anchor="e").grid(
                 row=row, column=0, sticky="e", padx=(8, 6), pady=2)
-            cell = control or ctk_frame(left, fg_color="transparent")
-            if control is None:
-                cell.grid(row=row, column=1, sticky="w", padx=2, pady=2)
+            if control is not None:
+                control.grid(row=row, column=1, sticky="w", padx=2, pady=2)
             from chaptertools.gui.ui_kit import secondary
-            b = secondary(cell, button, command=cmd, width=_btn_width(button))
-            b.pack(side=pack_side, anchor="w")
-            meta = ctk_frame(left, fg_color="transparent")
-            meta.grid(row=row, column=2, sticky="w", padx=(6, 8), pady=2)
-            ctk.CTkLabel(meta, textvariable=cost_var, text="", height=18,
-                         text_color=palette.MUTED).pack(side="left")
-            ctk.CTkLabel(meta, textvariable=status_var, text="", height=18,
-                         text_color=palette.MUTED).pack(side="left", padx=(6, 0))
+            b = secondary(left, button, command=cmd, width=_btn_width(button))
+            b.grid(row=row, column=2, sticky="w", padx=2, pady=2)
+            shown = tk.StringVar()
+
+            def _sync(*_a):
+                parts = [cost_var.get(), status_var.get()]
+                shown.set(" · ".join(part for part in parts if part))
+
+            cost_var.trace_add("write", _sync)
+            status_var.trace_add("write", _sync)
+            _sync()
+            ctk.CTkLabel(left, textvariable=shown, text="", anchor="e",
+                         text_color=palette.MUTED).grid(
+                row=row, column=3, sticky="e", padx=(6, 8), pady=2)
             self._tip(b, tip)
             return b
 
@@ -318,24 +348,26 @@ class StagePanels:
         self.sweep_start = tk.StringVar()
         self.sweep_end = tk.StringVar()
         self.sweep_start_entry = ctk.CTkEntry(
-            rng, textvariable=self.sweep_start, width=90, height=28)
+            rng, textvariable=self.sweep_start, width=90, height=28,
+            placeholder_text="0:00:00")
         self.sweep_start_entry.pack(side="left")
         ctk.CTkLabel(rng, text="–", height=18).pack(side="left", padx=2)
         self.sweep_end_entry = ctk.CTkEntry(
-            rng, textvariable=self.sweep_end, width=90, height=28)
+            rng, textvariable=self.sweep_end, width=90, height=28,
+            placeholder_text="0:00:00")
         self.sweep_end_entry.pack(side="left")
         for e in (self.sweep_start_entry, self.sweep_end_entry):
             e.bind("<Key>", self._sweep_edited, add="+")
             self._tip(e, "start and end of the span to sweep (H:MM:SS); "
                          "selecting a chapter fills them until you type")
         self.range_cost = tk.StringVar(value="")
-        self.range_status = tk.StringVar(value="")
+        self.range_status = tk.StringVar(value="not run")
         self.range_btn = option(
             3, "Sweep range:", "Sweep range", self._sweep_range,
             self.range_cost, self.range_status,
             "reads this span continuously and pins announced chapters - "
             "the targeted fix for one stubborn chapter",
-            control=sweep_ctrl, pack_side="top")
+            control=sweep_ctrl)
         self.probe_status = tk.StringVar(value="not run")
         self.probe_btn = option(
             4, "Sweep probe:", "Probe 10 min", self._sweep_probe,
@@ -422,24 +454,29 @@ class StagePanels:
             secondary, section, small)
 
         parent.columnconfigure(0, weight=1)
-        parent.rowconfigure(1, weight=1)
-
+        parent.rowconfigure(1, weight=0)
         head = ctk_frame(parent, fg_color="transparent")
         head.grid(row=0, column=0, sticky="ew", pady=(0, PAD))
-        head.columnconfigure(0, weight=1)
+        head.columnconfigure(1, weight=1)
         section(head, "Editions").grid(row=0, column=0, sticky="w")
         self.editions_count_var = tk.StringVar(value="")
         count_lbl = small(head, text="")
         count_lbl.configure(textvariable=self.editions_count_var)
-        count_lbl.grid(row=0, column=1, sticky="e")
+        count_lbl.grid(row=0, column=1, sticky="w", padx=(PAD, 0))
 
         cols = ("marker", "asin", "title", "narrator", "length", "ch", "fit")
         table_card = panel(parent)
-        table_card.grid(row=1, column=0, sticky="nsew")
-        table_card.rowconfigure(0, weight=1)
+        table_card.grid(row=1, column=0, sticky="ew")
         table_card.columnconfigure(0, weight=1)
-        self.asin_tree = ttk.Treeview(table_card, columns=cols, show="headings",
-                                      height=8)
+        style = ttk.Style(parent)
+        style.configure("Edition.Treeview", font=(FONT, BODY))
+        style.map(
+            "Edition.Treeview",
+            background=[("selected", C["accent_soft"])],
+            foreground=[("selected", C["text"])])
+        self.asin_tree = ttk.Treeview(
+            table_card, columns=cols, show="headings", height=8,
+            style="Edition.Treeview")
         headings = (
             ("marker", "", 36, "center"),
             ("asin", "ASIN", 150, "w"),
@@ -455,8 +492,7 @@ class StagePanels:
                 col, width=width, minwidth=width,
                 stretch=(col == "title"), anchor=anchor)
         self.asin_tree.tag_configure("divider", foreground=C["muted"])
-        self.asin_tree.tag_configure("in_use", font=(FONT, BODY, "bold"))
-        self.asin_tree.grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
+        self.asin_tree.grid(row=0, column=0, sticky="ew", padx=1, pady=1)
         self.asin_tree.bind("<<TreeviewSelect>>", self._on_asin_select)
 
         card = panel(parent)
@@ -519,7 +555,7 @@ class StagePanels:
             lbl.after_idle(_wrap)
         p = ctk_frame(host, fg_color="transparent", corner_radius=0)
         p.columnconfigure(0, weight=1)
-        p.rowconfigure(3, weight=1)
+        p.rowconfigure(3, weight=0)
         self.include_cleanup = tk.BooleanVar(value=False)
         self.embed_var = tk.BooleanVar(value=True)
         self.bitrate_var = tk.StringVar(value="64k")
@@ -618,9 +654,9 @@ class StagePanels:
         opt.grid(row=3, column=2, sticky="w", padx=8)
         ctk.CTkLabel(opt, text="MP3").pack(side="left")
         bitrates = ("48k", "64k", "96k", "128k", "160k", "192k", "256k", "320k")
-        self.bitrate_combo = ttk.Combobox(
-            opt, textvariable=self.bitrate_var, values=bitrates,
-            width=6, state="readonly")
+        from chaptertools.gui.ui_kit import option_menu
+        self.bitrate_combo = option_menu(
+            opt, self.bitrate_var, bitrates, width=90)
         self.bitrate_combo.pack(side="left", padx=(6, 0))
         self._edit_cleanup = text_button(
             inner, "Change…", command=lambda: self.show_step("cleanup"),
@@ -639,22 +675,17 @@ class StagePanels:
         plan_wrap.grid(row=3, column=0, sticky="nsew")
         plan_wrap.columnconfigure(0, weight=1)
         plan_wrap.rowconfigure(0, weight=1)
+        from chaptertools.gui.ui_kit import body
         self._plan_empty_frame = ctk_frame(plan_wrap, fg_color="transparent")
-        self._plan_empty_frame.grid(row=0, column=0, sticky="")
-        ctk.CTkLabel(self._plan_empty_frame, text="No dry run yet",
-                     font=font(SMALL, "bold")).pack(pady=(24, 4))
-        ctk.CTkLabel(
+        self._plan_empty_frame.grid(row=0, column=0, sticky="ew")
+        body(
             self._plan_empty_frame,
-            text="Dry run shows what Apply will write, without changing the library.",
-            text_color=palette.MUTED).pack(pady=(0, 8))
-        from chaptertools.gui.ui_kit import secondary as _secondary
-        self._plan_empty_btn = _secondary(
-            self._plan_empty_frame, "Dry run", command=self.cmd_finalize_dry,
-            width=_btn_width("Dry run"))
-        self._plan_empty_btn.pack()
+            "No dry run yet. A dry run shows what Apply will write, "
+            "without changing the library.",
+        ).pack(anchor="w", padx=8, pady=8)
         fixed = tkfont.nametofont("TkFixedFont", root=self)
         self.dry_log = ctk.CTkTextbox(
-            plan_wrap, wrap="none",
+            plan_wrap, wrap="none", height=160,
             fg_color=palette.WINDOW, text_color=palette.TEXT,
             font=ctk.CTkFont(family=fixed.actual("family"),
                              size=fixed.actual("size")))
@@ -665,24 +696,15 @@ class StagePanels:
         foot.grid(row=4, column=0, sticky="ew", pady=(8, 0))
         foot.columnconfigure(0, weight=1)
         self.allow_delete_var = tk.BooleanVar(value=False)
-        allow_delete_cb = ctk.CTkCheckBox(
-            foot,
-            text="Allow delete-and-re-add in Audiobookshelf "
-                 "(clears listening progress)",
+        from chaptertools.gui.ui_kit import banner, checkbox, small
+        warn = banner(foot, "warn")
+        warn.grid(row=0, column=0, columnspan=3, sticky="ew")
+        allow_delete_cb = checkbox(
+            warn, "Allow delete-and-re-add in Audiobookshelf",
             variable=self.allow_delete_var)
-        allow_delete_cb.grid(row=0, column=0, columnspan=3, sticky="ew")
-
-        def _wrap_allow_delete(_event=None):
-            width = allow_delete_cb.winfo_width()
-            if width < 40:
-                return
-            for child in allow_delete_cb.winfo_children():
-                try:
-                    child.configure(wraplength=max(80, width - 28))
-                except tk.TclError:
-                    pass
-
-        allow_delete_cb.bind("<Configure>", _wrap_allow_delete)
+        allow_delete_cb.pack(anchor="w", padx=8, pady=(6, 0))
+        small(warn, "This clears listening progress.").pack(
+            anchor="w", padx=8, pady=(0, 6))
         self._tip(allow_delete_cb, "last resort: delete the ABS database "
                   "entry and let the library scan re-add it; clears "
                   "listening progress")

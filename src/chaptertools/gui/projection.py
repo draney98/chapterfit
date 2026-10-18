@@ -175,13 +175,14 @@ class WorkflowProjection:
         src = self.analysis.get("source") or {}
         from .ui_kit import fmt_int
         n_gaps = len(gaps.get("gaps") or [])
-        lines = [f"{fmt_int(n_gaps)} gaps in {len(pops)} "
-                 f"length populations"
-                 + (f"; longest: {pops[-1]['n']} around "
-                    f"{pops[-1]['centre']:.1f} s" if pops else "")]
-        note = duration_mismatch_note(self.analysis)
-        if note:
-            lines.append(note)
+        noun = "pause" if n_gaps == 1 else "pauses"
+        sentence = f"{fmt_int(n_gaps)} {noun} found."
+        if pops:
+            sentence += (
+                f" The longest {pops[-1]['n']} are about "
+                f"{pops[-1]['centre']:.1f} s, which is typical for chapter breaks."
+            )
+        lines = [sentence]
         if self.header_fix:
             lines.append(
                 f"The header is wrong by "

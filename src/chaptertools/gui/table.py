@@ -162,17 +162,21 @@ class TableViews:
     """Chapters tab. Mixed into WorkflowPanel."""
 
     def size_table(self):
-        row_font = fonts.derived(self, grow=2)
+        # 15 px and a 30 px row. A +2 pt step on the 14 px body would be
+        # 16, the type-scale ceiling, so the table stays at 15.
+        from .ui_kit import FONT
+        row_font = tkfont.Font(root=self, family=FONT, size=15)
         head_font = tkfont.nametofont("TkHeadingFont", root=self)
         ttk.Style(self).configure(
-            "Chapter.Treeview", font=row_font,
-            rowheight=row_font.metrics("linespace") + 2)
+            "Chapter.Treeview", font=row_font, rowheight=30)
         self.table_font = row_font
+        self._chapter_widths = {}
         for col, heading, sample, _anchor in CHAPTER_COLUMNS:
             text = TITLE_MIN if col == "title" else (sample or heading)
             need = max(head_font.measure(heading),
                        row_font.measure(text)) + CELL_PAD
             self.tree.column(col, minwidth=need, width=need)
+            self._chapter_widths[col] = need
 
     def _build_chapters_tab(self, parent):
         tab = ctk_frame(parent, fg_color="transparent", corner_radius=0)
@@ -206,11 +210,30 @@ class TableViews:
         foot.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(2, 0))
         legend = ctk_frame(foot, fg_color="transparent")
         self.chapter_filter = tk.StringVar(value="all")
+        self._filter_labels = {
+            "all": "All chapters",
+            "problems": "Problems",
+            "lowconf": "Low confidence",
+            "unplaced": "Unplaced",
+        }
+        show = ctk_frame(legend, fg_color="transparent")
+        show.pack(side="left", padx=(0, 8))
+        ctk.CTkLabel(show, text="Show", text_color=palette.TEXT).pack(side="left")
         self.filter_box = ttk.Combobox(
-            legend, width=14, state="readonly", textvariable=self.chapter_filter,
-            values=("all", "problems", "lowconf", "unplaced"))
-        self.filter_box.pack(side="left", padx=(0, 8))
-        self.filter_box.bind("<<ComboboxSelected>>", lambda _e: self._refresh())
+            show, width=16, state="readonly",
+            values=tuple(self._filter_labels.values()))
+        self.filter_box.set(self._filter_labels["all"])
+        self.filter_box.pack(side="left", padx=(6, 0))
+
+        def _pick_filter(_e=None):
+            label = self.filter_box.get()
+            for key, text in self._filter_labels.items():
+                if text == label:
+                    self.chapter_filter.set(key)
+                    break
+            self._refresh()
+
+        self.filter_box.bind("<<ComboboxSelected>>", _pick_filter)
         chips = ctk_frame(legend, fg_color="transparent")
         chips.pack(side="top", anchor="w")
         for color, text in ((palette.ROW_UNPLACED, "unplaced"),
@@ -223,11 +246,13 @@ class TableViews:
             ctk.CTkLabel(chips, text=text, height=16,
                          text_color=palette.MUTED).pack(
                 side="left", padx=(0, 12))
-        ctk.CTkLabel(legend, text="?N = not written to the file", height=16,
-                     text_color=palette.MUTED).pack(side="top", anchor="w")
+        ctk.CTkLabel(
+            legend, text="Chapters marked ? won't be written to the file.",
+            text_color=palette.MUTED).pack(side="top", anchor="w")
+        from .ui_kit import SMALL, font
         self.shortcut_label = ctk.CTkLabel(
             foot, text=SHORTCUTS, text_color=palette.MUTED, anchor="w",
-            height=16)
+            font=font(SMALL))
         self._table_legend = legend
         self._foot_split = None
         foot.columnconfigure(0, weight=1)

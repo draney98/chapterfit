@@ -15,20 +15,25 @@ class FooterBar(ctk.CTkFrame):
                  on_process, on_replace, on_cancel):
         super().__init__(master, fg_color=palette.Q_GROUND, corner_radius=0)
         del hear_var, on_play, on_stop, on_hear, on_process, on_replace, on_cancel
-        self.columnconfigure(0, weight=1)
+        self.columnconfigure(1, weight=1)
         self.format_var = tk.StringVar(value="MP3")
         self.bitrate_var = tk.StringVar(value="64k")
         self._running = False
         self._replace_ready = False
         self.status_var = tk.StringVar(value="")
-        self.bar = ctk.CTkProgressBar(self, width=200)
+        self.bar = ctk.CTkProgressBar(self, width=160)
         self.bar.set(0)
-        self.bar.grid(row=0, column=0, sticky="w", padx=4, pady=4)
-        ctk.CTkLabel(self, textvariable=self.status_var, anchor="w", text="").grid(
-            row=0, column=1, sticky="w", padx=8)
+        self._status = ctk.CTkLabel(
+            self, textvariable=self.status_var, anchor="e", text="",
+            text_color=palette.Q_MUTED)
+        self._status.grid(row=0, column=1, sticky="e", padx=8, pady=4)
 
     def set_running(self, running: bool) -> None:
         self._running = running
+        if running:
+            self.bar.grid(row=0, column=2, sticky="e", padx=(0, 8), pady=4)
+        else:
+            self.bar.grid_remove()
 
     def set_progress(self, fraction: float) -> None:
         try:

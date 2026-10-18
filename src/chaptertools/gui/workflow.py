@@ -286,11 +286,20 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
             "emit": self._panel_emit(self._main_frames["finish"]),
             "finalize": self._panel_finalize(self._insp_frames["finish"]),
         }
-        for key in ("measure", "emit", "finalize"):
+        for key in ("emit", "finalize"):
             self._panels[key].grid(row=0, column=0, sticky="nsew")
+        self._panels["measure"].grid(row=0, column=0, sticky="new")
         self._panels["identify"].grid(row=0, column=0, sticky="ew")
         self._build_book_info(self._match_scroll)
-        self._build_editions(self._main_frames["match"])
+        match_main = self._main_frames["match"]
+        match_main.rowconfigure(0, weight=1)
+        match_main.columnconfigure(0, weight=1)
+        from .ui_kit import C as kit_colors
+        editions = ctk.CTkScrollableFrame(
+            match_main, fg_color=kit_colors["bg"], corner_radius=0, height=120)
+        editions.grid(row=0, column=0, sticky="nsew")
+        editions.columnconfigure(0, weight=1)
+        self._build_editions(editions)
         place.add(self._panels["align"], weight=1)
         place.add(self._panels["resolve"], weight=2)
 
@@ -303,6 +312,12 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
 
         place.bind("<Configure>", _keep_align_visible, add="+")
         place.after_idle(_keep_align_visible)
+        # The chapter table is the main content. Keep the controls a
+        # fixed height so the table gets the free space (at least 8 rows
+        # at 1600x1030). The resolve pane scrolls inside that height.
+        place_host = self._insp_frames["place"]
+        place_host.configure(height=300)
+        place_host.grid_propagate(False)
         self._build_chapters_tab(self._main_frames["place"])
         self._build_quality_tab(self._main_frames["cleanup"])
         from .multifile_book import MultifileBook
@@ -435,8 +450,14 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         preset = self.app.session.cleanup.get("preset") or ""
         on = int(self.app.session.cleanup.get("stages_on") or 0)
         written = self.app.session.cleanup.get("written") or ""
-        if written:
-            cleanup = f"{preset or 'cleanup'} · written {written}"
+        quality = getattr(self, "quality", None)
+        ready = bool(quality and quality._cleaned_exists())
+        included = bool(self.include_cleanup.get()) if hasattr(
+            self, "include_cleanup") else False
+        if ready and included:
+            cleanup = "ready · included"
+        elif ready:
+            cleanup = "ready · not included"
         elif on:
             name = preset or "Custom"
             if name.lower() == "off":
@@ -445,7 +466,7 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
                 name = name[:1].upper() + name[1:]
             cleanup = f"{name} · {on} stages"
         else:
-            cleanup = "off · optional"
+            cleanup = "off"
         min_conf = self.min_conf.get() if hasattr(self, "min_conf") else 0.5
         place = place_step_status(
             self.analysis or {}, min_conf,
@@ -1000,14 +1021,27 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         self._row_data = {}
         open_indexes = getattr(self, "_open_indexes", set())
         opened = False
+        from chaptertools.gui.ui_kit import ellipsize
+        title_px = max(48, int(self.tree.column("title", "width")) - 16)
+        self._title_tips = {}
+        optional = {"gap": False, "pinned": False, "heard": False}
         for r in proj.rows:
             if not self._row_visible(r):
                 continue
+            if r.gap:
+                optional["gap"] = True
+            if r.pin:
+                optional["pinned"] = True
+            heard = self._heard_of(r)
+            if heard:
+                optional["heard"] = True
+            title = ellipsize(r.title or "", self.table_font.measure, title_px)
             iid = self.tree.insert("", "end", tags=r.tags, values=(
-                r.mark, r.title, hms(r.published), _t(r.placed),
+                r.mark, title, hms(r.published), _t(r.placed),
                 r.gap,
                 "" if r.confidence is None else f"{r.confidence:.2f}",
-                r.pin, self._heard_of(r), self._status_of(r)))
+                r.pin, heard, self._status_of(r)))
+            self._title_tips[iid] = r.title or ""
             self._row_data[iid] = r.source
             problem = bool(set(r.tags) & {"conflict", "unplaced", "lowconf"})
             if problem and r.index in open_indexes:
@@ -1020,6 +1054,11 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
                 opened = True
         if not opened:
             self._clear_problem_bar()
+        self._sync_optional_columns(optional)
+        if not getattr(self, "_title_tip_bound", False):
+            self.tree.bind("<Motion>", self._chapter_tip, add="+")
+            self.tree.bind("<Leave>", self._hide_tip, add="+")
+            self._title_tip_bound = True
         if sel and self.tree.exists(sel[0]):
             self.tree.selection_set(sel[0])
         self.tree.yview_moveto(scroll[0] if scroll else 0)
@@ -1102,10 +1141,8 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         elif hasattr(self, "apply_hint"):
             self.apply_hint.set("")
         if hasattr(self, "bitrate_combo"):
-            if self.include_cleanup.get():
-                self.bitrate_combo.configure(state="readonly")
-            else:
-                self.bitrate_combo.configure(state="disabled")
+            from chaptertools.gui.theme import set_enabled
+            set_enabled(self.bitrate_combo, bool(self.include_cleanup.get()))
         mode = self.identify_mode.get()
         if mode in ("emb", "nfo", "search"):
             off([self.identify_entry],
@@ -1141,6 +1178,14 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
                 self._disk or DiskFacts(), audio=self.audio)
             self._projection = proj
         self.measure_result.set(proj.measure_text)
+        if hasattr(self, "duration_note"):
+            from chaptertools.gui.projection import duration_mismatch_note
+            note = duration_mismatch_note(self.analysis or {})
+            if note:
+                self.duration_note.configure(text=note)
+                self.duration_note.grid()
+            else:
+                self.duration_note.grid_remove()
         if proj.header_fix:
             self.copy_fix_btn.grid()
         else:
@@ -1183,6 +1228,8 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
                 side="left")
         accent = proj.recommendation
         self.next_var.set(f"next: {accent}")
+        if hasattr(self, "_next_jump"):
+            self._next_jump.configure(text=accent or "")
 
         # statuses from the artifact
         ev = resolve_evidence(self.analysis)
@@ -1514,6 +1561,7 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         self.asin_tree.delete(*self.asin_tree.get_children())
         self._edition_tooltips = {}
         last_source = None
+        import tkinter.font as tkfont
         for row in rows:
             source = row.get("source") or "find-asin"
             if group and source != last_source:
@@ -1525,9 +1573,12 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
             marker = "●" if row["asin"] == in_use else ""
             title = row["title"]
             narrator = row["narrator"]
-            title_shown = title if len(title) <= 48 else title[:47] + "…"
-            narr_shown = (narrator if len(narrator) <= 28
-                          else narrator[:27] + "…")
+            from chaptertools.gui.ui_kit import ellipsize
+            title_px = max(40, int(self.asin_tree.column("title", "width")) - 16)
+            face = tkfont.nametofont("TkDefaultFont", root=self)
+            title_shown = ellipsize(title, face.measure, title_px)
+            narr_px = max(40, int(self.asin_tree.column("narrator", "width")) - 16)
+            narr_shown = ellipsize(narrator, face.measure, narr_px)
             tags = ("in_use",) if row["asin"] == in_use else ()
             iid = self.asin_tree.insert("", "end", values=(
                 marker, row["asin"], title_shown, narr_shown,
@@ -1539,6 +1590,12 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
                 "title": title, "narrator": narrator}
         if hasattr(self, "editions_count_var"):
             self.editions_count_var.set(f"{len(rows)}" if rows else "")
+        children = self.asin_tree.get_children()
+        self.asin_tree.configure(height=max(1, min(len(children), 10)))
+        if not getattr(self, "_edition_tip_bound", False):
+            self.asin_tree.bind("<Motion>", self._edition_tip, add="+")
+            self.asin_tree.bind("<Leave>", self._hide_tip, add="+")
+            self._edition_tip_bound = True
         self._filling_editions = False
         self._show_edition_marks()
         self._update_verdict_card()
@@ -1546,6 +1603,77 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
 
     def _fit_label(self, asin: str) -> str:
         return fit_cell(self._edition_fit_map().get(asin))
+
+    def _sync_optional_columns(self, optional: dict) -> None:
+        """Hide Gap, Pin and Heard while every value in the column is empty."""
+        from chaptertools.gui.table import CHAPTER_COLUMNS
+        widths = getattr(self, "_chapter_widths", {})
+        visible = []
+        for col, *_rest in CHAPTER_COLUMNS:
+            if col in optional and not optional[col]:
+                self.tree.column(col, width=80, minwidth=0, stretch=True)
+                continue
+            visible.append(col)
+            if col in optional:
+                width = widths.get(col) or 72
+                self.tree.column(col, width=width, minwidth=width, stretch=False)
+        self.tree["displaycolumns"] = visible
+
+    def _chapter_tip(self, event):
+        row = self.tree.identify_row(event.y)
+        col = self.tree.identify_column(event.x)
+        full = (getattr(self, "_title_tips", {}) or {}).get(row) or ""
+        if col != "#2" or not row:
+            self._hide_tip()
+            return
+        values = self.tree.item(row, "values")
+        shown = str(values[1]) if len(values) > 1 else ""
+        if not full or full == shown:
+            self._hide_tip()
+            return
+        self._hide_tip()
+        tip = tk.Toplevel(self)
+        tip.wm_overrideredirect(True)
+        tip.configure(background=palette.BORDER)
+        ttk.Label(tip, text=full, style="Tip.TLabel", takefocus=0).pack(
+            padx=1, pady=1)
+        tip.wm_geometry(f"+{event.x_root + 12}+{event.y_root + 16}")
+        self.head_tooltip = tip
+
+    def _jump_next(self):
+        """Scroll the Place controls to the suggested section."""
+        frame = getattr(self, "_resolve_scroll", None)
+        canvas = getattr(frame, "_parent_canvas", None) if frame else None
+        if canvas is not None:
+            canvas.yview_moveto(1.0)
+
+    def _edition_tip(self, event):
+        """Full title or narrator when the cell is cut off."""
+        row = self.asin_tree.identify_row(event.y)
+        col = self.asin_tree.identify_column(event.x)
+        tips = getattr(self, "_edition_tooltips", {}).get(row) or {}
+        text = ""
+        if col == "#3":
+            text = tips.get("title") or ""
+        elif col == "#4":
+            text = tips.get("narrator") or ""
+        shown = ""
+        if row and col:
+            values = self.asin_tree.item(row, "values")
+            index = int(col[1:]) - 1
+            if 0 <= index < len(values):
+                shown = str(values[index])
+        if not text or text == shown:
+            self._hide_tip()
+            return
+        self._hide_tip()
+        tip = tk.Toplevel(self)
+        tip.wm_overrideredirect(True)
+        tip.configure(background=palette.BORDER)
+        ttk.Label(tip, text=text, style="Tip.TLabel", takefocus=0).pack(
+            padx=1, pady=1)
+        tip.wm_geometry(f"+{event.x_root + 12}+{event.y_root + 16}")
+        self.head_tooltip = tip
 
     def _show_edition_marks(self) -> None:
         chapters = (self.analysis.get("identification") or {}).get("chapters") or []
@@ -1609,7 +1737,8 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
             if fit.get("chapter_count"):
                 bits.append(f"{fit['chapter_count']} chapters")
             if fit.get("score") is not None:
-                bits.append(f"fit {float(fit['score']):.1f}")
+                from chaptertools.gui.ui_kit import fmt_fit
+                bits.append(f"fit {fmt_fit(fit['score'])}")
             if fit.get("rate_spread") is not None:
                 bits.append(
                     f"rate spread {float(fit['rate_spread']) * 100:.1f} %")
@@ -2433,6 +2562,7 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         self.app.session.cleanup["include"] = bool(self.include_cleanup.get())
         self.app.session.emit("cleanup")
         self._update_finish_cards()
+        self._sync_rail()
 
     def _update_finish_cards(self):
         if not hasattr(self, "chapters_card"):

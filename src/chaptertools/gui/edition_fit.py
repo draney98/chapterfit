@@ -141,7 +141,8 @@ def numbers_line(ident: dict) -> str:
         bits.append(f"{len(chapters)} chapters")
     best = ident.get("best_trial") or {}
     if best.get("score") is not None:
-        bits.append(f"fit {float(best['score']):.1f}")
+        from chaptertools.gui.ui_kit import fmt_fit
+        bits.append(f"fit {fmt_fit(best['score'])}")
     if best.get("rate_spread") is not None:
         bits.append(f"rate spread {float(best['rate_spread']) * 100:.1f} %")
     if ident.get("duration_ratio") is not None:
