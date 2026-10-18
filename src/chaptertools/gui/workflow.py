@@ -384,6 +384,25 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         except tk.TclError:
             return
 
+    def _track_wrap(self, label) -> None:
+        """Rewrap when the label is given its real width, not the host's."""
+        self._wrap_labels.append(label)
+
+        def _fit(_event=None, label=label):
+            try:
+                width = label.winfo_width()
+            except tk.TclError:
+                return
+            if width <= 40:
+                return
+            with contextlib.suppress(tk.TclError, ValueError):
+                label.configure(wraplength=width)
+            for child in label.winfo_children():
+                with contextlib.suppress(tk.TclError, ValueError):
+                    child.configure(wraplength=width)
+
+        label.bind("<Configure>", _fit, add="+")
+
     def _apply_wraps(self, host_width: int) -> None:
         for lbl in getattr(self, "_wrap_labels", ()):
             try:

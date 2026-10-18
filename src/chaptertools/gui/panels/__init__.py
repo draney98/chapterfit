@@ -33,7 +33,7 @@ class StagePanels:
                            justify="left", anchor="w", text="", height=18)
         lbl.grid(row=row, column=0, columnspan=colspan, sticky="w",
                  pady=(4, 0))
-        self._wrap_labels.append(lbl)
+        self._track_wrap(lbl)
         return var
 
     def _primary(self, parent, row, col, text, cmd):
@@ -459,7 +459,7 @@ class StagePanels:
         found = small(foot, text="")
         found.configure(textvariable=self.found_var)
         found.grid(row=0, column=0, sticky="ew")
-        self._wrap_labels.append(found)
+        self._track_wrap(found)
         self.reread_btn = text_button(
             foot, "Re-read from file", command=self._reharvest)
         self.reread_btn.grid(row=1, column=0, sticky="w", pady=(PAD // 2, 0))
