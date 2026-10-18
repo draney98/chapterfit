@@ -20,10 +20,15 @@ CHECKED = {"TButton", "Button", "TLabel", "Label", "TCheckbutton",
            "CTkRadioButton", "CTkSegmentedButton"}
 
 
+# Marks and borders are readable at 3:1. Text stays at 4.5:1.
+_MARK_PAIRS = ("silence-band", "checkbox-banner")
+
+
 @pytest.mark.parametrize("pair", sorted(palette.TEXT_PAIRS))
 def test_text_colours_meet_aa_contrast(pair):
     fg, bg = palette.TEXT_PAIRS[pair]
-    assert palette.contrast(fg, bg) >= 4.5, pair
+    minimum = 3.0 if any(pair.endswith(name) for name in _MARK_PAIRS) else 4.5
+    assert palette.contrast(fg, bg) >= minimum, pair
 
 
 def _artifact(n=40, dur=12 * 3600.0 + 34 * 60):

@@ -45,6 +45,7 @@ class _Colors:
         "disabled": "disabled",
         "accent": "accent",
         "accent_hover": "accent_hover",
+        "link": "link",
         "accent_soft": "select_bg",
         "ok": "ok",
         "warn_bg": "warn_bg",
@@ -54,6 +55,7 @@ class _Colors:
         "bad_fg": "error",
         "silence": "silence",
         "silence_soft": "silence_soft",
+        "silence_band": "silence_band",
         "mark": "chapter",
         "white": "accent_text",
         "ok_bg": "ok_bg",
@@ -355,7 +357,7 @@ def text_button(parent, text, command=None, **kw):
     btn = ctk.CTkButton(
         parent, text=text, command=command, corner_radius=4,
         font=font(SMALL), fg_color="transparent",
-        hover_color=C["sunken"], text_color=C["accent"],
+        hover_color=C["sunken"], text_color=C["link"],
         text_color_disabled=C["disabled"], border_width=0, **kw)
     btn._kind = "text"  # noqa: SLF001
     return btn
@@ -395,11 +397,13 @@ def banner(parent, kind="warn"):
         parent, fg_color=bg, corner_radius=4, border_width=1, border_color=fg)
 
 
-def checkbox(parent, text, variable=None, command=None):
+def checkbox(parent, text, variable=None, command=None, *, border_color=None):
     return ctk.CTkCheckBox(
         parent, text=text, variable=variable, command=command, font=font(BODY),
         checkbox_width=18, checkbox_height=18, corner_radius=3, border_width=1,
-        fg_color=C["accent"], border_color=C["border"], text_color=C["text"])
+        fg_color=C["accent"],
+        border_color=C["border"] if border_color is None else border_color,
+        text_color=C["text"])
 
 
 def vscroll(parent, widget, **grid):

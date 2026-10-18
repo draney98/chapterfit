@@ -237,6 +237,7 @@ class App(ctk.CTk):
             button = text_button(
                 bar, label, width=font(SMALL).measure(label) + 20)
             button.configure(
+                text_color=C["text"], hover_color=C["accent_soft"],
                 command=lambda w=button, m=submenu: post(m, w))
             button.pack(side="left", padx=(0, 8))
 

@@ -117,7 +117,7 @@ class Timeline(ctk.CTkFrame):
         legend.grid(row=0, column=1, sticky="w", padx=(PAD, 0))
         self._swatch(legend, C["mark"], "Chapter")
         self._swatch(legend, C["bad_fg"], "Problem")
-        self._swatch(legend, C["silence_soft"], "Silence")
+        self._swatch(legend, C["silence_band"], "Silence")
         self._edition_swatch = self._swatch(legend, C["mark"], "Edition")
         self._edition_swatch.pack_forget()
         self._menu = tk.Menu(bar, tearoff=0)
@@ -353,7 +353,7 @@ class Timeline(ctk.CTkFrame):
         for x in silence_pixel_xs(data["gaps"], start, end, plot_w):
             canvas.create_line(
                 x0 + x, bottom - band, x0 + x, bottom,
-                fill=hex("silence_soft"), width=1)
+                fill=hex("silence_band"), width=1)
         _chapters, extras = gap_marks(data["gaps"], data["rows"], self.mode.get())
         for item in extras:
             gap = item.get("gap") or {}
@@ -363,7 +363,7 @@ class Timeline(ctk.CTkFrame):
             x = self._x(mid, start, end, width)
             tag = f"gap{round(mid, 3)}"
             canvas.create_line(
-                x, bottom - band, x, bottom, fill=hex("silence_soft"), width=1,
+                x, bottom - band, x, bottom, fill=hex("silence_band"), width=1,
                 tags=(tag,))
             tip = f"{hms(mid)} · {gap.get('dur', 0):.2f} s silence"
             canvas.tag_bind(tag, "<Enter>",

@@ -38,8 +38,9 @@ LIGHT = {
     "silence": "#3E5A78",
     # silence blended halfway toward bg, so the band is half the visual weight
     "silence_soft": "#95A2B0",
+    "silence_band": "#95A2B0",
     "warn_bg": "#FFF4E0",
-    "warn_border": "#C4924A",
+    "warn_border": "#A06E28",
     "ok_bg": "#E6F1E8",
     "error_bg": "#FBEDEB",
     "row_unplaced": "#b0b0b0",
@@ -59,10 +60,10 @@ LIGHT = {
     "chrome": "#8A8680",
 }
 DARK = {
-    "bg": "#1E1E1C",
-    "surface": "#2A2A28",
-    "surface_alt": "#343432",
-    "border": "#4A4A46",
+    "bg": "#161615",
+    "surface": "#23231F",
+    "surface_alt": "#2D2D29",
+    "border": "#4D4C46",
     "text": "#E8E6E1",
     "text_muted": "#B0AEA8",
     "accent": "#3E6A92",
@@ -74,11 +75,12 @@ DARK = {
     "error": "#F0B4AE",
     "select_bg": "#243548",
     "select_fg": "#E8E6E1",
-    "field_bg": "#2A2A28",
+    "field_bg": "#23231F",
     "field_fg": "#E8E6E1",
     "chapter": "#D2B4EA",
     "silence": "#9DB3CC",
     "silence_soft": "#5E6874",
+    "silence_band": "#3F5670",
     "warn_bg": "#3D2E14",
     "warn_border": "#C4924A",
     "ok_bg": "#1E3324",
@@ -136,6 +138,10 @@ def text_pairs() -> dict[str, tuple[str, str]]:
         add("error-surface", "error", "surface")
         add("blocked", "blocked", "bg")
         add("link", "link", "bg")
+        add("link-surface", "link", "surface")
+        add("silence-band", "chapter", "silence_band")
+        add("checkbox-banner", "warn_border", "warn_bg")
+        add("disabled-primary", "disabled", "surface_alt")
         add("banner", "warn", "banner")
         add("tip", "text", "tip")
         add("warn-bg", "warn", "warn_bg")

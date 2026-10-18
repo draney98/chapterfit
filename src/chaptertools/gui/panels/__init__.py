@@ -705,12 +705,12 @@ class StagePanels:
         foot.grid(row=4, column=0, sticky="ew", pady=(8, 0))
         foot.columnconfigure(0, weight=1)
         self.allow_delete_var = tk.BooleanVar(value=False)
-        from chaptertools.gui.ui_kit import banner, checkbox, small
+        from chaptertools.gui.ui_kit import C, banner, checkbox, small
         warn = banner(foot, "warn")
         warn.grid(row=0, column=0, columnspan=3, sticky="ew")
         allow_delete_cb = checkbox(
             warn, "Allow delete-and-re-add in Audiobookshelf",
-            variable=self.allow_delete_var)
+            variable=self.allow_delete_var, border_color=C["warn_border"])
         allow_delete_cb.pack(anchor="w", padx=8, pady=(6, 0))
         small(warn, "This clears listening progress.").pack(
             anchor="w", padx=8, pady=(0, 6))
