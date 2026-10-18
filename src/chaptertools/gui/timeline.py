@@ -116,9 +116,9 @@ class Timeline(ctk.CTkFrame):
         section(bar, "Timeline").grid(row=0, column=0, sticky="w")
         legend = ctk_frame(bar, fg_color="transparent")
         legend.grid(row=0, column=1, sticky="w", padx=(PAD, 0))
-        self._swatch(legend, C["mark"], "chapter")
-        self._swatch(legend, C["bad_fg"], "problem")
-        self._swatch(legend, C["silence"], "silence")
+        self._swatch(legend, C["mark"], "Chapter")
+        self._swatch(legend, C["bad_fg"], "Problem")
+        self._swatch(legend, C["silence"], "Silence")
         self._menu = tk.Menu(bar, tearoff=0)
         self._menu.add_radiobutton(
             label="Similar by chapter cadence", variable=self.mode,

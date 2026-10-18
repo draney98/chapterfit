@@ -251,7 +251,7 @@ class DetailPanel(ctk.CTkFrame):
         ctk.CTkCheckBox(row, text=spec.label, variable=var, command=_set,
                         ).pack(side="left")
         if recommend and not stage.params[spec.key]:
-            ctk.CTkLabel(row, text="recommended", text_color=palette.Q_MUTED).pack(side="left", padx=6)
+            ctk.CTkLabel(row, text="Recommended", text_color=palette.Q_MUTED).pack(side="left", padx=6)
         from chaptertools.gui.ui_kit import secondary
         from chaptertools.gui import tips
         reset = secondary(row, "", width=28, command=lambda: _reset())

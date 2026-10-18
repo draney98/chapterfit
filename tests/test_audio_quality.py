@@ -238,8 +238,8 @@ def test_presets_round_trip_and_gentle_cleanup(tmp_path, monkeypatch):
 def test_stage_summary_for_the_chain_row():
     from chaptertools.gui.quality_tab.summary import stage_summary
     chain = default_chain()
-    assert stage_summary(chain.stage("gate")) == "off"
-    assert stage_summary(chain.stage("enhance")) == "not installed"
+    assert stage_summary(chain.stage("gate")) == "Off"
+    assert stage_summary(chain.stage("enhance")) == "Not installed"
     chain.stage("highpass").params["cutoff_hz"] = 90
     assert stage_summary(chain.stage("highpass")) == "90 Hz"
     chain.stage("eq").bypass = False

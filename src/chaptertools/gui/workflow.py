@@ -1224,7 +1224,7 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
                          lambda e, r=r: self._select_unresolved(r))
         else:
             ctk.CTkLabel(self.unresolved_frame,
-                         text="nothing unresolved - spot-check by ear").pack(
+                         text="Nothing unresolved. Spot-check by ear.").pack(
                 side="left")
         accent = proj.recommendation
         self.next_var.set(f"next: {accent}")
@@ -2105,12 +2105,12 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
 
     def _status_of(self, row) -> str:
         if "conflict" in row.tags:
-            return "conflict"
+            return "Conflict"
         if "unplaced" in row.tags:
-            return "unplaced"
+            return "Unplaced"
         if "lowconf" in row.tags:
-            return "low"
-        return "placed" if row.placed is not None else ""
+            return "Withheld"
+        return "Placed" if row.placed is not None else ""
 
     # "low" fits the Status column; the amber row already says why.
 

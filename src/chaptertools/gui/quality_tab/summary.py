@@ -14,9 +14,9 @@ def stage_summary(stage) -> str:
     """What the chain row shows. Disabled stages say ``off``."""
     ok, _reason = stage.availability()
     if stage.name == "enhance" and not ok:
-        return "not installed"
+        return "Not installed"
     if stage.bypass:
-        return "off"
+        return "Off"
     params = stage.params
     name = stage.name
     if name == "highpass":

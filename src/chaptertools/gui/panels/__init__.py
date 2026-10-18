@@ -50,7 +50,7 @@ class StagePanels:
         row.grid(row=0, column=0, sticky="ew")
         self.measure_btn = self._primary(row, 0, 0, "Run measure",
                                          self.cmd_measure)
-        ctk.CTkLabel(row, text="analyzes the audio: loudness envelope, timeline "
+        ctk.CTkLabel(row, text="Analyzes the audio: loudness envelope, timeline "
                                "check, noise calibration, gaps",
                      anchor="w").grid(row=0, column=1, sticky="w", padx=8)
         from chaptertools.gui.ui_kit import text_button
@@ -325,7 +325,7 @@ class StagePanels:
         self.hint_var = tk.StringVar()
         hint_ctrl = ctk_frame(left, fg_color="transparent")
         hint_ctrl.grid(row=1, column=1, sticky="w", padx=2, pady=2)
-        ctk.CTkLabel(hint_ctrl, text="uses the Hints box", height=18,
+        ctk.CTkLabel(hint_ctrl, text="Uses the Hints box", height=18,
                      text_color=palette.MUTED).pack(side="left", padx=(0, 8))
         self.hint_status = tk.StringVar(value="")
         self.hint_btn = option(
@@ -387,7 +387,7 @@ class StagePanels:
         self._pin_autofilled = False
         heard = ctk_frame(left, fg_color="transparent")
         heard.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(6, 8), padx=8)
-        ctk.CTkLabel(heard, text="Heard lines:").pack(side="left")
+        ctk.CTkLabel(heard, text="Heard lines").pack(side="left")
         self.grep_var = tk.StringVar(value="chapter")
         heard_entry = ctk.CTkEntry(heard, textvariable=self.grep_var, width=140)
         heard_entry.pack(side="left", padx=4)
@@ -631,7 +631,7 @@ class StagePanels:
                      text="", wraplength=200)
         tags_lbl.grid(row=2, column=1, sticky="ew", padx=8)
         _fit_label(tags_lbl)
-        ctk.CTkLabel(inner, text="also written to album.nfo",
+        ctk.CTkLabel(inner, text="Also written to album.nfo",
                      text_color=palette.TEXT, anchor="w").grid(
             row=2, column=2, sticky="w", padx=8)
         self._edit_match = text_button(
@@ -667,7 +667,7 @@ class StagePanels:
         plan_head.grid(row=2, column=0, sticky="ew", pady=(10, 4))
         ctk.CTkLabel(plan_head, text="Plan",
                      font=font(SMALL, "bold")).pack(side="left")
-        ctk.CTkLabel(plan_head, text="from the last dry run",
+        ctk.CTkLabel(plan_head, text="From the last dry run",
                      text_color=palette.MUTED).pack(side="left", padx=(8, 0))
 
         plan_wrap = ctk_frame(p, corner_radius=8, border_width=1,

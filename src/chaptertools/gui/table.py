@@ -236,9 +236,9 @@ class TableViews:
         self.filter_box.bind("<<ComboboxSelected>>", _pick_filter)
         chips = ctk_frame(legend, fg_color="transparent")
         chips.pack(side="top", anchor="w")
-        for color, text in ((palette.ROW_UNPLACED, "unplaced"),
-                            (palette.ROW_LOWCONF, "low conf (withheld)"),
-                            (palette.ROW_CONFLICT, "pin conflict")):
+        for color, text in ((palette.ROW_UNPLACED, "Unplaced"),
+                            (palette.ROW_LOWCONF, "Withheld"),
+                            (palette.ROW_CONFLICT, "Pin conflict")):
             ctk.CTkFrame(chips, width=16, height=14, fg_color=color,
                          corner_radius=2, border_width=1,
                          border_color=palette.BORDER).pack(

@@ -164,7 +164,7 @@ class ChainRow:
             self.check.configure(state="disabled")
             self.check.grid_remove()
             self.name_label.configure(text_color=C["disabled"])
-            self.summary_var.set("not installed")
+            self.summary_var.set("Not installed")
         for widget in (self.frame, self.index_label, self.name_label, self.summary):
             widget.bind("<Button-1>", self._click)
             widget.bind("<Up>", keys._keys)
@@ -175,7 +175,7 @@ class ChainRow:
 
     def refresh(self, summary: str) -> None:
         if not self.stage.availability()[0]:
-            summary = "not installed"
+            summary = "Not installed"
             self.check.grid_remove()
         self.summary_var.set(summary)
         self._paint()
