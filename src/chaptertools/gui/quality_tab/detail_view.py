@@ -10,7 +10,7 @@ from chaptertools.gui import palette
 from chaptertools.gui.theme import require_customtkinter
 
 from .summary import close
-from .widgets import ChoiceRow, ParamRow, ScrollableFrame
+from .widgets import ChoiceRow, ParamRow
 
 ctk = require_customtkinter()
 
@@ -46,7 +46,7 @@ class DetailPanel(ctk.CTkFrame):
 
     def __init__(self, master, enabled_vars, on_edit, on_reset_stage, on_learn,
                  on_choice=None):
-        super().__init__(master, fg_color=palette.Q_PANEL, corner_radius=0)
+        super().__init__(master, fg_color=palette.Q_GROUND, corner_radius=0)
         self.enabled_vars = enabled_vars
         self.on_edit = on_edit
         self.on_reset_stage = on_reset_stage
@@ -59,12 +59,15 @@ class DetailPanel(ctk.CTkFrame):
         self.enabled_var = None
         self.multifile = False
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(1, weight=1)
+        self.rowconfigure(1, weight=0)
         self.header = ctk.CTkFrame(self, fg_color=palette.Q_PANEL, corner_radius=0)
         self.header.grid(row=0, column=0, sticky="ew", padx=4, pady=4)
         self.header.columnconfigure(0, weight=1)
-        self.scroller = ScrollableFrame(self)
-        self.scroller.grid(row=1, column=0, sticky="nsew", padx=4, pady=(0, 4))
+        body = ctk.CTkFrame(self, fg_color=palette.Q_PANEL, corner_radius=0)
+        body.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 4))
+        body.columnconfigure(0, weight=1)
+        self.scroller = body
+        self.scroller.body = body
         self._rows = []
 
     def show(self, stage, baseline: dict, *, selection, recommend: bool) -> None:
@@ -325,14 +328,17 @@ def _install_note(master) -> ttk.Frame:
     style = ttk.Style(master)
     style.configure("Note.TFrame", background=palette.Q_PANEL)
     box = ttk.Frame(master, style="Note.TFrame", padding=1)
-    ctk.CTkLabel(
+    note = ctk.CTkLabel(
         box,
         text="Neural enhance needs resemble-enhance. Its only release requires "
              "torch 2.1.1, which has no Python 3.12 wheel, so this stage "
              "cannot be installed here. ./runme.sh still installs DeepFilterNet "
              "for neural denoise.",
-        text_color=palette.Q_MUTED, wraplength=420, justify="left",
-    ).pack(anchor="w", padx=8, pady=(8, 4))
+        text_color=palette.Q_MUTED, justify="left",
+    )
+    note.pack(anchor="w", padx=8, pady=(8, 4))
+    from chaptertools.gui.ui_kit import wrap_to_parent
+    wrap_to_parent(note)
     from chaptertools.gui.ui_kit import secondary
     secondary(box, "Install neural extra…", command=_show_install,
               width=180).pack(anchor="w", padx=8, pady=(0, 8))

@@ -53,8 +53,11 @@ class QualityTab(ctk.CTkFrame):
         ok, reason = quality_status()
         self.available = ok
         if not ok:
-            ctk.CTkLabel(self, text=reason, wraplength=640, justify="left", anchor="w").pack(
-                anchor="w", padx=8, pady=8)
+            missing = ctk.CTkLabel(
+                self, text=reason, justify="left", anchor="w")
+            missing.pack(anchor="w", padx=8, pady=8)
+            from chaptertools.gui.ui_kit import wrap_to_parent
+            wrap_to_parent(missing)
             self.jobs = _IdleJobs()
             return
         from chaptertools.audio_quality.presets import load_session
@@ -179,12 +182,12 @@ class QualityTab(ctk.CTkFrame):
     # -------------------------------------------------------------- layout --
     def _build(self) -> None:
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(1, weight=1)
+        self.rowconfigure(1, weight=0)
         self.analysis = AnalysisFrame(self, self.cmd_rescan, self._turn_on_denoise,
                                       self._on_range)
         self.analysis.grid(row=0, column=0, sticky="ew", padx=4, pady=(4, 2))
         body = ttk.Panedwindow(self, orient="horizontal")
-        body.grid(row=1, column=0, sticky="nsew", padx=4)
+        body.grid(row=1, column=0, sticky="ew", padx=4)
         self.chain_panel = ChainPanel(
             body, self.chain, self.enabled_vars, self._show_stage,
             self._on_preset_picked, self.cmd_save_preset, self.cmd_restore,
@@ -683,7 +686,15 @@ class QualityTab(ctk.CTkFrame):
 
     def _fill_presets(self) -> None:
         from chaptertools.audio_quality.presets import all_presets
-        self.chain_panel.set_preset_names(list(all_presets()), self._preset_name)
+        names = list(all_presets())
+        current = self._preset_name if self._preset_name in names else ""
+        if not current and self.chain is not None:
+            current = _matching_preset(self.chain)
+        if current not in names:
+            current = ("Gentle cleanup" if "Gentle cleanup" in names
+                       else (names[0] if names else ""))
+        self._preset_name = current
+        self.chain_panel.set_preset_names(names, current)
 
     def _toggle_hear(self) -> None:
         self._player.bypass = bool(self.hear_var.get())

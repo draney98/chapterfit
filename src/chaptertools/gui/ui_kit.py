@@ -334,6 +334,23 @@ def text_button(parent, text, command=None, **kw):
     return btn
 
 
+def wrap_to_parent(label, pad=None):
+    """Wrap a sentence to the width the layout actually gave the label."""
+    del pad
+
+    def _fit(_event=None):
+        try:
+            width = label.winfo_width()
+        except tk.TclError:
+            return
+        if width > 40:
+            label.configure(wraplength=width)
+
+    label.bind("<Configure>", _fit, add="+")
+    label.after_idle(_fit)
+    return label
+
+
 def panel(parent, **kw):
     return ctk.CTkFrame(
         parent, fg_color=C["panel"], corner_radius=4, border_width=1,

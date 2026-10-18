@@ -27,7 +27,7 @@ class ChainPanel(ctk.CTkFrame):
         self.columnconfigure(0, weight=1)
 
         presets = ctk.CTkFrame(self, fg_color=palette.Q_PANEL, corner_radius=0)
-        presets.grid(row=0, column=0, sticky="ew", padx=4, pady=4)
+        presets.grid(row=0, column=0, sticky="ew", padx=4, pady=(4, 0))
         presets.columnconfigure(0, weight=1)
         self.preset_var = tk.StringVar()
         self.preset_box = ttk.Combobox(
@@ -46,13 +46,14 @@ class ChainPanel(ctk.CTkFrame):
         more.configure(command=lambda: post_menu(self.menu, more))
         more.grid(row=0, column=2)
 
+        from chaptertools.gui.ui_kit import section, wrap_to_parent
+        section(self, "Signal chain").grid(
+            row=1, column=0, sticky="w", padx=4, pady=(8, 0))
         self.status_var = tk.StringVar(value="")
-        ctk.CTkLabel(self, textvariable=self.status_var,
-                     text_color=palette.Q_MUTED, wraplength=300,
-                     justify="left", anchor="w", text="").grid(
-            row=1, column=0, sticky="w", padx=4, pady=(2, 4))
-        ctk.CTkLabel(self, text="Signal chain", text_color=palette.Q_MUTED,
-                     anchor="w").grid(row=2, column=0, sticky="w", padx=4)
+        self._status = ctk.CTkLabel(self, textvariable=self.status_var,
+                     text_color=palette.Q_MUTED,
+                     justify="left", anchor="w", text="")
+        wrap_to_parent(self._status)
 
         self.inner = ctk.CTkFrame(self, fg_color=palette.Q_PANEL, corner_radius=0)
         self.inner.grid(row=3, column=0, sticky="ew", padx=4, pady=(0, 4))
@@ -73,10 +74,16 @@ class ChainPanel(ctk.CTkFrame):
 
     def set_status(self, text: str) -> None:
         self.status_var.set(text)
+        if text:
+            self._status.grid(row=2, column=0, sticky="ew", padx=4, pady=(2, 0))
+        else:
+            self._status.grid_remove()
 
     def set_preset_names(self, names, current: str) -> None:
         self.preset_box.configure(values=names)
-        self.preset_var.set(current)
+        if current not in names and names:
+            current = names[0]
+        self.preset_var.set(current or "")
 
     def mark(self, name: str, modified: bool) -> None:
         for row in self.rows:

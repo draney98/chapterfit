@@ -43,6 +43,7 @@ class AnalysisFrame(ctk.CTkFrame):
 
         tiles = ctk.CTkFrame(self, fg_color=palette.Q_GROUND, corner_radius=0)
         tiles.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        self._tiles = tiles
         for col in range(4):
             tiles.columnconfigure(col, weight=1, uniform="metric")
         self.tiles = {}
@@ -55,14 +56,25 @@ class AnalysisFrame(ctk.CTkFrame):
             tile = MetricTile(tiles, title)
             tile.grid(row=0, column=index, sticky="nsew", padx=2, pady=2)
             self.tiles[key] = tile
+        pending = ctk.CTkFrame(self, fg_color=palette.Q_GROUND, corner_radius=0)
+        self._pending = pending
+        from chaptertools.gui.ui_kit import secondary, small
+        small(pending, "Not analysed yet").pack(side="left")
+        secondary(pending, "Analyse", command=on_rescan).pack(
+            side="left", padx=(8, 0))
+        pending.grid(row=1, column=0, sticky="w", pady=(4, 0))
+        tiles.grid_remove()
 
         self.advice = ctk.CTkFrame(
             self, fg_color=palette.Q_WARN_BG, corner_radius=8)
         self.advice.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(4, 0))
         self.advice.columnconfigure(0, weight=1)
-        ctk.CTkLabel(self.advice, text=_ADVICE, text_color=palette.Q_WARN_TEXT,
-                     wraplength=640, justify="left", anchor="w").grid(
+        advice = ctk.CTkLabel(self.advice, text=_ADVICE, text_color=palette.Q_WARN_TEXT,
+                     justify="left", anchor="w")
+        advice.grid(
             row=0, column=0, sticky="w", padx=4, pady=4)
+        from chaptertools.gui.ui_kit import wrap_to_parent
+        wrap_to_parent(advice)
         primary(self.advice, "Use per-segment noise estimate",
                 command=on_turn_on, width=280).grid(
             row=0, column=1, sticky="e", padx=(8, 4))
@@ -86,6 +98,14 @@ class AnalysisFrame(ctk.CTkFrame):
 
     def _fill_tiles(self, target_lufs) -> None:
         report = self._report
+        analysed = any(
+            isinstance(report.get(key), (int, float)) for key in self.tiles)
+        if analysed:
+            self._tiles.grid()
+            self._pending.grid_remove()
+        else:
+            self._tiles.grid_remove()
+            self._pending.grid()
         integrated = report.get("integrated_lufs")
         target = ""
         if target_lufs is not None:

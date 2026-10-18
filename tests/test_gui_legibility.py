@@ -226,6 +226,27 @@ def test_match_debug_layout_clean(app, size):
     assert not problems, "\n".join(problems)
 
 
+def _visible_chapter_rows(app) -> int:
+    tree = app.workflow.tree
+    full = 0
+    for iid in tree.get_children():
+        box = tree.bbox(iid)
+        if box and box[1] + box[3] <= tree.winfo_height():
+            full += 1
+    return full
+
+
+def test_place_keeps_chapter_rows(app):
+    """The chapter table is the point of Place. Controls sit below it."""
+    _settle(app, "1366x768+0+0")
+    app.workflow.show_step("place")
+    app.update()
+    assert _visible_chapter_rows(app) >= 8
+    _settle(app, "1600x1030+0+0")
+    app.update()
+    assert _visible_chapter_rows(app) >= 18
+
+
 def test_table_shows_25_rows_at_1080p(app):
     _settle(app, "1920x1080+0+0")
     wf = app.workflow

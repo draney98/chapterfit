@@ -51,6 +51,7 @@ class StepRail(ctk.CTkFrame):
         self._buttons: dict[str, ctk.CTkFrame] = {}
         self._title: dict[str, ctk.CTkLabel] = {}
         self._subs: dict[str, tk.StringVar] = {}
+        self._sub_lbl: dict[str, ctk.CTkLabel] = {}
         self._tips: dict[str, list] = {}
         self._current = ""
         for index, key in enumerate(STEPS):
@@ -69,13 +70,21 @@ class StepRail(ctk.CTkFrame):
             sub.configure(textvariable=var, wraplength=160)
             sub.grid(row=1, column=0, sticky="ew", padx=PAD, pady=(0, PAD))
             bar = ctk.CTkFrame(
-                cell, width=1, height=2, corner_radius=0, fg_color=C["border"])
+                cell, height=2, corner_radius=0, fg_color=C["border"])
             bar.grid(row=2, column=0, sticky="ew")
+
+            def _fit(_event, label=sub, rule=bar, card=cell):
+                label.configure(wraplength=max(40, card.winfo_width() - 2 * PAD))
+                rule.configure(width=max(1, card.winfo_width()))
+                self._equalize()
+
+            cell.bind("<Configure>", _fit)
             cell._bar = bar  # noqa: SLF001
             for widget in (cell, title, sub):
                 widget.bind("<Button-1>", lambda _e, k=key: self.on_pick(k))
             self._buttons[key] = cell
             self._title[key] = title
+            self._sub_lbl[key] = sub
             self._tips[key] = [tooltip(cell, ""), tooltip(title, ""), tooltip(sub, "")]
             card_floor = 100
             self.columnconfigure(col, weight=1, uniform="steps", minsize=card_floor)
@@ -94,18 +103,14 @@ class StepRail(ctk.CTkFrame):
         for index, key in enumerate(STEPS, start=1):
             if key == "cleanup":
                 written = "written" in (cleanup or "")
-                mark = "✓" if written else str(index)
                 sub = cleanup if cleanup else "off · optional"
                 state = DONE if written else PENDING
-                color = C["ok"] if written else C["text"]
             elif key == "place" and place_status is not None:
                 state = place_status.get("state") or PENDING
                 sub = place_status.get("detail") or ""
-                mark, color = self._glyph(index, state)
             elif key == "finish" and finish_status is not None:
                 state = finish_status.get("state") or PENDING
                 sub = finish_status.get("detail") or finish_detail or ""
-                mark, color = self._glyph(index, state)
             else:
                 info = states.get(mapping[key]) or {}
                 state = info.get("state") or PENDING
@@ -121,10 +126,10 @@ class StepRail(ctk.CTkFrame):
                         state = DONE
                 else:
                     sub = info.get("detail") or _fallback(key, state)
-                mark, color = self._glyph(index, state)
-            title = f"{mark}  {STEP_LABELS[key]}"
-            self._title[key].configure(text=title, text_color=color)
+            self._title[key].configure(
+                text=f"{index}  {STEP_LABELS[key]}", text_color=C["text"])
             self._subs[key].set(_ellipsize(sub))
+            self._sub_lbl[key].configure(text_color=self._status_color(state))
             self._paint(key, key == step)
             hint = blocked_hint(key, states)
             if key == "finish" and (finish_detail or "").startswith(
@@ -132,15 +137,38 @@ class StepRail(ctk.CTkFrame):
                 hint = finish_detail
             for tip in self._tips[key]:
                 tip.text = hint or ""
+        if getattr(self, "_dim", False):
+            self.set_dim(True)
 
-    def _glyph(self, index: int, state: str) -> tuple[str, str]:
+    def set_dim(self, dim: bool) -> None:
+        """No book yet: keep the steps visible, in the muted colour."""
+        self._dim = dim
+        if not dim:
+            return
+        for key in STEPS:
+            self._title[key].configure(text_color=C["muted"])
+            self._sub_lbl[key].configure(text_color=C["muted"])
+            self._paint(key, False)
+
+    def _status_color(self, state: str) -> str:
         if state == DONE:
-            return "✓", C["ok"]
+            return C["ok"]
         if state == ATTENTION:
-            return "!", C["warn_fg"]
-        if state == BLOCKED:
-            return "–", C["muted"]
-        return str(index), C["text"]
+            return C["warn_fg"]
+        return C["muted"]
+
+    def _equalize(self) -> None:
+        """Every card is as tall as the tallest subtitle."""
+        if getattr(self, "_equalizing", False):
+            return
+        self._equalizing = True
+        try:
+            tall = max(cell.winfo_reqheight() for cell in self._buttons.values())
+            for cell in self._buttons.values():
+                if int(cell.cget("height")) != tall:
+                    cell.configure(height=tall)
+        finally:
+            self._equalizing = False
 
     def _paint(self, key: str, current: bool) -> None:
         cell = self._buttons[key]
@@ -175,11 +203,12 @@ def _fallback(key: str, state: str) -> str:
 
 
 class Workspace(ctk.CTkFrame):
-    """Main and inspector. Side by side from 1500 px, stacked below that.
+    """Main and inspector. Side by side from 1200 px, stacked below that.
 
-    Match/Place inspector is a fixed 400 px column when beside the main pane.
+    The inspector column is at least 340 px and at most 400.
     """
 
+    INSPECTOR_MIN = 340
     INSPECTOR_WIDTH = 400
 
     def __init__(self, master):
@@ -213,7 +242,7 @@ class Workspace(ctk.CTkFrame):
         self._apply()
 
     def _layout(self, _event) -> None:
-        self._wide = self.winfo_toplevel().winfo_width() >= 1500
+        self._wide = self.winfo_toplevel().winfo_width() >= 1200
         mode = (self._show_inspector, self._wants_beside())
         if mode == self._mode:
             return

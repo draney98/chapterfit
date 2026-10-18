@@ -205,7 +205,9 @@ class TableViews:
             self.tree.bind(seq, fn)
         foot = ctk_frame(tab, fg_color="transparent")
         foot.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(2, 0))
+        foot.columnconfigure(0, weight=1)
         legend = ctk_frame(foot, fg_color="transparent")
+        legend.grid(row=0, column=0, sticky="w")
         self.chapter_filter = tk.StringVar(value="all")
         self._filter_labels = {
             "all": "All chapters",
@@ -232,7 +234,7 @@ class TableViews:
 
         self.filter_box.bind("<<ComboboxSelected>>", _pick_filter)
         chips = ctk_frame(legend, fg_color="transparent")
-        chips.pack(side="top", anchor="w")
+        chips.pack(side="left")
         for color, text in ((palette.ROW_UNPLACED, "Unplaced"),
                             (palette.ROW_LOWCONF, "Withheld"),
                             (palette.ROW_CONFLICT, "Pin conflict")):
@@ -243,18 +245,13 @@ class TableViews:
             ctk.CTkLabel(chips, text=text, height=16,
                          text_color=palette.MUTED).pack(
                 side="left", padx=(0, 12))
-        ctk.CTkLabel(
-            legend, text="Chapters marked ? won't be written to the file.",
-            text_color=palette.MUTED).pack(side="top", anchor="w")
-        from .ui_kit import SMALL, font
-        self.shortcut_label = ctk.CTkLabel(
-            foot, text=SHORTCUTS, text_color=palette.MUTED, anchor="w",
-            font=font(SMALL))
+        from .ui_kit import text_button
+        from . import tips
+        hint = text_button(foot, "?", width=28)
+        hint.grid(row=0, column=1, sticky="e")
+        tips.tooltip(hint, SHORTCUTS)
+        self.shortcut_label = hint
         self._table_legend = legend
-        self._foot_split = None
-        foot.columnconfigure(0, weight=1)
-        foot.bind("<Configure>", self._layout_foot)
-        self._layout_foot()
         self.conflict_note = tk.StringVar(value="")
         self.conflict_label = ctk.CTkLabel(
             tab, textvariable=self.conflict_note, text_color=palette.WARN,
@@ -265,21 +262,3 @@ class TableViews:
         self.problem_bar.grid_remove()
         tab.grid(row=0, column=0, sticky="nsew")
         self._chapters_tab = tab
-
-    def _layout_foot(self, event=None):
-        legend, keys = self._table_legend, self.shortcut_label
-        width = event.width if event else 10 ** 6
-        # Keep the foot to one line. Shortcuts move to the Help menu when
-        # they would wrap under the legend and steal a chapter row.
-        fits = width >= 900 and (
-            legend.winfo_reqwidth() + keys.winfo_reqwidth() + 24 <= width)
-        if fits == self._foot_split:
-            return
-        self._foot_split = fits
-        legend.grid(row=0, column=0, sticky="w")
-        if fits:
-            keys.grid(row=0, column=1, sticky="e", padx=(24, 0))
-            legend.master.columnconfigure(1, weight=1)
-        else:
-            keys.grid_remove()
-            legend.master.columnconfigure(1, weight=0)

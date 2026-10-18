@@ -250,7 +250,8 @@ class App(ctk.CTk):
             "Finalize.", parent=self)
 
     def _build_ui(self):
-        pane = ttk.Panedwindow(self, orient="horizontal")
+        pane = ttk.Panedwindow(self, orient="horizontal",
+                               style="Library.TPanedwindow")
         pane.pack(fill="both", expand=True)
 
         # ---- library pane -------------------------------------------------
@@ -260,7 +261,9 @@ class App(ctk.CTk):
         self._library_open = bool(load_gui_prefs().get("library_open"))
         self._library_collapsed = False
         self._lib_expand = secondary(
-            lib, "›", command=self.toggle_library, width=36)
+            lib, "›", command=self.toggle_library, width=28)
+        from . import tips
+        tips.tooltip(self._lib_expand, "Show library")
         self._lib_body = ctk_frame(lib, corner_radius=0, fg_color=C["bg"])
         self._lib_body.pack(side="top", fill="both", expand=True,
                             padx=14, pady=PAD // 2)
@@ -937,8 +940,15 @@ class App(ctk.CTk):
 
     def _place_library_sash(self):
         width = LIBRARY_WIDTH
+        style = ttk.Style(self)
         if self._library_collapsed:
-            width = max(44, self._lib_expand.winfo_reqwidth() + 8)
+            width = 28
+            # No grip dots on the collapsed strip. Other panes keep a sash.
+            style.configure("Library.TPanedwindow", sashthickness=0)
+            style.configure("Sash", gripcount=0)
+        else:
+            style.configure("Library.TPanedwindow", sashthickness=6)
+            style.configure("Sash", gripcount=10, sashthickness=6)
         with contextlib.suppress(tk.TclError):
             self._pane.sashpos(0, width)
 

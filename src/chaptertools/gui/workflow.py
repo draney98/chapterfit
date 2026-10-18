@@ -211,7 +211,7 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         self._quality_due = False
         self.chapters_var = tk.StringVar(value="Chapters")
 
-        from .ui_kit import C, body, number, title
+        from .ui_kit import BODY, C, body, font, number, title
 
         shell = ctk_frame(self, fg_color="transparent")
         shell.grid(row=0, column=0, sticky="nsew", padx=14, pady=(4, 0))
@@ -221,11 +221,11 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         head = ctk_frame(shell, fg_color="transparent")
         head.grid(row=0, column=0, sticky="ew")
         head.columnconfigure(0, weight=1)
-        self.book_var = tk.StringVar(value="(nothing selected)")
+        self.book_var = tk.StringVar(value="")
         row = ctk_frame(head, fg_color="transparent")
         row.grid(row=0, column=0, sticky="ew")
         self._header_row = row
-        self._h_title = title(row, "(nothing selected)")
+        self._h_title = title(row, "")
         self._h_author = body(row, text="")
         self._h_dur = number(row, text="")
         self._h_source = number(row, text="")
@@ -236,7 +236,7 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         for label in (self._h_author, self._h_dur, self._h_source, self._h_file):
             label.pack(side="left")
         self._book_label = self._h_title
-        self._header_text = "(nothing selected)"
+        self._header_text = ""
         self._header_bits = None
         def _schedule_header(event):
             pending = getattr(self, "_header_fit_after", None)
@@ -264,11 +264,13 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         self.workspace = Workspace(shell)
         self.workspace.grid(row=2, column=0, sticky="nsew", pady=(4, 0))
         self._main_frames = _stack(self.workspace.main)
+        host = self._main_frames["scan"].master
+        self._empty = ctk.CTkLabel(
+            host, text="Pick a book from the library to start.",
+            font=font(BODY), text_color=C["muted"])
         self._insp_frames = _stack(self.workspace.inspector)
         self._wrap_labels = []
         self.workspace.inspector.bind("<Configure>", self._on_host_resize)
-        place = ttk.Panedwindow(self._insp_frames["place"], orient="vertical")
-        place.grid(row=0, column=0, sticky="nsew")
         match_host = self._insp_frames["match"]
         match_host.rowconfigure(0, weight=1)
         match_host.columnconfigure(0, weight=1)
@@ -283,13 +285,13 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         self._panels = {
             "measure": self._panel_measure(self._main_frames["scan"]),
             "identify": self._panel_identify(self._match_scroll),
-            "align": self._panel_align(place),
-            "resolve": self._panel_resolve(place),
+            "align": None,
+            "resolve": None,
             "emit": self._panel_emit(self._main_frames["finish"]),
             "finalize": self._panel_finalize(self._insp_frames["finish"]),
         }
         for key in ("emit", "finalize"):
-            self._panels[key].grid(row=0, column=0, sticky="nsew")
+            self._panels[key].grid(row=0, column=0, sticky="new")
         self._panels["measure"].grid(row=0, column=0, sticky="new")
         self._panels["identify"].grid(row=0, column=0, sticky="ew")
         self._build_book_info(self._match_scroll)
@@ -302,19 +304,7 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         editions.grid(row=0, column=0, sticky="nsew")
         editions.columnconfigure(0, weight=1)
         self._build_editions(editions)
-        place.add(self._panels["align"], weight=1)
-        place.add(self._panels["resolve"], weight=2)
-
-        def _keep_align_visible(_event=None):
-            try:
-                if place.winfo_height() > 220 and place.sashpos(0) < 160:
-                    place.sashpos(0, 160)
-            except tk.TclError:
-                return
-
-        place.bind("<Configure>", _keep_align_visible, add="+")
-        place.after_idle(_keep_align_visible)
-        self._build_chapters_tab(self._main_frames["place"])
+        self._build_place_split()
         self._build_quality_tab(self._main_frames["cleanup"])
         from .multifile_book import MultifileBook
         self.multifile = MultifileBook(shell, self.app, on_cleanup=self._open_multifile_cleanup)
@@ -378,20 +368,23 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         if pending is not None:
             self.after_cancel(pending)
         self._wrap_after = self.after_idle(lambda: self._apply_wraps(width))
-        self._layout_resolve(side_by_side=True)
+        try:
+            self._layout_resolve(side_by_side=True)
+        except tk.TclError:
+            return
 
     def _apply_wraps(self, host_width: int) -> None:
         for lbl in getattr(self, "_wrap_labels", ()):
-            own = lbl.winfo_width()
+            try:
+                own = lbl.winfo_width()
+            except tk.TclError:
+                continue
             span = own if own > 40 else max(host_width - 48, 200)
             with contextlib.suppress(tk.TclError, ValueError):
                 lbl.configure(wraplength=max(span, 120))
             for child in lbl.winfo_children():
-                child_w = child.winfo_width()
-                if child_w <= 40:
-                    continue
                 with contextlib.suppress(tk.TclError, ValueError):
-                    child.configure(wraplength=child_w)
+                    child.configure(wraplength=max(span, 120))
 
     # ---------------------------------------------------------- stage panels
     def _copy_header_fix(self):
@@ -402,17 +395,78 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
             self.app.log("copied: " + fix)
 
     # ------------------------------------------------------------- tabs --
+    def _build_place_split(self) -> None:
+        """Table on top, Align and Resolve below, so the rows keep a minimum."""
+        from .ui_kit import ROW_H
+
+        host = self._main_frames["place"]
+        split = ttk.Panedwindow(host, orient="vertical")
+        split.grid(row=0, column=0, sticky="nsew")
+        table_host = ctk_frame(split, fg_color="transparent", corner_radius=0)
+        table_host.rowconfigure(0, weight=1)
+        table_host.columnconfigure(0, weight=1)
+        controls = ctk_frame(split, fg_color="transparent", corner_radius=0)
+        controls.columnconfigure(0, weight=1)
+        controls.rowconfigure(1, weight=1)
+        self._panels["align"] = self._panel_align(controls)
+        self._panels["resolve"] = self._panel_resolve(controls)
+        self._panels["align"].grid(row=0, column=0, sticky="ew")
+        self._panels["resolve"].grid(row=1, column=0, sticky="nsew")
+        self._build_chapters_tab(table_host)
+        split.add(table_host, weight=1)
+        split.add(controls, weight=0)
+
+        def _keep_rows(_event=None, pane=split):
+            try:
+                height = pane.winfo_height()
+                row_h = int(ttk.Style(pane).lookup(
+                    "Chapter.Treeview", "rowheight") or ROW_H)
+                # Header plus 8 full rows. Real rowheight, not the nominal one.
+                least = 8 * row_h + row_h + 12
+                if height < least + 36:
+                    return
+                # Align plus the Resolve summary. The rest of Resolve scrolls.
+                target = max(least, height - 110)
+                if abs(pane.sashpos(0) - target) > 4:
+                    pane.sashpos(0, target)
+            except tk.TclError:
+                return
+
+        split.bind("<Configure>", _keep_rows, add="+")
+        split.after_idle(_keep_rows)
+        self._place_split = split
+        self._keep_place_rows = _keep_rows
+
     def _build_quality_tab(self, parent):
         from chaptertools.gui.quality_tab import QualityTab
         parent.rowconfigure(0, weight=1)
         parent.columnconfigure(0, weight=1)
         # At 1366x768 the chain is taller than the pane. Scrolling keeps
         # every control reachable instead of painting past the window.
+        from .ui_kit import C as kit_colors
         scroll = ctk.CTkScrollableFrame(
-            parent, fg_color="transparent", corner_radius=0, height=120)
+            parent, fg_color=kit_colors["bg"], corner_radius=0)
         scroll.grid(row=0, column=0, sticky="nsew")
         self.quality = QualityTab(scroll, app=self.app, workflow=self)
-        self.quality.pack(fill="both", expand=True)
+        self.quality.pack(fill="x", expand=False)
+
+        def _hide_bar_when_it_fits(_event=None, frame=scroll):
+            try:
+                canvas = frame._parent_canvas
+                bar = frame._scrollbar
+                box = canvas.bbox("all")
+                if not box:
+                    return
+                fits = (box[3] - box[1]) <= canvas.winfo_height() + 2
+                if fits:
+                    bar.grid_remove()
+                else:
+                    bar.grid()
+            except tk.TclError:
+                return
+
+        scroll.bind("<Configure>", _hide_bar_when_it_fits, add="+")
+        scroll._parent_canvas.bind("<Configure>", _hide_bar_when_it_fits, add="+")
 
     def _bind_step_keys(self) -> None:
         root = self.winfo_toplevel()
@@ -436,14 +490,33 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
                 frame.grid()
             else:
                 frame.grid_remove()
-        self.workspace.set_inspector(
-            step in ("match", "place"), table=step == "place")
+        self.workspace.set_inspector(step == "match" and bool(self.audio),
+                                     table=False)
         self.timeline.grid(row=1, column=0, sticky="ew", pady=(4, 0))
         self._sync_rail()
+        self._show_workspace()
         bar = getattr(self.app, "player_bar", None)
         if bar is not None:
             bar._show_hear()
         self._start_deferred_work(step)
+        if step == "place" and hasattr(self, "_keep_place_rows"):
+            self.update_idletasks()
+            self._keep_place_rows()
+
+    def _show_workspace(self) -> None:
+        """With no book, one sentence. The rail and timeline stay."""
+        from .theme import set_enabled
+        has_book = bool(self.audio)
+        set_enabled(self.timeline._opts, has_book)
+        if has_book:
+            self._empty.place_forget()
+            return
+        for frame in self._main_frames.values():
+            frame.grid_remove()
+        for frame in self._insp_frames.values():
+            frame.grid_remove()
+        self.workspace.set_inspector(False)
+        self._empty.place(relx=0.5, rely=0.5, anchor="center")
 
     def set_stage(self, key: str):
         if key in STAGE_STEP:
@@ -496,6 +569,7 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         finish = finish_step_status(
             place, states.get("finalize") or {}, dry_ok=self._finalize_dry_ok)
         detail = self._finish_rail_detail(states)
+        self.rail._dim = not bool(self.audio)  # noqa: SLF001
         self.rail.update(
             states, self._step, cleanup, finish_detail=detail,
             place_status=place, finish_status=finish)
@@ -857,7 +931,7 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         from .projection import audio_duration
         from .stages import short_edition_label
         s = self.harvest.get("suggested") or {}
-        title = s.get("title") or "(nothing selected)"
+        title = "" if not self.audio else (s.get("title") or os.path.basename(self.audio))
         author = s.get("author") or ""
         dur = audio_duration(self.analysis)
         ident = self.analysis.get("identification") or {}
@@ -896,7 +970,7 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         """The header stays one line: the file name is elided from the
         middle first, then the title (full paths live in the tooltip)."""
         bits = getattr(self, "_header_bits", None) or {
-            "title": self.book_var.get() or "(nothing selected)",
+            "title": self.book_var.get() or "",
             "author": "", "duration": "", "source": "", "name": "",
         }
         title = bits["title"]
@@ -2293,7 +2367,7 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         if not hasattr(self, "hints_box"):
             return
         lines = [line.strip() for line in
-                 self.hints_box.get("1.0", "end").splitlines() if line.strip()]
+                 self.hints_box.get().splitlines() if line.strip()]
         if not lines:
             return
         self.near_var.set(lines[0])

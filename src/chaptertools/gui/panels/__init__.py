@@ -49,10 +49,14 @@ class StagePanels:
         row.grid(row=0, column=0, sticky="ew")
         self.measure_btn = self._primary(row, 0, 0, "Run measure",
                                          self.cmd_measure)
-        ctk.CTkLabel(row, text="Analyzes the audio: loudness envelope, timeline "
-                               "check, noise calibration, gaps",
-                     anchor="w", justify="left", wraplength=420).grid(
-                         row=0, column=1, sticky="w", padx=8)
+        scan_note = ctk.CTkLabel(
+            row, text="Analyzes the audio: loudness envelope, timeline "
+                      "check, noise calibration, gaps",
+            anchor="w", justify="left")
+        scan_note.grid(row=0, column=1, sticky="ew", padx=8)
+        row.columnconfigure(1, weight=1)
+        from chaptertools.gui.ui_kit import wrap_to_parent
+        wrap_to_parent(scan_note)
         from chaptertools.gui.ui_kit import text_button
         rescan = text_button(
             row, "Re-scan", command=self.cmd_rescan, width=_btn_width("Re-scan"))
@@ -66,7 +70,9 @@ class StagePanels:
             row=0, column=0, sticky="w", padx=PAD, pady=(PAD, 0))
         self.measure_result = tk.StringVar(value="")
         result = body(card, "")
-        result.configure(textvariable=self.measure_result, wraplength=720)
+        result.configure(textvariable=self.measure_result)
+        from chaptertools.gui.ui_kit import wrap_to_parent
+        wrap_to_parent(result)
         result.grid(row=1, column=0, sticky="ew", padx=PAD, pady=(PAD // 2, 0))
         from chaptertools.gui.ui_kit import small
         self.duration_note = small(card, "")
@@ -235,24 +241,32 @@ class StagePanels:
         self._identify_mode_changed()
 
     def _panel_align(self, host):
-        from chaptertools.gui.ui_kit import BODY, font
+        from chaptertools.gui.ui_kit import BODY, CTRL_H, font
         p = ctk_frame(host, fg_color="transparent", corner_radius=0)
-        p.columnconfigure(1, weight=1)
-        ctk.CTkLabel(p, text="Minimum confidence", width=90, anchor="w",
+        p.columnconfigure(3, weight=1)
+        ctk.CTkLabel(p, text="Minimum confidence", anchor="w",
                      font=font(BODY)).grid(row=0, column=0, sticky="w")
         self.min_conf = tk.DoubleVar(value=0.5)
         self.min_conf.trace_add("write", lambda *_: self._refresh_soon())
-        self.min_conf_spin = ttk.Spinbox(p, from_=0.0, to=1.0, increment=0.05,
-                                         width=5, textvariable=self.min_conf)
-        self.min_conf_spin.grid(row=0, column=1, sticky="w")
-        self.align_btn = self._primary(p, 0, 2, "Align", self.cmd_align)
-        ctk.CTkLabel(p, text="Hints", width=90, anchor="nw",
-                     font=font(BODY)).grid(row=1, column=0, sticky="nw", pady=(6, 0))
+        spin_host = tk.Frame(p, width=70, height=CTRL_H)
+        spin_host.grid(row=0, column=1, sticky="w", padx=(8, 12))
+        spin_host.grid_propagate(False)
+        spin_host.columnconfigure(0, weight=1)
+        spin_host.rowconfigure(0, weight=1)
+        self.min_conf_spin = ttk.Spinbox(
+            spin_host, from_=0.0, to=1.0, increment=0.05,
+            textvariable=self.min_conf)
+        self.min_conf_spin.grid(row=0, column=0, sticky="ew")
+        ctk.CTkLabel(p, text="Hints", anchor="w",
+                     font=font(BODY)).grid(row=0, column=2, sticky="w")
         self.near_var = tk.StringVar()
-        self.hints_box = tk.Text(p, height=3, width=18, wrap="word")
-        self.hints_box.grid(row=1, column=1, columnspan=2, sticky="ew", pady=(6, 0))
-        self._tip(self.hints_box, "one CH=TIME per line, for example 12=3:45:00")
-        self.align_result = self._result_line(p, row=2, colspan=3)
+        self.hints_box = ctk.CTkEntry(
+            p, textvariable=self.near_var, height=CTRL_H,
+            placeholder_text="e.g. 12=1:02:03")
+        self.hints_box.grid(row=0, column=3, sticky="ew", padx=(8, 8))
+        self.align_btn = self._primary(p, 0, 4, "Align", self.cmd_align)
+        self.align_result = self._result_line(p, row=1, colspan=5)
+        self._tip(self.hints_box, "one CH=TIME per line, for example 12=1:02:03")
         self._tip(self.align_btn, "place every published chapter on a "
                   "real gap, keeping local reading rate consistent")
         self._tip(self.min_conf_spin, "chapters below this confidence are "
@@ -510,9 +524,11 @@ class StagePanels:
         self.verdict_reason = ctk.CTkLabel(
             card, textvariable=self.verdict_reason_var,
             font=font(BODY), text_color=C["text"], anchor="w",
-            justify="left", wraplength=520)
+            justify="left")
         self.verdict_reason.grid(
             row=1, column=0, sticky="ew", padx=PAD)
+        from chaptertools.gui.ui_kit import wrap_to_parent
+        wrap_to_parent(self.verdict_reason)
         self.verdict_numbers = ctk.CTkLabel(
             card, textvariable=self.verdict_numbers_var,
             font=font(SMALL, mono=True), text_color=C["muted"], anchor="w")
@@ -576,16 +592,10 @@ class StagePanels:
             head,
             text="Writes one new file into the library. "
                  "The first original is always kept.",
-            text_color=palette.MUTED, anchor="w", justify="left",
-            wraplength=360)
+            text_color=palette.MUTED, anchor="w", justify="left")
         note.pack(side="left", fill="x", expand=True, padx=(10, 0))
-
-        def _wrap_finish_note(_event=None):
-            width = note.winfo_width()
-            if width > 40:
-                note.configure(wraplength=width)
-
-        note.bind("<Configure>", _wrap_finish_note)
+        from chaptertools.gui.ui_kit import wrap_to_parent
+        wrap_to_parent(note, pad=10)
 
         table = ctk_frame(p, fg_color="transparent")
         table.grid(row=1, column=0, sticky="ew")

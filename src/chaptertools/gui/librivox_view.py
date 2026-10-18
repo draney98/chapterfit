@@ -47,8 +47,8 @@ class LibrivoxView(ctk.CTkFrame):
         self._mode = "search"  # search | fetch | stop
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
-        self._host = ctk_frame(self)
-        self._host.grid(row=0, column=0, sticky="nsew")
+        self._host = ctk_frame(self, fg_color="transparent")
+        self._host.grid(row=0, column=0, sticky="nsew", padx=14, pady=14)
         self._host.columnconfigure(0, weight=1)
         self._host.rowconfigure(0, weight=1)
         self._build_search()
@@ -122,22 +122,28 @@ class LibrivoxView(ctk.CTkFrame):
         self.results = ttk.Treeview(
             body, columns=cols, show="headings", selectmode="browse")
         headings = (
-            ("id", "ID", 60), ("title", "Title", 220), ("author", "Author", 140),
-            ("readers", "Readers", 120), ("length", "Length", 70),
-            ("lang", "Lang", 70), ("sections", "Sections", 70),
+            ("id", "ID", 48), ("title", "Title", 180), ("author", "Author", 120),
+            ("readers", "Readers", 88), ("length", "Length", 72),
+            ("lang", "Lang", 56), ("sections", "Parts", 56),
         )
         for col, text, width in headings:
             self.results.heading(col, text=text)
-            self.results.column(col, width=width, stretch=col in ("title", "author"))
+            self.results.column(
+                col, width=width, minwidth=width,
+                stretch=col in ("title", "author"))
         self.results.tag_configure("unfinished", foreground=palette.MUTED)
         self.results.grid(row=0, column=0, sticky="nsew")
+        self._results_empty = ctk.CTkLabel(
+            body, text="Search for a title to see recordings.",
+            text_color=palette.MUTED, fg_color="transparent")
+        self._results_empty.grid(row=0, column=0)
         from .ui_kit import vscroll
         vscroll(body, self.results, row=0, column=0, sticky="nse")
         self.results.bind("<<TreeviewSelect>>", self._on_result_select)
         self.results.bind("<Double-1>", self._on_result_activate)
         self.results.bind("<Return>", self._on_result_activate)
 
-        self.detail = ctk_frame(body, width=470)
+        self.detail = ctk_frame(body, width=300)
         self.detail.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
         self.detail.grid_propagate(False)
         self.detail.columnconfigure(0, weight=1)
@@ -169,9 +175,15 @@ class LibrivoxView(ctk.CTkFrame):
         self.section_list = tk.Listbox(self.detail, height=12)
         self.section_list.grid(row=5, column=0, sticky="nsew", pady=(6, 0))
         self.detail.rowconfigure(5, weight=1)
-        ctk.CTkLabel(self.detail, textvariable=self._detail_note,
-                  text_color=palette.MUTED, wraplength=440, text="").grid(
-            row=6, column=0, sticky="w", pady=(4, 0))
+        self._files_empty = ctk.CTkLabel(
+            self.detail, text="Pick a recording to see its files.",
+            text_color=palette.MUTED, justify="left", anchor="w")
+        self._files_empty.grid(row=5, column=0, sticky="nw", pady=(8, 0))
+        note = ctk.CTkLabel(self.detail, textvariable=self._detail_note,
+                  text_color=palette.MUTED, justify="left", anchor="w", text="")
+        note.grid(row=6, column=0, sticky="ew", pady=(4, 0))
+        from .ui_kit import wrap_to_parent
+        wrap_to_parent(note)
         self.fetch_btn = secondary(
             self.detail, "Fetch into library", command=self._start_fetch)
         set_enabled(self.fetch_btn, False)
@@ -188,6 +200,17 @@ class LibrivoxView(ctk.CTkFrame):
 
         self._hits: dict[str, dict] = {}
         self._unfinished_ids: set[str] = set()
+        self._sync_empty()
+
+    def _sync_empty(self) -> None:
+        if self.results.get_children():
+            self._results_empty.grid_remove()
+        else:
+            self._results_empty.grid(row=0, column=0)
+        if self.section_list.size() > 0:
+            self._files_empty.grid_remove()
+        else:
+            self._files_empty.grid(row=5, column=0, sticky="nw", pady=(8, 0))
 
     def _build_fetch(self):
         self.fetch_frame = ctk_frame(self._host)
@@ -308,6 +331,7 @@ class LibrivoxView(ctk.CTkFrame):
         self.results.delete(*self.results.get_children())
         self._hits.clear()
         self._unfinished_ids.clear()
+        self._sync_empty()
 
         def on_obj(obj):
             self._apply_search(obj, title)
@@ -320,6 +344,7 @@ class LibrivoxView(ctk.CTkFrame):
             self._empty_var.set(msg)
             self._status_var.set("")
             self.app.log(f"! {msg}")
+            self._sync_empty()
             return
         hits = obj.get("hits") or []
         unfinished = obj.get("unfinished") or []
@@ -355,6 +380,7 @@ class LibrivoxView(ctk.CTkFrame):
                 f'Nothing on LibriVox starts with "{query}". '
                 "Titles match from the first word.")
             self._status_var.set("")
+        self._sync_empty()
 
     def _arm_fetch(self, kind: str, enabled: bool, **kw) -> None:
         """Search stays the primary until a recording is chosen."""
@@ -384,6 +410,7 @@ class LibrivoxView(ctk.CTkFrame):
         self._detail_meta.set("")
         self._detail_order.set("")
         self.section_list.delete(0, "end")
+        self._sync_empty()
         argv = [*self._cf(), "librivox", "fetch", str(lv_id),
                 "--library", self.app.library_root, "--plan-only", "--json"]
         if set_name:
@@ -441,6 +468,7 @@ class LibrivoxView(ctk.CTkFrame):
                 "end",
                 f"{int(item['section_number']):02d}  {item['title']}  "
                 f"({_readers_label(item.get('readers'))})")
+        self._sync_empty()
         # Already in library?
         meta_path = os.path.join(dest, "librivox.json")
         if os.path.isfile(meta_path):
