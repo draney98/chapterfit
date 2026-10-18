@@ -46,3 +46,6 @@ venv/
 .cache/
 **/clips/
 **/transcripts/
+
+# GUI review captures (make screenshots)
+/out/

@@ -67,7 +67,9 @@ def test_emit_goes_stale_when_alignment_changes():
     st = stage_states(a, 0.5, ok)
     assert st["emit"]["state"] == "pending"
     assert "changed" in st["emit"]["detail"]
-    assert st["finalize"]["state"] == "blocked"
+    # Finish waits on Place, not Emit; Place is still done.
+    assert st["finalize"]["state"] == "pending"
+    assert st["finalize"]["detail"] == "needs a dry run"
 
 
 def test_select_chapters_matches_emit_rule():

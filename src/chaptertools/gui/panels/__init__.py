@@ -6,16 +6,18 @@ import tkinter.font as tkfont
 from tkinter import ttk
 
 from chaptertools.gui import palette
-from chaptertools.gui.theme import ctk_frame, equalize_segments, require_customtkinter
+from chaptertools.gui.theme import ctk_frame, require_customtkinter
 
 ctk = require_customtkinter()
 
 _IDENTIFY_LABELS = {
+    "Search": "search",
     "ASIN": "asin",
-    "JSON file": "json",
+    "JSON": "json",
     "Embedded": "emb",
     "NFO": "nfo",
 }
+_FORM_LABEL_W = 90
 
 
 def _btn_width(text: str, *, minimum: int = 90) -> int:
@@ -67,84 +69,149 @@ class StagePanels:
                   "the header; run it, then Measure the fixed file")
         return p
 
+    def _form_row(self, parent, row, label, widget, *, tip: str = ""):
+        from chaptertools.gui.ui_kit import PAD, BODY, font, C
+        lbl = ctk.CTkLabel(
+            parent, text=label, width=_FORM_LABEL_W, anchor="w",
+            font=font(BODY), text_color=C["text"])
+        lbl.grid(row=row, column=0, sticky="w",
+                 padx=(PAD, PAD), pady=(PAD // 2, 0))
+        widget.grid(row=row, column=1, sticky="ew",
+                    padx=(0, PAD), pady=(PAD // 2, 0))
+        if tip:
+            self._tip(widget, tip)
+        return lbl
+
     def _panel_identify(self, host):
+        from chaptertools.gui.ui_kit import (
+            PAD, BODY, C, SMALL, font, section, secondary, small)
+        from chaptertools.sources.abs_match import (
+            PROVIDER_FIND_ASIN, provider_choices, provider_labels)
+
         p = ctk_frame(host, fg_color="transparent", corner_radius=0)
-        p.columnconfigure(1, weight=1)
-        ctk.CTkLabel(p, text="Source:").grid(row=0, column=0, sticky="w")
-        self.identify_mode = tk.StringVar(value="asin")
+        p.columnconfigure(0, weight=1)
+        section(p, "Find the edition").grid(row=0, column=0, sticky="w")
+
+        self.identify_mode = tk.StringVar(value="search")
         self.identify_value = tk.StringVar()
+        self.identify_result = tk.StringVar(value="")  # kept for projection API
+
         radios = ctk_frame(p, fg_color="transparent")
-        radios.grid(row=0, column=1, columnspan=3, sticky="w")
+        radios.grid(row=1, column=0, sticky="ew", pady=(PAD, 0))
         self._identify_seg = ctk.CTkSegmentedButton(
             radios, values=list(_IDENTIFY_LABELS),
             command=self._on_identify_seg, height=28, border_width=None,
-            dynamic_resizing=False, width=360)
-        self._identify_seg.set("ASIN")
-        self._identify_seg.pack(side="left")
-        equalize_segments(self._identify_seg)
+            dynamic_resizing=True,
+            font=font(SMALL), fg_color=C["sunken"],
+            selected_color=C["accent"], selected_hover_color=C["accent_hover"],
+            unselected_color=C["sunken"], unselected_hover_color=C["border"],
+            text_color=C["text"])
+        self._identify_seg.set("Search")
+        self._identify_seg.pack(side="left", fill="x", expand=True)
+        from chaptertools.gui.theme import paint_segment_text
+        paint_segment_text(self._identify_seg)
         self.identify_radios = [self._identify_seg]
         self._tip(self._identify_seg,
-                  "ASIN, JSON file, Embedded chapters, or album.nfo")
-        self.identify_entry = ctk.CTkEntry(
-            p, textvariable=self.identify_value, width=220)
-        self.identify_entry.grid(row=1, column=1, sticky="ew", padx=(4, 4),
-                                 pady=(4, 0))
-        self.identify_browse = ctk.CTkButton(
-            p, text="Browse…", command=self._identify_browse, width=90, height=28)
-        self.identify_browse.grid(row=1, column=2, sticky="w", pady=(4, 0))
-        self._tip(self.identify_browse, "pick a chapters JSON file")
-        self.identify_btn = self._primary(p, 1, 3, "Identify",
-                                          self.cmd_identify_primary)
-        self.identify_btn.grid_configure(pady=(4, 0))
-        ctk.CTkLabel(p, text="chooses and verifies the chapter list against "
-                             "the audio", anchor="w").grid(
-            row=2, column=0, columnspan=4, sticky="w", pady=(4, 0))
-        self.identify_result = self._result_line(p, row=3, colspan=4)
-        self._tip(self.identify_btn, "check the chosen chapter list "
-                  "against the real silences before aligning")
-        self.asin_frame = ctk_frame(p, fg_color="transparent")
-        self.asin_frame.grid(row=4, column=0, columnspan=4, sticky="ew",
-                             pady=(4, 0))
+                  "Search catalogs, enter an ASIN, or use JSON / Embedded / NFO")
+
+        body = ctk_frame(p, fg_color="transparent")
+        body.grid(row=2, column=0, sticky="ew", pady=(PAD, 0))
+        body.columnconfigure(0, weight=1)
+
+        # --- Search mode ---
+        self.asin_frame = ctk_frame(body, fg_color="transparent")
         self.asin_frame.columnconfigure(1, weight=1)
         self.asin_title = tk.StringVar()
         self.asin_author = tk.StringVar()
         self.asin_keywords = tk.StringVar()
         self.asin_region = tk.StringVar(value="us")
-        query_fields = (
-            ("Title", self.asin_title,
-             "title sent to Audible; edit it before Search"),
-            ("Author", self.asin_author,
-             "author sent to Audible; edit it before Search"),
-            ("Keywords", self.asin_keywords,
-             "free-text search instead of title and author"),
-        )
-        for row, (label, var, tip) in enumerate(query_fields):
-            ctk.CTkLabel(self.asin_frame, text=label).grid(
-                row=row, column=0, sticky="w", padx=(0, 6))
-            entry = ctk.CTkEntry(self.asin_frame, textvariable=var)
-            entry.grid(row=row, column=1, columnspan=2, sticky="ew",
-                       pady=(2, 0))
-            self._tip(entry, tip)
-        ctk.CTkLabel(self.asin_frame, text="Region").grid(
-            row=3, column=0, sticky="w", padx=(0, 6), pady=(2, 0))
+        self.asin_provider = tk.StringVar(value=PROVIDER_FIND_ASIN)
+        self._asin_provider_labels = provider_labels()
+        self._asin_provider_values = provider_choices()
+        self._form_row(
+            self.asin_frame, 0, "Title",
+            ctk.CTkEntry(self.asin_frame, textvariable=self.asin_title,
+                         font=font(BODY)),
+            tip="title sent to the catalog")
+        self._form_row(
+            self.asin_frame, 1, "Author",
+            ctk.CTkEntry(self.asin_frame, textvariable=self.asin_author,
+                         font=font(BODY)),
+            tip="author sent to the catalog")
+        self._form_row(
+            self.asin_frame, 2, "Keywords",
+            ctk.CTkEntry(self.asin_frame, textvariable=self.asin_keywords,
+                         font=font(BODY)),
+            tip="free-text search instead of title and author")
+        label_list = [self._asin_provider_labels[v]
+                      for v in self._asin_provider_values]
+        self.asin_provider_box = ttk.Combobox(
+            self.asin_frame, width=22, state="readonly", values=label_list)
+        self.asin_provider_box.set(
+            self._asin_provider_labels[PROVIDER_FIND_ASIN])
+        self.asin_provider_box.bind(
+            "<<ComboboxSelected>>", self._on_asin_provider_pick)
+        self._form_row(
+            self.asin_frame, 3, "Catalog", self.asin_provider_box,
+            tip="Audible, one ABS catalog, or all catalogs. ABS needs "
+                "ABS_URL / ABS_TOKEN in ~/.config/chapterfit/.env")
         self.asin_region_box = ttk.Combobox(
             self.asin_frame, textvariable=self.asin_region, width=6,
             values=("us", "uk", "ca", "au", "de", "fr", "it", "es", "in", "jp"))
-        self.asin_region_box.grid(row=3, column=1, sticky="w", pady=(2, 0))
-        self._tip(self.asin_region_box, "Audible catalog region")
-        self.asin_search_btn = ctk.CTkButton(
-            self.asin_frame, text="Search", command=self.cmd_search_asin,
-            height=28)
-        self.asin_search_btn.grid(row=4, column=0, columnspan=2, sticky="w",
-                                  pady=(4, 0))
+        self._form_row(
+            self.asin_frame, 4, "Region", self.asin_region_box,
+            tip="Audible catalog region")
+        self.asin_search_btn = secondary(
+            self.asin_frame, "Search", command=self.cmd_search_asin)
+        self.asin_search_btn.grid(row=5, column=0, columnspan=2, sticky="w",
+                                  pady=(PAD, 0))
         self._tip(self.asin_search_btn,
-                  "search Audible with the title, author, keywords, and "
-                  "region above")
+                  "search with the title, author, keywords, catalog, and region")
+
+        # --- ASIN / JSON entry row ---
+        self._identify_entry_frame = ctk_frame(body, fg_color="transparent")
+        self._identify_entry_frame.columnconfigure(0, weight=1)
+        self.identify_entry = ctk.CTkEntry(
+            self._identify_entry_frame, textvariable=self.identify_value,
+            font=font(BODY))
+        self.identify_entry.grid(row=0, column=0, sticky="ew")
+        self.identify_browse = secondary(
+            self._identify_entry_frame, "Browse…",
+            command=self._identify_browse, width=90)
+        self.identify_browse.grid(row=0, column=1, sticky="w", padx=(PAD, 0))
+        self._tip(self.identify_browse, "pick a chapters JSON file")
+        self.identify_btn = secondary(
+            self._identify_entry_frame, "Check",
+            command=self.cmd_identify_primary, width=90)
+        self.identify_btn.grid(row=0, column=2, sticky="w", padx=(PAD, 0))
+        self._tip(self.identify_btn,
+                  "check the chosen chapter list against the silences")
+
+        # --- Embedded / NFO muted line ---
+        self._identify_found_frame = ctk_frame(body, fg_color="transparent")
+        self._identify_found_frame.columnconfigure(0, weight=1)
+        self.identify_found_var = tk.StringVar(value="")
+        found_lbl = small(self._identify_found_frame, text="")
+        found_lbl.configure(textvariable=self.identify_found_var)
+        found_lbl.grid(row=0, column=0, sticky="ew")
+        self.identify_found_btn = secondary(
+            self._identify_found_frame, "Check",
+            command=self.cmd_identify_primary, width=90)
+        self.identify_found_btn.grid(row=1, column=0, sticky="w", pady=(PAD, 0))
+
         self._identify_mode_changed()
         return p
 
+    def _on_asin_provider_pick(self, _event=None):
+        label = self.asin_provider_box.get()
+        for value, text in self._asin_provider_labels.items():
+            if text == label:
+                self.asin_provider.set(value)
+                return
+        self.asin_provider.set("find-asin")
+
     def _on_identify_seg(self, label: str) -> None:
-        self.identify_mode.set(_IDENTIFY_LABELS.get(label, "asin"))
+        self.identify_mode.set(_IDENTIFY_LABELS.get(label, "search"))
         self._identify_mode_changed()
 
     def _panel_align(self, host):
@@ -180,15 +247,16 @@ class StagePanels:
         self.unresolved_frame = ctk_frame(summary, fg_color="transparent")
         self.unresolved_frame.pack(side="top", anchor="w", fill="x")
         self.next_var = tk.StringVar(value="")
+        from chaptertools.gui.ui_kit import BODY, font
         self.next_label = ctk.CTkLabel(
             summary, textvariable=self.next_var, text_color=palette.OK,
-            font=ctk.CTkFont(weight="bold"), anchor="w")
+            font=font(BODY, "bold"), anchor="w")
         self.next_label.pack(side="top", anchor="w")
 
         left = ctk_frame(p, corner_radius=8, border_width=1,
                          border_color=palette.BORDER, fg_color=palette.RAIL_IDLE)
         ctk.CTkLabel(left, text="Automatic", height=20,
-                     font=ctk.CTkFont(weight="bold"), anchor="w").grid(
+                     font=font(BODY, "bold"), anchor="w").grid(
             row=0, column=0, columnspan=3, sticky="w", padx=8, pady=(6, 2))
         self._resolve_left = left
         left.columnconfigure(0, minsize=110)
@@ -294,67 +362,136 @@ class StagePanels:
         left.grid(row=1, column=0, sticky="nsew", padx=4, pady=2)
 
     def _build_book_info(self, parent):
-        info = ctk_frame(parent, corner_radius=8, border_width=1,
-                         border_color=palette.BORDER, fg_color=palette.RAIL_IDLE)
-        info.grid(row=1, column=0, sticky="ew", pady=(8, 0))
-        ctk.CTkLabel(info, text="Book info (written at Finish)", height=20,
-                     font=ctk.CTkFont(weight="bold"), anchor="w").grid(
-            row=0, column=0, columnspan=4, sticky="w", padx=8, pady=(6, 4))
-        for c in range(4):
-            info.columnconfigure(c, weight=1)
+        from chaptertools.gui.ui_kit import (
+            PAD, BODY, C, font, panel, section, secondary, small, text_button)
+
+        info = panel(parent)
+        info.grid(row=1, column=0, sticky="ew", pady=(PAD * 2, 0))
+        info.columnconfigure(1, weight=1)
+        section(info, "Book info").grid(
+            row=0, column=0, columnspan=2, sticky="w",
+            padx=PAD, pady=(PAD, PAD // 2))
         self.meta_vars = {}
         self._meta_entries = {}
-        for n, key in enumerate(("title", "author", "album", "year",
-                                 "genre", "comment")):
-            row, col = divmod(n, 2)
-            ctk.CTkLabel(info, text=f"{key}:").grid(
-                row=row + 1, column=col * 2, sticky="e", padx=(8, 2))
+        self._meta_conflict = {}
+        keys = ("title", "author", "narrator", "album", "year",
+                "genre", "comment")
+        for n, key in enumerate(keys):
+            row = 1 + n * 2
+            label = key[:1].upper() + key[1:]
             var = tk.StringVar()
             self.meta_vars[key] = var
-            entry = ctk.CTkEntry(info, textvariable=var, width=160)
-            entry.grid(row=row + 1, column=col * 2 + 1, sticky="ew",
-                       padx=(0, 8), pady=1)
+            entry = ctk.CTkEntry(info, textvariable=var, font=font(BODY))
+            self._form_row(info, row, label, entry)
             self._meta_entries[key] = entry
-        self.reread_btn = ctk.CTkButton(
-            info, text="Re-read", command=self._reharvest, height=28, width=90)
-        self.reread_btn.grid(row=4, column=0, columnspan=2, sticky="w",
-                             padx=8, pady=(4, 0))
-        self._tip(self.reread_btn, "re-read tags and chapters from the file")
-        found = ctk.CTkLabel(info, textvariable=self.found_var,
-                             text_color=palette.MUTED, justify="left",
-                             anchor="w", text="")
-        found.grid(row=5, column=0, columnspan=4, sticky="w", padx=8, pady=(4, 8))
+            conflict = ctk_frame(info, fg_color="transparent")
+            conflict.grid(row=row + 1, column=1, sticky="ew", padx=0)
+            conflict.grid_remove()
+            note = small(conflict, text="")
+            note.pack(side="left", fill="x", expand=True)
+            use = text_button(conflict, "Use")
+            use.pack(side="right")
+            self._meta_conflict[key] = {
+                "frame": conflict, "note": note, "use": use}
+
+        foot = ctk_frame(info, fg_color="transparent")
+        foot.grid(row=1 + len(keys) * 2, column=0, columnspan=2,
+                  sticky="ew", padx=PAD, pady=(PAD, PAD))
+        foot.columnconfigure(0, weight=1)
+        found = small(foot, text="")
+        found.configure(textvariable=self.found_var)
+        found.grid(row=0, column=0, sticky="ew")
         self._wrap_labels.append(found)
+        self.reread_btn = text_button(
+            foot, "Re-read from file", command=self._reharvest)
+        self.reread_btn.grid(row=1, column=0, sticky="w", pady=(PAD // 2, 0))
+        self._tip(self.reread_btn, "re-read tags and chapters from the file")
 
     def _build_editions(self, parent):
+        from chaptertools.gui.ui_kit import (
+            PAD, BODY, C, FONT, SMALL, TITLE, font, panel, primary,
+            secondary, section, small)
+
         parent.columnconfigure(0, weight=1)
-        parent.rowconfigure(0, weight=1)
-        cols = ("asin", "title", "author", "narrator", "runtime",
-                "chapters", "fit")
-        self.asin_tree = ttk.Treeview(parent, columns=cols, show="headings")
-        headings = (("asin", "ASIN", 110), ("title", "Title", 180),
-                    ("author", "Author", 140), ("narrator", "Narrator", 140),
-                    ("runtime", "Runtime", 70), ("chapters", "Chapters", 70),
-                    ("fit", "Fit", 90))
-        stretch = {"title", "author", "narrator"}
-        for col, heading, width in headings:
+        parent.rowconfigure(1, weight=1)
+
+        head = ctk_frame(parent, fg_color="transparent")
+        head.grid(row=0, column=0, sticky="ew", pady=(0, PAD))
+        head.columnconfigure(0, weight=1)
+        section(head, "Editions").grid(row=0, column=0, sticky="w")
+        self.editions_count_var = tk.StringVar(value="")
+        count_lbl = small(head, text="")
+        count_lbl.configure(textvariable=self.editions_count_var)
+        count_lbl.grid(row=0, column=1, sticky="e")
+
+        cols = ("marker", "asin", "title", "narrator", "length", "ch", "fit")
+        table_card = panel(parent)
+        table_card.grid(row=1, column=0, sticky="nsew")
+        table_card.rowconfigure(0, weight=1)
+        table_card.columnconfigure(0, weight=1)
+        self.asin_tree = ttk.Treeview(table_card, columns=cols, show="headings",
+                                      height=8)
+        headings = (
+            ("marker", "", 24, "center"),
+            ("asin", "ASIN", 130, "w"),
+            ("title", "Title", 180, "w"),
+            ("narrator", "Narrator", 170, "w"),
+            ("length", "Length", 80, "e"),
+            ("ch", "Ch", 48, "e"),
+            ("fit", "Fit", 130, "w"),
+        )
+        for col, heading, width, anchor in headings:
             self.asin_tree.heading(col, text=heading)
-            self.asin_tree.column(col, width=width, stretch=col in stretch)
-        self.asin_tree.grid(row=0, column=0, sticky="nsew")
+            self.asin_tree.column(
+                col, width=width, minwidth=width,
+                stretch=(col == "title"), anchor=anchor)
+        self.asin_tree.tag_configure("divider", foreground=C["muted"])
+        self.asin_tree.tag_configure("in_use", font=(FONT, BODY, "bold"))
+        self.asin_tree.grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
         self.asin_tree.bind("<<TreeviewSelect>>", self._on_asin_select)
-        bar = ctk_frame(parent, fg_color="transparent")
-        bar.grid(row=1, column=0, sticky="ew", pady=(4, 0))
-        self.fit_var = tk.StringVar(value="")
-        ctk.CTkLabel(bar, textvariable=self.fit_var, text="").pack(side="left")
-        self.use_edition_btn = ctk.CTkButton(
-            bar, text="Use this edition", command=self.cmd_use_edition,
-            height=28, width=_btn_width("Use this edition"))
-        self.use_edition_btn.pack(side="right")
+
+        card = panel(parent)
+        card.grid(row=2, column=0, sticky="ew", pady=(PAD, 0))
+        card.columnconfigure(0, weight=1)
+        self.verdict_card = card
+        self.verdict_headline_var = tk.StringVar(value="")
+        self.verdict_reason_var = tk.StringVar(value="")
+        self.verdict_numbers_var = tk.StringVar(value="")
+        self.verdict_headline = ctk.CTkLabel(
+            card, textvariable=self.verdict_headline_var,
+            font=font(TITLE, "bold"), text_color=C["text"], anchor="w")
+        self.verdict_headline.grid(
+            row=0, column=0, sticky="ew", padx=PAD, pady=(PAD, PAD // 2))
+        self.verdict_reason = ctk.CTkLabel(
+            card, textvariable=self.verdict_reason_var,
+            font=font(BODY), text_color=C["text"], anchor="w",
+            justify="left", wraplength=520)
+        self.verdict_reason.grid(
+            row=1, column=0, sticky="ew", padx=PAD)
+        self.verdict_numbers = ctk.CTkLabel(
+            card, textvariable=self.verdict_numbers_var,
+            font=font(SMALL, mono=True), text_color=C["muted"], anchor="w")
+        self.verdict_numbers.grid(
+            row=2, column=0, sticky="ew", padx=PAD, pady=(PAD // 2, 0))
+        btns = ctk_frame(card, fg_color="transparent")
+        btns.grid(row=3, column=0, sticky="ew", padx=PAD, pady=PAD)
+        self.use_edition_btn = primary(
+            btns, "Use this edition", command=self.cmd_use_edition)
+        self.use_edition_btn.pack(side="left")
         self._tip(self.use_edition_btn,
                   "fill empty book info, align this edition, and open Place")
+        self.use_anyway_btn = secondary(
+            btns, "Use anyway…", command=self.cmd_use_edition_anyway)
+        self.use_anyway_btn.pack(side="left", padx=(PAD, 0))
+        self.use_anyway_btn.pack_forget()
+        self._tip(self.use_anyway_btn,
+                  "use this edition even though it does not fit")
+        # Kept so older refresh paths that set fit_var do not crash.
+        self.fit_var = tk.StringVar(value="")
 
     def _panel_emit(self, host):
         """Finish: one-column write table, plan box, Dry run / Apply."""
+        from chaptertools.gui.ui_kit import BODY, SMALL, font
         p = ctk_frame(host, fg_color="transparent", corner_radius=0)
         p.columnconfigure(0, weight=1)
         p.rowconfigure(3, weight=1)
@@ -373,7 +510,7 @@ class StagePanels:
         head = ctk_frame(p, fg_color="transparent")
         head.grid(row=0, column=0, sticky="ew", pady=(0, 6))
         ctk.CTkLabel(head, text="Finish",
-                     font=ctk.CTkFont(size=14, weight="bold")).pack(side="left")
+                     font=font(BODY, "bold")).pack(side="left")
         ctk.CTkLabel(
             head,
             text="Writes one new file into the library. "
@@ -390,7 +527,7 @@ class StagePanels:
         headers = (("Write", 170), ("What goes in", 0), ("Option", 250), ("", 130))
         for col, (text, width) in enumerate(headers):
             lbl = ctk.CTkLabel(inner, text=text, text_color=palette.MUTED,
-                               font=ctk.CTkFont(size=11), anchor="w", height=18)
+                               font=font(SMALL), anchor="w", height=18)
             sticky = "ew" if col == 1 else "w"
             lbl.grid(row=0, column=col, sticky=sticky, padx=8, pady=4)
             if width:
@@ -452,7 +589,7 @@ class StagePanels:
         plan_head = ctk_frame(p, fg_color="transparent")
         plan_head.grid(row=2, column=0, sticky="ew", pady=(10, 4))
         ctk.CTkLabel(plan_head, text="Plan",
-                     font=ctk.CTkFont(size=13, weight="bold")).pack(side="left")
+                     font=font(SMALL, "bold")).pack(side="left")
         ctk.CTkLabel(plan_head, text="from the last dry run",
                      text_color=palette.MUTED).pack(side="left", padx=(8, 0))
 
@@ -464,7 +601,7 @@ class StagePanels:
         self._plan_empty_frame = ctk_frame(plan_wrap, fg_color="transparent")
         self._plan_empty_frame.grid(row=0, column=0, sticky="")
         ctk.CTkLabel(self._plan_empty_frame, text="No dry run yet",
-                     font=ctk.CTkFont(size=13, weight="bold")).pack(pady=(24, 4))
+                     font=font(SMALL, "bold")).pack(pady=(24, 4))
         ctk.CTkLabel(
             self._plan_empty_frame,
             text="Dry run shows what Apply will write, without changing the library.",
@@ -476,6 +613,7 @@ class StagePanels:
         fixed = tkfont.nametofont("TkFixedFont", root=self)
         self.dry_log = ctk.CTkTextbox(
             plan_wrap, wrap="none",
+            fg_color=palette.WINDOW, text_color=palette.TEXT,
             font=ctk.CTkFont(family=fixed.actual("family"),
                              size=fixed.actual("size")))
         self.dry_log.configure(state="disabled")

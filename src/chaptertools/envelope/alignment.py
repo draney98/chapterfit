@@ -94,7 +94,8 @@ def solve(chapters, cands, pins, max_off, w_rate, skip_penalty, max_skip=6,
             if v > bv:
                 bv, endi, endj = v, i, j
     if endi is None:
-        return {}, {"assigned": 0, "rate_spread": None, "rates": []}
+        return {}, {"assigned": 0, "rate_spread": None, "rates": [],
+                    "rate_median": None}
 
     assign = {}
     i, j = endi, endj

@@ -55,6 +55,7 @@ def test_asin_candidates_rows_and_empty(tmp_path):
         "narrator": "James Adams, Simon Jackson",
         "runtime": "95 min",
         "score": "0.20",
+        "source": "find-asin",
     }, {
         "asin": "B000000001",
         "title": "Other",
@@ -62,6 +63,7 @@ def test_asin_candidates_rows_and_empty(tmp_path):
         "narrator": "",
         "runtime": "",
         "score": "",
+        "source": "find-asin",
     }]
     assert lib.asin_candidates(str(audio), str(tmp_path / "missing")) == []
     empty = work / "empty.mp3.asin.json"
@@ -71,17 +73,21 @@ def test_asin_candidates_rows_and_empty(tmp_path):
     argv = find_asin_argv(
         str(audio), str(work / "out.json"),
         title="Brave New World", author="Aldous Huxley",
-        keywords="huxley", region="uk")
+        keywords="huxley", region="uk", provider="abs:audible")
     assert argv[argv.index(str(audio)) + 1:] == [
         "--title", "Brave New World",
         "--author", "Aldous Huxley",
         "--keywords", "huxley",
         "--region", "uk",
+        "--provider", "abs:audible",
         "--json", str(work / "out.json"),
     ]
     assert "--verify" not in argv
     bare = find_asin_argv(str(audio), str(work / "out.json"))
-    assert bare[-3:] == [str(audio), "--json", str(work / "out.json")]
+    assert bare[-5:] == [
+        str(audio), "--provider", "find-asin", "--json",
+        str(work / "out.json"),
+    ]
 
 
 def test_asin_query_uses_saved_guess_then_folders(tmp_path):
@@ -496,6 +502,100 @@ def _click(app, widget):
     event = type("E", (), {})()
     event.widget = widget
     app._log_button_click(event)
+
+
+def test_click_focus_leaves_menus_alone():
+    tkinter = pytest.importorskip("tkinter")
+    try:
+        root = tkinter.Tk()
+    except tkinter.TclError:
+        pytest.skip("no display available")
+    from chaptertools.gui.theme import focus_clicked_widget
+    try:
+        entry = tkinter.Entry(root)
+        entry.pack()
+        entry.focus_set()
+        root.update_idletasks()
+        menu = tkinter.Menu(root, tearoff=0)
+        menu.add_command(label="Quit")
+        focused = []
+        menu.focus_set = lambda: focused.append("menu")
+        event = type("E", (), {"widget": menu})()
+        focus_clicked_widget(event)
+        assert focused == []
+        entry.focus_set = lambda: focused.append("entry")
+        event.widget = entry
+        focus_clicked_widget(event)
+        assert focused == ["entry"]
+    finally:
+        root.destroy()
+
+
+def test_menu_grab_name_does_not_break_the_click(monkeypatch):
+    tkinter = pytest.importorskip("tkinter")
+    try:
+        root = tkinter.Tk()
+    except tkinter.TclError:
+        pytest.skip("no display available")
+    from chaptertools.gui import theme
+    try:
+        assert theme._resolve_grab(root, ".__tk__messagebox") == ".__tk__messagebox"
+        monkeypatch.setattr(theme, "_grabbed", lambda _root: ".__tk__messagebox")
+        event = type("E", (), {"widget": root, "x_root": 0, "y_root": 0})()
+        theme._trace_pointer(root, "all-press", event)
+        theme.focus_clicked_widget(event)
+    finally:
+        root.destroy()
+
+
+def test_menu_class_bindings_keep_tk_post_and_invoke(tmp_path):
+    app = _make_app(tmp_path)
+    try:
+        assert "tk::MenuButtonDown" in app.bind_class("Menu", "<Button>")
+        assert "tk::MenuInvoke" in app.bind_class("Menu", "<ButtonRelease>")
+        assert not app.bind_class("Menu", "<Button-1>")
+        assert not app.bind_class("Menu", "<ButtonRelease-1>")
+    finally:
+        app.destroy()
+
+
+def test_menu_trace_records_pointer_state(tmp_path):
+    app = _make_app(tmp_path)
+    try:
+        import chaptertools.file_log as file_log
+        from chaptertools.gui.theme import trace_menu_event
+        got = []
+        original = file_log.write
+
+        def capture(text):
+            got.append(text)
+            original(text)
+
+        file_log.write = capture
+        try:
+            trace_menu_event(app, "class-press")
+        finally:
+            file_log.write = original
+        assert any(
+            "menu-trace class-press" in line and "grab=" in line and "focus=" in line
+            for line in got)
+    finally:
+        app.destroy()
+
+
+def test_app_click_focus_skips_menus(tmp_path):
+    app = _make_app(tmp_path)
+    try:
+        import customtkinter as ctk
+        extra = ctk.CTkToplevel(app)
+        try:
+            script = app.bind_all("<Button-1>")
+            assert "focus_clicked_widget" in script
+            assert "set_focus" not in script
+        finally:
+            extra.destroy()
+    finally:
+        app.destroy()
 
 
 def test_click_log_names_the_action_and_the_preset(tmp_path):
@@ -1084,7 +1184,10 @@ def test_resolve_summary_keeps_next_label(tmp_path):
         links = [w.cget("text") for w in wf.unresolved_frame.winfo_children()]
         assert "3" in links
         from chaptertools.gui import palette
-        assert wf.listen_btn.cget("fg_color") == palette.Q_ACCENT
+        fg = wf.listen_btn.cget("fg_color")
+        accent = palette.Q_ACCENT.lower()
+        parts = fg if isinstance(fg, (tuple, list)) else (fg,)
+        assert all(str(part).lower() == accent for part in parts)
     finally:
         app.destroy()
 
@@ -1272,10 +1375,10 @@ def test_rejected_identify_offers_another_edition(tmp_path):
             "best_trial": {"score": 1.2, "rate_spread": 0.09}}
         _write_artifact(wf, art)
         wf._refresh()
-        assert wf.identify_btn.cget("text") == "Try another edition"
-        text = wf.identify_result.get()
-        assert "rate spread 9.0%" in text and "runtime ratio 0.710" in text
-        assert "rejected" in text and "71% of the published" in text
+        assert wf.identify_btn.cget("text") == "Check"
+        assert wf.verdict_headline_var.get() == "Doesn't fit this audio"
+        assert "different" in wf.verdict_reason_var.get().lower() \
+            or "%" in wf.verdict_reason_var.get()
         ran = []
         wf._run = lambda *a, **k: ran.append(a)
         wf.identify_mode.set("asin")

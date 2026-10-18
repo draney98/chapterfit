@@ -26,11 +26,13 @@ from .step_rail import STEP_LABELS
 from .table import SHORTCUTS
 from .theme import (
     APPEARANCE_MODES,
-    apply_appearance,
+    apply_theme,
     ctk_control,
     ctk_frame,
     ctk_kind,
-    equalize_segments,
+    bind_menu_before,
+    install_click_focus,
+    install_menu_trace,
     is_disabled,
     load_gui_prefs,
     require_customtkinter,
@@ -38,6 +40,7 @@ from .theme import (
     save_gui_prefs,
     widget_text,
 )
+from .ui_kit import PAD, C, SMALL, font, secondary, small, style_treeview
 from .workflow import WorkflowPanel
 
 LIBRARY_WIDTH = 300
@@ -48,11 +51,15 @@ ctk = require_customtkinter()
 class App(ctk.CTk):
     def __init__(self, library_root: str | None = None):
         prefs = load_gui_prefs()
-        mode = prefs.get("appearance", "Light")
+        mode = prefs.get("appearance", "Auto")
+        if mode == "System":
+            mode = "Auto"
         if mode not in APPEARANCE_MODES:
-            mode = "Light"
-        apply_appearance(mode)
+            mode = "Auto"
+        apply_theme(mode=mode)
         super().__init__()
+        apply_theme(self, mode=mode)
+        install_click_focus(self)
         self.title("chaptertools")
         self.geometry("1600x960")
         self.appearance_mode = mode
@@ -68,6 +75,8 @@ class App(ctk.CTk):
 
         self._setup_fonts()
         restyle_ttk(self)
+        style_treeview(self)
+        self.configure(fg_color=C["bg"])
         self._build_menu()
         self._build_ui()
         self._fill_library()
@@ -93,7 +102,8 @@ class App(ctk.CTk):
 
     def _setup_fonts(self, base: int | None = None):
         if base is None:
-            base = int(os.environ.get("CHAPTERGUI_FONT", "11"))
+            base = int(os.environ.get("CHAPTERGUI_FONT", "14"))
+        base = max(13, min(base, 16))
         self.font_base = base
         for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont",
                      "TkHeadingFont", "TkFixedFont"):
@@ -101,12 +111,12 @@ class App(ctk.CTk):
                 f = tkfont.nametofont(name, root=self)
             except tk.TclError:
                 continue
-            f.configure(size=base + (2 if name == "TkFixedFont" else 0))
+            f.configure(size=base)
         restyle_ttk(self)
 
     def set_font_size(self, base: int):
         """View menu: every font, column width and minimum size follows."""
-        base = max(8, min(base, 24))
+        base = max(13, min(base, 16))
         self._setup_fonts(base)
         fonts.refresh(self)
         self.workflow.size_table()
@@ -115,11 +125,11 @@ class App(ctk.CTk):
         self.log(f"text size {base} pt")
 
     def set_appearance(self, mode: str):
-        """View menu: Light / Dark / System."""
+        """View menu: Auto / Light / Dark."""
         if mode not in APPEARANCE_MODES:
             return
         self.appearance_mode = mode
-        apply_appearance(mode)
+        apply_theme(self, mode=mode)
         restyle_ttk(self)
         save_gui_prefs(appearance=mode, library_open=self._library_open)
         self.log(f"appearance {mode.lower()}")
@@ -138,7 +148,7 @@ class App(ctk.CTk):
         view.add_command(label="Smaller text", accelerator="Ctrl+-",
                          command=lambda: self.set_font_size(self.font_base - 1))
         view.add_command(label="Default text size", accelerator="Ctrl+0",
-                         command=lambda: self.set_font_size(11))
+                         command=lambda: self.set_font_size(14))
         view.add_separator()
         appearance = tk.Menu(view, tearoff=0)
         self._appearance_var = tk.StringVar(value=self.appearance_mode)
@@ -152,7 +162,7 @@ class App(ctk.CTk):
             self.bind_all(seq, lambda e: self.set_font_size(self.font_base + 1))
         for seq in ("<Control-minus>", "<Control-KP_Subtract>"):
             self.bind_all(seq, lambda e: self.set_font_size(self.font_base - 1))
-        self.bind_all("<Control-0>", lambda e: self.set_font_size(11))
+        self.bind_all("<Control-0>", lambda e: self.set_font_size(14))
 
         help_menu = tk.Menu(menu, tearoff=0)
         help_menu.add_command(label="Keyboard shortcuts",
@@ -192,16 +202,23 @@ class App(ctk.CTk):
         self._library_collapsed = False
         self._lib_expand = ctk.CTkButton(
             lib, text="›", width=36, height=28, command=self.toggle_library)
-        self._lib_body = ctk_frame(lib, corner_radius=0, fg_color="transparent")
-        self._lib_body.pack(side="top", fill="both", expand=True, padx=4, pady=4)
+        self._lib_body = ctk_frame(lib, corner_radius=0, fg_color=C["bg"])
+        self._lib_body.pack(side="top", fill="both", expand=True,
+                            padx=PAD // 2, pady=PAD // 2)
+        self._lib_body.columnconfigure(0, weight=1)
+        self._lib_body.rowconfigure(2, weight=1)
+
         searchbar = ctk_frame(self._lib_body, fg_color="transparent")
-        searchbar.pack(side="top", fill="x", pady=(0, 4))
+        searchbar.grid(row=0, column=0, sticky="ew", pady=(0, PAD // 2))
+        searchbar.columnconfigure(0, weight=1)
         self.search_var = tk.StringVar()
         self._search_has_placeholder = False
         search_entry = ctk.CTkEntry(
             searchbar, textvariable=self.search_var,
-            placeholder_text="Search title or author")
-        search_entry.pack(side="left", fill="x", expand=True)
+            placeholder_text="Search title or author",
+            fg_color=C["panel"], border_color=C["border"],
+            text_color=C["text"])
+        search_entry.grid(row=0, column=0, sticky="ew")
         self._search_entry = search_entry
 
         def _on_search_write(*_a):
@@ -209,10 +226,12 @@ class App(ctk.CTk):
 
         self.search_var.trace_add("write", _on_search_write)
         search_entry.bind("<Escape>", lambda e: self.search_var.set(""))
-        ctk.CTkButton(searchbar, text="‹", width=36, height=28,
-                      command=self.toggle_library).pack(side="right", padx=(4, 0))
+        secondary(searchbar, "‹", command=self.toggle_library, width=36).grid(
+            row=0, column=1, padx=(PAD // 2, 0))
+
         chips = ctk_frame(self._lib_body, fg_color="transparent")
-        chips.pack(side="top", fill="x", pady=(0, 4))
+        chips.grid(row=1, column=0, sticky="ew", pady=(0, PAD // 2))
+        chips.columnconfigure(0, weight=1)
         self.library_filter = tk.StringVar(value="all")
         self.library_filter.trace_add("write", lambda *_: self._apply_search())
         self._lib_filter_labels = {
@@ -221,12 +240,24 @@ class App(ctk.CTk):
         self._lib_seg = ctk.CTkSegmentedButton(
             chips, values=list(self._lib_filter_labels),
             command=self._on_library_filter, border_width=None,
-            dynamic_resizing=False, height=28)
+            dynamic_resizing=True, height=28,
+            font=font(SMALL),
+            fg_color=C["sunken"], selected_color=C["accent"],
+            selected_hover_color=C["accent_hover"],
+            unselected_color=C["sunken"],
+            unselected_hover_color=C["border"],
+            text_color=C["text"])
         self._lib_seg.set("All")
-        self._lib_seg.pack(side="left", fill="x", expand=True)
-        equalize_segments(self._lib_seg, width=LIBRARY_WIDTH - 24)
+        self._lib_seg.grid(row=0, column=0, sticky="ew")
+        from .theme import paint_segment_text
+        paint_segment_text(self._lib_seg)
+        self._lib_count_var = tk.StringVar(value="")
+        self._lib_count = small(chips, text="")
+        self._lib_count.configure(textvariable=self._lib_count_var, anchor="e")
+        self._lib_count.grid(row=0, column=1, sticky="e", padx=(PAD // 2, 0))
+
         tree_box = ctk_frame(self._lib_body, fg_color="transparent")
-        tree_box.pack(side="top", fill="both", expand=True)
+        tree_box.grid(row=2, column=0, sticky="nsew")
         tree_box.columnconfigure(0, weight=1)
         tree_box.rowconfigure(0, weight=1)
         self.lib_tree = ttk.Treeview(
@@ -240,10 +271,11 @@ class App(ctk.CTk):
         sb.grid(row=0, column=1, sticky="ns")
         self.lib_tree.configure(yscrollcommand=sb.set)
         self.lib_tree.bind("<<TreeviewSelect>>", self._on_select)
-        self._librivox_btn = ctk.CTkButton(
-            self._lib_body, text="+ Get a book from LibriVox…",
-            command=self._open_librivox, state="disabled")
-        self._librivox_btn.pack(side="bottom", fill="x", pady=(4, 0))
+        self._librivox_btn = secondary(
+            self._lib_body, "+ Get a book from LibriVox…",
+            command=self._open_librivox)
+        self._librivox_btn.configure(state="disabled")
+        self._librivox_btn.grid(row=3, column=0, sticky="ew", pady=(PAD, 0))
         self._pane = pane
 
         # ---- player bar (the one transport; packed before the pane) ------
@@ -256,6 +288,7 @@ class App(ctk.CTk):
         self.log_drawer = LogDrawer(self)
         self.log_text = self.log_drawer.text
         self.log(f"log file {file_log.open_session()}")
+        install_menu_trace(self)
         self._logged_job = (False, "", "")
         self.session.subscribe("job", self._log_job_edge)
         self.bind_all("<Control-Shift-L>", lambda e: self.toggle_log())
@@ -263,7 +296,7 @@ class App(ctk.CTk):
         self.bind_all("<Button-1>", self._log_button_click, add="+")
         self.bind_all("<ButtonRelease-1>", self._log_value_release, add="+")
         self.bind_class("TCombobox", "<<ComboboxSelected>>", self._log_combobox, add="+")
-        self.bind_class("Menu", "<ButtonRelease-1>", self._log_menu_click, add="+")
+        bind_menu_before(self, "<ButtonRelease>", self._log_menu_click)
 
         # ---- main area ----------------------------------------------------
         main = ctk_frame(pane, corner_radius=0, fg_color="transparent")
@@ -404,6 +437,8 @@ class App(ctk.CTk):
         self.log(self._with_context(sentence))
 
     def _log_menu_click(self, event):
+        from .theme import trace_menu_event
+        trace_menu_event(self, "menu-click-enter", event)
         menu = event.widget
         if not isinstance(menu, tk.Menu):
             return
@@ -422,7 +457,9 @@ class App(ctk.CTk):
         except tk.TclError:
             return
         if label:
+            trace_menu_event(self, "menu-click-before-log", event)
             self.log(self._with_context(label))
+            trace_menu_event(self, "menu-click-after-log", event)
 
     def _control_disabled(self, widget) -> bool:
         return is_disabled(widget)
@@ -666,9 +703,9 @@ class App(ctk.CTk):
 
     def log(self, line: str):
         self.log_drawer.append(line)
+        # Status bar is Idle / job detail only — not every log line.
         self.status_var.set(line)
-        if hasattr(self, "player_bar"):
-            self.player_bar.show_status(line)
+        # Deliberately do not push arbitrary log lines into the player bar.
 
     # ------------------------------------------------------------ library --
     def _open_library(self):
@@ -688,10 +725,27 @@ class App(ctk.CTk):
         active = len(query) >= 3
         self.lib_tree.delete(*self.lib_tree.get_children())
         selected = self.lib_tree.selection()
+        shown_books = 0
+        total_books = 0
 
         for author in sorted(self._library):
+            all_paths = list(self._library[author])
+            # Count total books (grouped) for the chip/total label.
+            seen_total: set[str] = set()
+            for path in all_paths:
+                folder = os.path.dirname(path)
+                if folder in seen_total:
+                    continue
+                siblings = [p for p in all_paths if os.path.dirname(p) == folder]
+                meta = _folder_librivox(folder)
+                if meta or len(siblings) > 1:
+                    seen_total.add(folder)
+                else:
+                    seen_total.add(path)
+            total_books += len(seen_total)
+
             author_hit = active and query in author.lower()
-            paths = [p for p in self._library[author]
+            paths = [p for p in all_paths
                      if (not active or author_hit or query in _title_of(p))
                      and self._chip_allows(p)]
             if not paths:
@@ -699,7 +753,6 @@ class App(ctk.CTk):
             author_id = self.lib_tree.insert("", "end",
                                              text=author, open=active,
                                              values=(""))
-            # Group multi-file folders into one row when librivox.json exists
             shown: set[str] = set()
             for path in paths:
                 folder = os.path.dirname(path)
@@ -716,15 +769,20 @@ class App(ctk.CTk):
                     self.lib_tree.insert(
                         author_id, "end", iid=iid, text=label,
                         values=(status,))
+                    shown_books += 1
                 else:
                     label = _book_label(path, self._library[author])
                     status = _book_status(folder, [path], None)
                     self.lib_tree.insert(
                         author_id, "end", iid=str(path), text=label,
                         values=(status,))
+                    shown_books += 1
 
         if selected and self.lib_tree.exists(selected[0]):
             self.lib_tree.selection_set(selected[0])
+        if hasattr(self, "_lib_count_var"):
+            self._lib_count_var.set(
+                f"{shown_books}/{total_books}" if total_books else "")
 
     def _apply_search(self):
         self._render_library(self.search_var.get())
@@ -875,7 +933,8 @@ class App(ctk.CTk):
                                "busy", False)
         busy = self.runner.busy or quality_busy
         self.workflow.set_busy(busy)
-        self.busy_var.set("busy \u25cc" if busy else "")
+        # Progress lives on the player bar while a job runs; no idle glyph.
+        self.busy_var.set("")
         if not busy and self.session.job.running:
             self.session.set_job(False)
         elif busy and not self.session.job.running:
@@ -1003,6 +1062,9 @@ def main(argv: list[str] | None = None):
     if argv is None:
         argv = sys.argv[1:]
     require_customtkinter()
+    if any(a == "--screenshot" or a.startswith("--screenshot=") for a in argv):
+        from .screenshot import run_screenshot
+        raise SystemExit(run_screenshot(argv))
     library_root = next((a for a in argv if not a.startswith("-")), None)
     app = App(library_root=library_root)
     app.mainloop()

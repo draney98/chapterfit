@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import ttk
 
-from . import palette
+import customtkinter as ctk  # noqa: E402 — after ui_kit font pick
+
 from .stages import ATTENTION, BLOCKED, DONE, PENDING
-from .theme import ctk_frame, require_customtkinter
 from .tips import tooltip
-
-ctk = require_customtkinter()
+from .ui_kit import PAD, BODY, C, font, small
 
 _FIX = {
     "identify first": "On Match, Search for the book, then choose an edition.",
@@ -18,6 +16,7 @@ _FIX = {
     "identify and align first": "Match an edition, then place the chapters.",
     "emit first": "Dry-run on Finish, then Apply, to write the chapters.",
     "needs Place": "Place the chapters before Finish can run.",
+    "waiting on Place": "Place the chapters before Finish can run.",
 }
 
 STEPS = ("scan", "match", "place", "finish", "cleanup")
@@ -37,10 +36,12 @@ STAGE_STEP = {
     "finalize": "finish",
 }
 
-_ACCENT = palette.RAIL_ACCENT
-_IDLE_BG = palette.RAIL_IDLE
-_CURRENT_BG = palette.RAIL_CURRENT
-_DONE_FG = palette.RAIL_DONE
+
+def _ellipsize(text: str, limit: int = 36) -> str:
+    text = (text or "").replace("\n", " ").strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)] + "…"
 
 
 class StepRail(ctk.CTkFrame):
@@ -52,36 +53,28 @@ class StepRail(ctk.CTkFrame):
         self._subs: dict[str, tk.StringVar] = {}
         self._tips: dict[str, list] = {}
         self._current = ""
-        style = ttk.Style(self)
-        style.configure("RailGap.TSeparator", background=palette.BORDER)
         for index, key in enumerate(STEPS):
-            if key == "cleanup":
-                ttk.Separator(self, orient="vertical", style="RailGap.TSeparator").grid(
-                    row=0, column=index + 1, sticky="ns", padx=8, pady=2)
-            col = index if key != "cleanup" else index + 2
-            # Fixed shell; compact label heights so title+sub fit (CTkLabel
-            # defaults to height=28 and would clip inside 52 px).
+            col = index
             cell = ctk.CTkFrame(
-                self, width=140, height=52, corner_radius=8,
-                fg_color=_IDLE_BG, cursor="hand2")
-            cell.grid(row=0, column=col, sticky="ew", padx=2, pady=2)
+                self, width=140, height=52, corner_radius=4,
+                fg_color=C["bg"], cursor="hand2",
+                border_width=0)
+            cell.grid(row=0, column=col, sticky="nsew", padx=PAD // 2, pady=2)
             cell.grid_propagate(False)
             cell.columnconfigure(0, weight=1)
             cell.rowconfigure(2, weight=1)
             title = ctk.CTkLabel(
                 cell, text=STEP_LABELS[key], anchor="w", height=18,
-                font=ctk.CTkFont(size=13, weight="bold"),
-                text_color=palette.TEXT, fg_color="transparent")
-            title.grid(row=0, column=0, sticky="ew", padx=10, pady=(6, 0))
+                font=font(BODY, "bold"), text_color=C["text"],
+                fg_color="transparent")
+            title.grid(row=0, column=0, sticky="ew", padx=PAD, pady=(6, 0))
             var = tk.StringVar(value="")
             self._subs[key] = var
-            sub = ctk.CTkLabel(
-                cell, textvariable=var, anchor="w", height=16,
-                font=ctk.CTkFont(size=11),
-                text_color=palette.MUTED, fg_color="transparent")
-            sub.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 2))
+            sub = small(cell, text="")
+            sub.configure(textvariable=var, height=18)
+            sub.grid(row=1, column=0, sticky="ew", padx=PAD, pady=(0, 2))
             bar = ctk.CTkFrame(
-                cell, width=1, height=2, corner_radius=0, fg_color=palette.BORDER)
+                cell, width=1, height=2, corner_radius=0, fg_color=C["border"])
             bar.grid(row=3, column=0, sticky="sew")
             cell._bar = bar  # noqa: SLF001
             for widget in (cell, title, sub):
@@ -89,10 +82,12 @@ class StepRail(ctk.CTkFrame):
             self._buttons[key] = cell
             self._title[key] = title
             self._tips[key] = [tooltip(cell, ""), tooltip(title, ""), tooltip(sub, "")]
-            self.columnconfigure(col, weight=1, minsize=120)
+            self.columnconfigure(col, weight=1, uniform="steps", minsize=100)
 
     def update(self, states: dict, step: str, cleanup: str,
-               finish_detail: str | None = None) -> None:
+               finish_detail: str | None = None,
+               place_status: dict | None = None,
+               finish_status: dict | None = None) -> None:
         mapping = {
             "scan": "measure",
             "match": "identify",
@@ -102,45 +97,60 @@ class StepRail(ctk.CTkFrame):
         self._current = step
         for index, key in enumerate(STEPS, start=1):
             if key == "cleanup":
-                mark = "✓" if "written" in cleanup else str(index)
+                written = "written" in (cleanup or "")
+                mark = "✓" if written else str(index)
                 sub = cleanup if cleanup else "off · optional"
-                state = DONE if "written" in cleanup else PENDING
+                state = DONE if written else PENDING
+                color = C["ok"] if written else C["text"]
+            elif key == "place" and place_status is not None:
+                state = place_status.get("state") or PENDING
+                sub = place_status.get("detail") or ""
+                mark, color = self._glyph(index, state)
+            elif key == "finish" and finish_status is not None:
+                state = finish_status.get("state") or PENDING
+                sub = finish_status.get("detail") or finish_detail or ""
+                mark, color = self._glyph(index, state)
             else:
                 info = states.get(mapping[key]) or {}
-                state = info.get("state") or "pending"
+                state = info.get("state") or PENDING
                 if key == "finish" and finish_detail is not None:
                     sub = finish_detail
-                    if finish_detail.startswith("needs Place"):
+                    if finish_detail.startswith("waiting on Place") or (
+                            finish_detail.startswith("needs Place")):
                         state = BLOCKED
                     elif (finish_detail.startswith("needs a dry run")
                           or finish_detail.startswith("ready")):
-                        state = "pending"
+                        state = PENDING
                     elif finish_detail.startswith("applied"):
                         state = DONE
                 else:
                     sub = info.get("detail") or _fallback(key, state)
-                mark = "✓" if state == DONE else (
-                    "✕" if state == BLOCKED else (
-                        "!" if state == ATTENTION else str(index)))
+                mark, color = self._glyph(index, state)
             title = f"{mark}  {STEP_LABELS[key]}"
-            self._title[key].configure(text=title)
-            if state == DONE:
-                self._title[key].configure(text_color=_DONE_FG)
-            else:
-                self._title[key].configure(text_color=palette.TEXT)
-            self._subs[key].set(sub)
+            self._title[key].configure(text=title, text_color=color)
+            self._subs[key].set(_ellipsize(sub))
             self._paint(key, key == step)
             hint = blocked_hint(key, states)
-            if key == "finish" and (finish_detail or "").startswith("needs Place"):
+            if key == "finish" and (finish_detail or "").startswith(
+                    ("needs Place", "waiting on Place")):
                 hint = finish_detail
             for tip in self._tips[key]:
                 tip.text = hint or ""
 
+    def _glyph(self, index: int, state: str) -> tuple[str, str]:
+        if state == DONE:
+            return "✓", C["ok"]
+        if state == ATTENTION:
+            return "!", C["warn_fg"]
+        if state == BLOCKED:
+            return "–", C["muted"]
+        return str(index), C["text"]
+
     def _paint(self, key: str, current: bool) -> None:
         cell = self._buttons[key]
-        bg = _CURRENT_BG if current else _IDLE_BG
+        bg = C["panel"] if current else C["bg"]
         bar_h = 3 if current else 2
-        bar_bg = _ACCENT if current else palette.BORDER
+        bar_bg = C["accent"] if current else C["border"]
         cell.configure(fg_color=bg)
         self._title[key].configure(fg_color="transparent")
         cell._bar.configure(height=bar_h, fg_color=bar_bg)  # noqa: SLF001
@@ -157,30 +167,42 @@ def blocked_hint(key: str, states: dict) -> str:
 
 
 def _fallback(key: str, state: str) -> str:
-    if key == "match" and state == "pending":
+    if key == "match" and state == PENDING:
         return "pick an edition"
     if key == "finish" and state == BLOCKED:
-        return "needs Place"
+        return "waiting on Place"
     if state == DONE:
         return "done"
     if state == ATTENTION:
         return "needs attention"
     if state == BLOCKED:
-        return "needs Place" if key == "finish" else "blocked"
+        return "waiting on Place" if key == "finish" else "waiting on Match"
     return "not run"
 
 
 class Workspace(ctk.CTkFrame):
-    """Main and inspector. Side by side from 1500 px, stacked below that."""
+    """Main and inspector. Side by side from 1500 px, stacked below that.
+
+    Match/Place inspector is a fixed 400 px column when beside the main pane.
+    """
+
+    INSPECTOR_WIDTH = 400
 
     def __init__(self, master):
         super().__init__(master, fg_color="transparent", corner_radius=0)
-        self.main = ctk_frame(self, fg_color="transparent", corner_radius=0)
-        self.inspector = ctk_frame(self, fg_color="transparent", corner_radius=0)
-        self.main.grid(row=0, column=0, sticky="nsew")
-        self.inspector.grid(row=0, column=1, sticky="nsew")
-        self.columnconfigure(0, weight=3)
-        self.columnconfigure(1, weight=2)
+        from .theme import ctk_frame
+        from .ui_kit import PAD, C
+        pad = PAD * 2
+        self.main = ctk_frame(self, fg_color=C["bg"], corner_radius=0)
+        self.inspector = ctk_frame(self, fg_color=C["bg"], corner_radius=0)
+        self._main_pad = pad
+        self._insp_pad = pad
+        self.main.grid(row=0, column=0, sticky="nsew", padx=(pad, pad // 2),
+                       pady=pad)
+        self.inspector.grid(row=0, column=1, sticky="nsew",
+                            padx=(pad // 2, pad), pady=pad)
+        self.columnconfigure(0, weight=1)
+        self.columnconfigure(1, minsize=self.INSPECTOR_WIDTH, weight=0)
         self.rowconfigure(0, weight=1)
         self._wide = True
         self._beside = True
@@ -212,23 +234,30 @@ class Workspace(ctk.CTkFrame):
         self._mode = (self._show_inspector, self._wants_beside())
         self.main.grid_forget()
         self.inspector.grid_forget()
+        pad = self._main_pad
         if not self._show_inspector:
             self.columnconfigure(0, weight=1)
-            self.columnconfigure(1, weight=0)
+            self.columnconfigure(1, minsize=0, weight=0)
             self.rowconfigure(1, weight=0)
-            self.main.grid(row=0, column=0, columnspan=2, sticky="nsew")
+            self.main.grid(row=0, column=0, columnspan=2, sticky="nsew",
+                           padx=pad, pady=pad)
             return
         if self._wants_beside():
-            self.columnconfigure(0, weight=3)
-            self.columnconfigure(1, weight=2)
+            self.columnconfigure(0, weight=1)
+            self.columnconfigure(1, minsize=self.INSPECTOR_WIDTH, weight=0)
             self.rowconfigure(0, weight=1)
             self.rowconfigure(1, weight=0)
-            self.main.grid(row=0, column=0, sticky="nsew")
-            self.inspector.grid(row=0, column=1, sticky="nsew")
+            self.inspector.configure(width=self.INSPECTOR_WIDTH)
+            self.main.grid(row=0, column=0, sticky="nsew",
+                           padx=(pad, pad // 2), pady=pad)
+            self.inspector.grid(row=0, column=1, sticky="nsew",
+                                padx=(pad // 2, pad), pady=pad)
         else:
             self.columnconfigure(0, weight=1)
-            self.columnconfigure(1, weight=0)
+            self.columnconfigure(1, minsize=0, weight=0)
             self.rowconfigure(0, weight=3)
             self.rowconfigure(1, weight=1)
-            self.main.grid(row=0, column=0, columnspan=2, sticky="nsew")
-            self.inspector.grid(row=1, column=0, columnspan=2, sticky="nsew")
+            self.main.grid(row=0, column=0, columnspan=2, sticky="nsew",
+                           padx=pad, pady=(pad, pad // 2))
+            self.inspector.grid(row=1, column=0, columnspan=2, sticky="nsew",
+                                padx=pad, pady=(pad // 2, pad))

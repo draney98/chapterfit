@@ -2,20 +2,24 @@
 
 from __future__ import annotations
 
+import contextlib
 import tkinter as tk
 
 from chaptertools.util import clock
 
 from . import tips
-from .theme import ctk_frame, equalize_segments, require_customtkinter
+from .theme import ctk_frame, require_customtkinter
+from .ui_kit import PAD, SMALL, C, font, number, secondary, small
 
 ctk = require_customtkinter()
 
 
 class PlayerBar(ctk.CTkFrame):
     def __init__(self, master, app):
-        super().__init__(master, corner_radius=0, fg_color="transparent")
+        super().__init__(
+            master, corner_radius=0, fg_color=C["bg"], height=40)
         self.app = app
+        self.grid_propagate(False)
         self.columnconfigure(8, weight=1)
         self._build()
         session = app.session
@@ -25,54 +29,67 @@ class PlayerBar(ctk.CTkFrame):
         self._bind_keys()
 
     def _build(self) -> None:
+        col = 0
         for delta, text in ((-10, "−10"), (-5, "−5")):
-            b = ctk.CTkButton(self, text=text, width=44, height=28,
-                              command=lambda d=delta: self._seek(d))
-            b.grid(row=0, column=0 if delta == -10 else 1, padx=1, pady=2)
-        self.play_btn = ctk.CTkButton(
-            self, text="▶", width=40, height=28, command=self.toggle)
-        self.play_btn.grid(row=0, column=2, padx=2, pady=2)
+            b = secondary(self, text, command=lambda d=delta: self._seek(d),
+                          width=44)
+            b.grid(row=0, column=col, padx=1, pady=PAD // 2)
+            col += 1
+        self.play_btn = secondary(self, "▶", command=self.toggle, width=44)
+        self.play_btn.grid(row=0, column=col, padx=2, pady=PAD // 2)
         tips.tooltip(self.play_btn, "play or pause (Space)")
-        for delta, text, col in ((5, "+5", 3), (10, "+10", 4)):
-            ctk.CTkButton(self, text=text, width=44, height=28,
-                          command=lambda d=delta: self._seek(d)).grid(
-                row=0, column=col, padx=1, pady=2)
+        col += 1
+        for delta, text in ((5, "+5"), (10, "+10")):
+            secondary(self, text, command=lambda d=delta: self._seek(d),
+                      width=44).grid(row=0, column=col, padx=1, pady=PAD // 2)
+            col += 1
         self.source_var = tk.StringVar(self, value="edited")
         self._source = ctk_frame(self, fg_color="transparent")
         self.time_var = tk.StringVar(value="0:00:00 / —")
-        ctk.CTkLabel(self, textvariable=self.time_var, text="").grid(
-            row=0, column=6, padx=(8, 4))
+        self._time_lbl = number(self, text="")
+        self._time_lbl.configure(textvariable=self.time_var, anchor="w")
+        self._time_lbl.grid(row=0, column=6, padx=(PAD, PAD // 2))
         self.chapter_var = tk.StringVar(value="")
-        ctk.CTkLabel(self, textvariable=self.chapter_var, text="").grid(row=0, column=7)
+        small(self, text="").configure(textvariable=self.chapter_var)
+        # chapter label kept for API; packed into time string instead
         self._source_seg = ctk.CTkSegmentedButton(
             self._source, values=["Edited", "Original"],
             command=self._hear_seg, height=28, border_width=None,
-            dynamic_resizing=False, width=180)
+            dynamic_resizing=True,
+            font=font(SMALL), fg_color=C["sunken"],
+            selected_color=C["accent"], selected_hover_color=C["accent_hover"],
+            unselected_color=C["sunken"], unselected_hover_color=C["border"],
+            text_color=C["text"])
         self._source_seg.set("Edited")
         self._source_seg.pack(side="left")
-        equalize_segments(self._source_seg)
+        from .theme import paint_segment_text
+        paint_segment_text(self._source_seg)
         self._source_seg.configure(state="disabled")
-        # Keep attribute names tests and click logging already use.
         self.edited_btn = self._source_seg
         self.original_btn = self._source_seg
         self.source_buttons = (self._source_seg,)
         tips.tooltip(self._source_seg,
                      "switch the preview between edited and original audio")
         self.status_var = tk.StringVar(value="Idle")
-        ctk.CTkLabel(self, textvariable=self.status_var, anchor="e", text="").grid(
-            row=0, column=9, sticky="ew", padx=4)
-        self.busy_label = ctk.CTkLabel(self, textvariable=self.app.busy_var, text="")
-        self.busy_label.grid(row=0, column=12, padx=(6, 0))
+        self._status_lbl = small(self, text="")
+        self._status_lbl.configure(
+            textvariable=self.status_var, anchor="e")
+        self._status_lbl.grid(row=0, column=9, sticky="ew", padx=PAD // 2)
+        self.progress = ctk.CTkProgressBar(
+            self, width=120, height=8, progress_color=C["accent"],
+            fg_color=C["border"])
+        self.progress.set(0)
+        self.busy_label = small(self, text="")
+        self.busy_label.configure(textvariable=self.app.busy_var)
         self._busy_tip = tips.tooltip(self.busy_label, "")
-        self.log_btn = ctk.CTkButton(
-            self, text="Log", width=64, height=28, command=self.app.toggle_log)
-        self.log_btn.grid(row=0, column=10, padx=2, pady=2)
+        self.log_btn = secondary(self, "Log", command=self.app.toggle_log,
+                                 width=64)
+        self.log_btn.grid(row=0, column=10, padx=2, pady=PAD // 2)
         tips.tooltip(self.log_btn, "open the log (Ctrl+Shift+L)")
-        self.cancel_btn = ctk.CTkButton(
-            self, text="Cancel job", width=96, height=28,
-            command=self.app._cancel)
+        self.cancel_btn = secondary(
+            self, "Cancel", command=self.app._cancel, width=80)
         tips.tooltip(self.cancel_btn, "stop the running job and any playback")
-        # Shown only while a job runs (_show_job).
+        # progress + cancel shown only while a job runs (_show_job).
 
     def _bind_keys(self) -> None:
         root = self.winfo_toplevel()
@@ -89,7 +106,6 @@ class PlayerBar(ctk.CTkFrame):
         kind = w.winfo_class()
         if kind in ("Entry", "TEntry", "Text", "TCombobox", "Spinbox", "TSpinbox"):
             return True
-        # CTkEntry / CTkTextbox draw on an inner canvas or entry.
         master = getattr(w, "master", None)
         while master is not None:
             name = type(master).__name__
@@ -161,7 +177,8 @@ class PlayerBar(ctk.CTkFrame):
         self.status_var.set(line or "Idle")
 
     def set_log_errors(self, count: int) -> None:
-        self.log_btn.configure(text=f"Log {count}" if count else "Log")
+        self.log_btn.configure(
+            text=f"Log ({count})" if count else "Log")
 
     def update_time(self, seconds: float | None) -> None:
         session = self.app.session
@@ -183,19 +200,28 @@ class PlayerBar(ctk.CTkFrame):
         job = self.app.session.job
         self._busy_tip.text = job.detail if job.running else ""
         if job.running:
-            self.cancel_btn.grid(row=0, column=11, padx=(2, 0), pady=2)
+            self.progress.grid(row=0, column=11, padx=(2, 0), pady=PAD // 2)
+            self.progress.configure(mode="indeterminate")
+            self.progress.start()
+            self.cancel_btn.grid(row=0, column=12, padx=(2, 0), pady=PAD // 2)
             if not self.status_var.get() or self.status_var.get() == "Idle":
                 self.status_var.set(job.detail or "Working…")
+            # Hide the idle busy glyph; progress bar is the signal.
+            self.busy_label.grid_remove()
         else:
+            stop = getattr(self.progress, "stop", None)
+            if callable(stop):
+                with contextlib.suppress(tk.TclError):
+                    self.progress.stop()
+            self.progress.grid_remove()
             self.cancel_btn.grid_remove()
             if not self.app.busy_var.get():
                 self.status_var.set("Idle")
 
     def _workflow(self):
-        try:
+        with contextlib.suppress(AttributeError):
             return self.app.workflow
-        except AttributeError:
-            return None
+        return None
 
     def _preview_player(self):
         workflow = self._workflow()
@@ -207,15 +233,13 @@ class PlayerBar(ctk.CTkFrame):
         workflow = self._workflow()
         quality = getattr(workflow, "quality", None)
         on = int(self.app.session.cleanup.get("stages_on") or 0)
-        # Also show while a cleanup preview is loaded (stages may be mid-edit)
         loaded = (
             getattr(workflow, "_step", "") == "cleanup"
             and quality is not None
             and getattr(quality, "_preview", None) is not None
         )
-        show = on > 0 or loaded
-        if show:
-            self._source.grid(row=0, column=5, padx=(8, 4))
+        if on > 0:
+            self._source.grid(row=0, column=5, padx=(PAD, PAD // 2))
             state = "normal" if loaded else "disabled"
             self._source_seg.configure(state=state)
             want = "Original" if self.source_var.get() == "original" else "Edited"

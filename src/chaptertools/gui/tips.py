@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import tkinter as tk
+from tkinter import ttk
 
 from chaptertools.gui import palette
 
@@ -46,12 +47,11 @@ class Tip:
         self._tipwin = tw = tk.Toplevel(self.widget)
         tw.wm_overrideredirect(True)
         tw.wm_geometry(f"+{x}+{y}")
+        tw.configure(background=palette.BORDER)
         # Borderless tip: never take focus or a grab.
-        tk.Label(tw, text=self.shown_text, justify="left",
-                 background=palette.TIP, foreground=palette.TEXT,
-                 relief="solid", borderwidth=1, padx=6, pady=3,
-                 wraplength=480, font="TkDefaultFont",
-                 takefocus=0).pack()
+        ttk.Label(tw, text=self.shown_text, justify="left",
+                  style="Tip.TLabel", wraplength=480,
+                  font="TkDefaultFont", takefocus=0).pack(padx=1, pady=1)
 
     def hide(self, _event=None):
         if self._after is not None:

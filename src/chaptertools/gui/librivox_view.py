@@ -15,6 +15,7 @@ from chaptertools.gui import palette
 from chaptertools.gui.commands import chapterfit_prefix
 from chaptertools.gui.runner import Job
 from chaptertools.gui.theme import ctk_frame, require_customtkinter
+from chaptertools.gui.ui_kit import BODY, SMALL, font
 from chaptertools.util import clock
 
 ctk = require_customtkinter()
@@ -79,7 +80,7 @@ class LibrivoxView(ctk.CTkFrame):
         head.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         head.columnconfigure(0, weight=1)
         ctk.CTkLabel(head, text="Get a book from LibriVox",
-                  font=ctk.CTkFont(size=14, weight="bold")).grid(row=0, column=0, sticky="w")
+                  font=font(BODY, "bold")).grid(row=0, column=0, sticky="w")
         ctk.CTkLabel(
             head,
             text="Search the catalog, pick a finished recording, fetch tagged sections.",
@@ -125,7 +126,7 @@ class LibrivoxView(ctk.CTkFrame):
         for col, text, width in headings:
             self.results.heading(col, text=text)
             self.results.column(col, width=width, stretch=col in ("title", "author"))
-        self.results.tag_configure("unfinished", foreground="#888888")
+        self.results.tag_configure("unfinished", foreground=palette.MUTED)
         self.results.grid(row=0, column=0, sticky="nsew")
         sb = ttk.Scrollbar(body, orient="vertical", command=self.results.yview)
         sb.grid(row=0, column=0, sticky="nse")
@@ -145,7 +146,7 @@ class LibrivoxView(ctk.CTkFrame):
         self._detail_note = tk.StringVar(
             value="Files are named 00 - Title.mp3. Audio is not re-encoded.")
         ctk.CTkLabel(self.detail, textvariable=self._detail_title,
-                  font=ctk.CTkFont(size=13, weight="bold"), wraplength=440).grid(
+                  font=font(SMALL, "bold"), wraplength=440).grid(
             row=0, column=0, sticky="w")
         ctk.CTkLabel(self.detail, textvariable=self._detail_meta,
                   text_color=palette.MUTED, wraplength=440, text="").grid(
@@ -197,7 +198,7 @@ class LibrivoxView(ctk.CTkFrame):
         self._fetch_head = tk.StringVar(value="Fetching…")
         self._fetch_sub = tk.StringVar(value="")
         ctk.CTkLabel(head, textvariable=self._fetch_head,
-                  font=ctk.CTkFont(size=14, weight="bold")).grid(row=0, column=0, sticky="w")
+                  font=font(BODY, "bold")).grid(row=0, column=0, sticky="w")
         ctk.CTkLabel(head, textvariable=self._fetch_sub,
                   text_color=palette.MUTED, text="").grid(row=1, column=0, sticky="w")
         ctk.CTkButton(head, text="Back to search",
@@ -243,7 +244,7 @@ class LibrivoxView(ctk.CTkFrame):
         self._stop_title = tk.StringVar()
         self._stop_body = tk.StringVar()
         ctk.CTkLabel(self._stop_frame, textvariable=self._stop_title,
-                  font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", pady=(8, 4))
+                  font=font(BODY, "bold")).pack(anchor="w", pady=(8, 4))
         ctk.CTkLabel(self._stop_frame, textvariable=self._stop_body,
                   wraplength=520, text="").pack(anchor="w", pady=(0, 8))
         self._stop_btns = ctk_frame(self._stop_frame)
@@ -399,7 +400,7 @@ class LibrivoxView(ctk.CTkFrame):
                 self._detail_order.set(
                     f"Playlist {obj.get('playlist_count')} · "
                     f"catalog {obj.get('section_count')} — counts differ")
-                self._order_lbl.configure(text_color="#B00020")
+                self._order_lbl.configure(text_color=palette.ERROR)
             else:
                 self._detail_order.set("")
             self.fetch_btn.configure(state="disabled")
@@ -421,7 +422,7 @@ class LibrivoxView(ctk.CTkFrame):
         pc, sc = obj.get("playlist_count"), obj.get("section_count")
         self._detail_order.set(f"Playlist {pc} · catalog {sc}")
         self._order_lbl.configure(
-            text_color="#B00020" if pc != sc else palette.MUTED)
+            text_color=palette.ERROR if pc != sc else palette.MUTED)
         dest = obj.get("dest") or ""
         self._detail_path.set(f"Saves to {dest}")
         self.section_list.delete(0, "end")
@@ -515,7 +516,7 @@ class LibrivoxView(ctk.CTkFrame):
                     (("Resume", self._start_fetch),
                      ("Open log", self.app.toggle_log),
                      ("Back to search", self._show_search)),
-                    color="#C47A00")
+                    color=palette.WARN)
                 return
             self.app._fill_library()
             self._show_stop(
@@ -523,7 +524,7 @@ class LibrivoxView(ctk.CTkFrame):
                 f"{plan.get('section_count')} chapters in {plan.get('dest')}",
                 (("Open the book", lambda: self._open_book(plan["dest"])),
                  ("Get another", self._show_search)),
-                color="#2E7D32")
+                color=palette.OK)
 
         self.app.session.set_job(
             True, name="librivox-fetch",
@@ -557,7 +558,7 @@ class LibrivoxView(ctk.CTkFrame):
                 (("Copy details", lambda: self.app.clipboard_clear() or
                   self.app.clipboard_append(json.dumps(obj, indent=2))),
                  ("Back to search", self._show_search)),
-                color="#B00020")
+                color=palette.ERROR)
             return
         if event == "file":
             idx = obj.get("index")

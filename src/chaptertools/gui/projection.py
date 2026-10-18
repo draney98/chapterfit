@@ -19,6 +19,7 @@ from .stages import (
     DiskFacts,
     identify_verdict,
     next_stage,
+    placement_rows,
     recommend,
     stage_states,
 )
@@ -80,35 +81,7 @@ class WorkflowProjection:
         self.emit_text = self._emit_text()
 
     def _display_results(self) -> list[dict]:
-        nfo = self.nfo_chapters or []
-        if len(nfo) >= 2:
-            ident_ch = ((self.analysis.get("identification") or {})
-                        .get("chapters") or [])
-            rows = []
-            for i, c in enumerate(nfo):
-                published = None
-                if i < len(ident_ch):
-                    published = ident_ch[i].get("start")
-                rows.append({
-                    "index": i, "title": c.get("title", ""),
-                    "published": published, "time": c.get("start"),
-                    "confidence": 1.0, "pinned": False, "nfo": True,
-                })
-            return rows
-        alignment = self.analysis.get("alignment") or {}
-        results = list(alignment.get("results") or [])
-        if results:
-            return results
-        ident = self.analysis.get("identification") or {}
-        source = ident.get("chapters") or []
-        pins_now = self.analysis.get("pins") or {}
-        return [
-            {"index": i, "title": c.get("title", ""),
-             "published": c.get("start"),
-             "time": pins_now.get(str(i)),
-             "confidence": 1.0 if str(i) in pins_now else None,
-             "pinned": str(i) in pins_now}
-            for i, c in enumerate(source)]
+        return placement_rows(self.analysis, self.nfo_chapters)
 
     def _conflicts_unknown(self) -> bool:
         alignment = self.analysis.get("alignment") or {}
@@ -214,7 +187,7 @@ class WorkflowProjection:
         }[verdict]
         for reason in ident.get("blocked") or []:
             text += f"\n! {reason}"
-        button = "Try another edition" if verdict == "rejected" else "Identify"
+        button = "Check"
         return text, button
 
     def _align_text(self) -> str:

@@ -14,6 +14,7 @@ from webbrowser import open as open_url
 
 from chaptertools.gui import palette
 from chaptertools.gui.theme import ctk_frame, require_customtkinter
+from chaptertools.gui.ui_kit import SMALL, TITLE, font
 from chaptertools.util import clock
 
 ctk = require_customtkinter()
@@ -69,7 +70,7 @@ class MultifileBook(ctk.CTkFrame):
         self.author_var = tk.StringVar()
         self.meta_var = tk.StringVar()
         ctk.CTkLabel(head, textvariable=self.title_var,
-                  font=ctk.CTkFont(size=15, weight="bold")).grid(row=0, column=0, sticky="w")
+                  font=font(TITLE, "bold")).grid(row=0, column=0, sticky="w")
         ctk.CTkLabel(head, textvariable=self.author_var, text="").grid(
             row=1, column=0, sticky="w")
         ctk.CTkLabel(head, textvariable=self.meta_var,
@@ -123,7 +124,7 @@ class MultifileBook(ctk.CTkFrame):
         side.grid_propagate(False)
         self._source_text = tk.StringVar()
         self._tags_text = tk.StringVar()
-        ctk.CTkLabel(side, text="Source", font=ctk.CTkFont(size=12, weight="bold")).pack(anchor="w")
+        ctk.CTkLabel(side, text="Source", font=font(SMALL, "bold")).pack(anchor="w")
         ctk.CTkLabel(side, textvariable=self._source_text, wraplength=360,
                   justify="left", text="").pack(anchor="w", pady=(0, 8))
         btns = ctk_frame(side)
@@ -132,7 +133,7 @@ class MultifileBook(ctk.CTkFrame):
                    command=self._open_folder).pack(side="left", padx=(0, 6))
         ctk.CTkButton(btns, text="LibriVox page",
                    command=self._open_lv).pack(side="left")
-        ctk.CTkLabel(side, text="Tags", font=ctk.CTkFont(size=12, weight="bold")).pack(anchor="w")
+        ctk.CTkLabel(side, text="Tags", font=font(SMALL, "bold")).pack(anchor="w")
         ctk.CTkLabel(side, textvariable=self._tags_text, wraplength=360,
                   justify="left", text="").pack(anchor="w")
 
@@ -213,11 +214,11 @@ class MultifileBook(ctk.CTkFrame):
         x = 0.0
         for i, dur in enumerate(durs):
             bw = max(4, w * dur / total)
-            color = "#4A6984" if i == self._index else "#C8C5BE"
+            color = palette.RAIL_ACCENT if i == self._index else palette.BORDER
             c.create_rectangle(x, 4, x + bw - 1, 32, fill=color, outline="")
             c.create_text(x + 4, 18, anchor="w", text=str(i),
-                          fill="#fff" if i == self._index else "#333",
-                          font=ctk.CTkFont(size=10))
+                          fill=palette.Q_ON_ACCENT if i == self._index else palette.TEXT,
+                          font=font(SMALL))
             x += bw
 
     def _strip_click(self, event):

@@ -14,11 +14,13 @@ META_FLAGS = {
 
 def find_asin_argv(audio: str, json_path: str, *,
                    title: str = "", author: str = "", keywords: str = "",
-                   region: str = "", python: str | None = None) -> list[str]:
+                   region: str = "", provider: str = "",
+                   python: str | None = None) -> list[str]:
     """find_asin writing its candidate list; no --verify.
 
     Blank title, author, and keywords are omitted so find_asin guesses.
     Keywords, when set, replace the title/author query.
+    provider defaults to find-asin when blank.
     """
     argv = [*module_argv("chaptertools.sources.find_asin", python=python,
                          unbuffered=True), audio]
@@ -30,6 +32,7 @@ def find_asin_argv(audio: str, json_path: str, *,
         argv += ["--keywords", keywords.strip()]
     if region.strip():
         argv += ["--region", region.strip()]
+    argv += ["--provider", (provider.strip() or "find-asin")]
     argv += ["--json", json_path]
     return argv
 

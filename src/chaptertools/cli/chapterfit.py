@@ -383,7 +383,21 @@ def cmd_emit(args):
     if source != media and not os.path.isfile(source):
         die(f"no such file: {source}")
     art = Artifact(source, args.work_dir)
-    al = art.require("alignment", "chapterfit.py align FILE")
+    al = art.data.get("alignment")
+    if not (al or {}).get("results"):
+        # Seed from album.nfo / pins so Finish Apply works without a prior Align.
+        from chaptertools.gui.stages import placement_rows, seed_alignment
+        from chaptertools.nfo import read_nfo_chapters
+        nfo = read_nfo_chapters(
+            os.path.join(os.path.dirname(source), "album.nfo"))
+        thr_seed = args.min_confidence or 0.5
+        seeded = seed_alignment(placement_rows(art.data, nfo), thr_seed)
+        if seeded is None:
+            art.require("alignment", "chapterfit.py align FILE")
+        art.data["alignment"] = seeded
+        art.save()
+        al = seeded
+        print("  seeded alignment from album.nfo / placed chapters")
     dur = art.data["envelope"]["duration"]
     thr = args.min_confidence or al["min_confidence"]
     dedup, _withheld = select_chapters(al["results"], thr)

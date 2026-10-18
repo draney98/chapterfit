@@ -7,6 +7,7 @@ from tkinter import ttk
 
 from chaptertools.gui import palette
 from chaptertools.gui.theme import require_customtkinter
+from chaptertools.gui.ui_kit import BODY, font
 
 from .summary import stage_summary
 
@@ -170,7 +171,7 @@ class ChainRow:
         self.summary_var = tk.StringVar(value="")
         self.summary = ctk.CTkLabel(
             self.frame, textvariable=self.summary_var,
-            text_color=palette.Q_MUTED, font=ctk.CTkFont(family="monospace"),
+            text_color=palette.Q_MUTED, font=font(BODY, mono=True),
             anchor="e")
         self.summary.grid(row=0, column=2, sticky="ew", padx=4)
         self.dot = tk.Canvas(self.frame, width=10, height=16, highlightthickness=0,

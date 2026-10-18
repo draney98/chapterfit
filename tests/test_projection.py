@@ -92,7 +92,7 @@ def test_measure_and_identify_copy():
     assert "2 gaps in 1 length populations" in p.measure_text
     assert "41 around 3.2 s" in p.measure_text
     assert "-write_xing 1" in p.measure_text and "Book.fixed.mp3" in p.measure_text
-    assert p.identify_button == "Try another edition"
+    assert p.identify_button == "Check"
     assert "rate spread 9.0%" in p.identify_text
     assert "runtime ratio 0.710" in p.identify_text
     assert "rejected" in p.identify_text

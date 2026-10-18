@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import tkinter as tk
 from dataclasses import replace
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 
 from chaptertools.gui import palette
 from chaptertools.gui.theme import require_customtkinter
@@ -315,9 +315,10 @@ def _shape_label(value) -> str:
     return "Shelf" if value == "shelf" else "Peak"
 
 
-def _install_note(master) -> tk.Frame:
-    box = tk.Frame(master, background=palette.Q_PANEL,
-                   highlightbackground=palette.Q_BORDER, highlightthickness=1)
+def _install_note(master) -> ttk.Frame:
+    style = ttk.Style(master)
+    style.configure("Note.TFrame", background=palette.Q_PANEL)
+    box = ttk.Frame(master, style="Note.TFrame", padding=1)
     ctk.CTkLabel(
         box,
         text="Neural enhance needs resemble-enhance. Its only release requires "

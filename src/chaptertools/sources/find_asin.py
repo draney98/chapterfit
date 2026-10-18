@@ -192,6 +192,7 @@ class Candidate:
     release: str | None
     publisher: str | None
     language: str | None
+    source: str = "find-asin"
     # scoring
     runtime_score: float = 0.0
     text_score: float = 0.0
@@ -262,6 +263,7 @@ def search_audible(title: str | None, author: str | None, keywords: str | None,
             release=(p.get("release_date") or "")[:10] or None,
             publisher=p.get("publisher_name"),
             language=p.get("language"),
+            source="find-asin",
         ))
     return [c for c in out if c.asin]
 
@@ -430,6 +432,7 @@ def to_json(cands: list[Candidate], lf: LocalFile) -> str:
             "authors": c.authors, "narrators": c.narrators,
             "runtime_min": c.runtime_min, "release": c.release,
             "publisher": c.publisher, "language": c.language,
+            "source": c.source,
             "score": round(c.score, 4),
             "verified": c.verified, "matched": c.matched, "total": c.total,
             "match_ratio": round(c.match_ratio, 4),
@@ -438,6 +441,90 @@ def to_json(cands: list[Candidate], lf: LocalFile) -> str:
             "note": c.note,
         } for c in cands],
     }, indent=2)
+
+
+def search_abs_provider(provider: str, title: str | None, author: str | None,
+                        keywords: str | None, region: str, audio: str,
+                        verbose: bool) -> list[Candidate]:
+    """ABS Match provider → candidates with Audible ASINs only."""
+    from chaptertools.abs_client import abs_client_from_env
+    from chaptertools.sources.abs_match import candidates_from_abs_hits
+
+    name = provider.removeprefix("abs:")
+    source = f"abs:{name}"
+    query_title = title or ""
+    query_author = author or ""
+    if keywords:
+        # ABS search is title/author shaped; fold keywords into title.
+        query_title = keywords
+        query_author = ""
+    api = abs_client_from_env(audio, verbose=verbose)
+    hits = api.search_books(name, query_title, query_author, region=region)
+    if verbose:
+        print(f"  ABS {name}: {len(hits)} raw hits", file=sys.stderr)
+    return candidates_from_abs_hits(hits, source)
+
+
+def collect_candidates(provider: str, title: str | None, author: str | None,
+                       keywords: str | None, region: str, num: int,
+                       audio: str, verbose: bool) -> list[Candidate]:
+    """Run find-asin, one ABS provider, or ALL; return unscored candidates."""
+    from chaptertools.sources.abs_match import (
+        ABS_BOOK_PROVIDERS,
+        PROVIDER_ALL,
+        PROVIDER_FIND_ASIN,
+        merge_by_asin,
+        provider_choices,
+    )
+
+    if provider not in provider_choices():
+        print(f"error: unknown --provider {provider!r}; "
+              f"want one of {', '.join(provider_choices())}",
+              file=sys.stderr)
+        sys.exit(2)
+
+    groups: list[list[Candidate]] = []
+
+    def run_find_asin() -> list[Candidate]:
+        print(f"searching Audible via find-asin ({region})...")
+        found = search_audible(title, author, keywords, region, num, verbose)
+        if not found and not keywords:
+            kw = " ".join(x for x in [title, author] if x)
+            print(f"  nothing; retrying as keywords: {kw!r}")
+            found = search_audible(None, None, kw, region, num, verbose)
+        print(f"  find-asin: {len(found)} results "
+              f"({sum(1 for c in found if c.asin)} ASINs)")
+        return found
+
+    def run_abs(name: str, *, soft: bool) -> list[Candidate]:
+        key = f"abs:{name}"
+        print(f"searching Audiobookshelf provider {name!r}...")
+        try:
+            found = search_abs_provider(
+                key, title, author, keywords, region, audio, verbose)
+        except RuntimeError as exc:
+            if soft:
+                print(f"  {key}: skipped ({exc})")
+                return []
+            print(f"error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        print(f"  {key}: {len(found)} ASINs kept")
+        return found
+
+    if provider == PROVIDER_FIND_ASIN:
+        groups.append(run_find_asin())
+    elif provider == PROVIDER_ALL:
+        groups.append(run_find_asin())
+        for name in ABS_BOOK_PROVIDERS:
+            groups.append(run_abs(name, soft=True))
+    else:
+        groups.append(run_abs(provider.removeprefix("abs:"), soft=False))
+
+    if provider == PROVIDER_ALL:
+        merged = merge_by_asin(groups)
+        print(f"  ALL: {len(merged)} unique ASINs after merge")
+        return merged
+    return groups[0] if groups else []
 
 
 # --------------------------------------------------------------------------
@@ -471,6 +558,11 @@ def main():
     ap.add_argument("--offset-hint", type=float,
                     help="roughly where the offset is, in seconds")
     ap.add_argument("--offset-window", type=float, default=15.0)
+    from chaptertools.sources.abs_match import provider_choices
+
+    ap.add_argument(
+        "--provider", default="find-asin", choices=provider_choices(),
+        help="search source: find-asin (default), abs:<provider>, or all")
     ap.add_argument("--json", metavar="FILE", help="write full results as JSON")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
@@ -490,17 +582,10 @@ def main():
               file=sys.stderr)
         sys.exit(1)
 
-    print(f"searching Audible ({args.region})...")
-    cands = search_audible(args.title or lf.title, args.author or lf.author,
-                           args.keywords, args.region, args.num, args.verbose)
-
-    # A title+author search that comes back empty often succeeds as keywords.
-    if not cands and not args.keywords:
-        kw = " ".join(x for x in [lf.title, lf.author] if x)
-        print(f"  nothing; retrying as keywords: {kw!r}")
-        cands = search_audible(None, None, kw, args.region, args.num, args.verbose)
-
-    print(f"  {len(cands)} results")
+    cands = collect_candidates(
+        args.provider, args.title or lf.title, args.author or lf.author,
+        args.keywords, args.region, args.num, args.audio, args.verbose)
+    print(f"  {len(cands)} candidates")
     score_candidates(cands, lf)
 
     if args.verify and cands:

@@ -89,13 +89,21 @@ def _track(title: str, duration: str) -> ET.Element:
     return t
 
 
+def _set_text(root: ET.Element, tag: str, value: str) -> None:
+    """Set or create a child element's text."""
+    el = root.find(tag)
+    if el is None:
+        el = ET.SubElement(root, tag)
+    el.text = value
+
+
 def render_nfo(existing: str | None, chapters: list[dict],
-               title: str, artist: str) -> str:
+               title: str, artist: str, year: str | None = None) -> str:
     """Album NFO text with one track per chapter.
 
-    When `existing` parses, all of its metadata is kept and only the track
-    list is replaced. Otherwise a minimal fresh album is built from the
-    folder names.
+    When `existing` parses, unrelated metadata is kept and the track list
+    is replaced. Provided title/artist/year overwrite those album fields.
+    Otherwise a minimal fresh album is built from the folder names.
     """
     root = None
     if existing:
@@ -108,6 +116,16 @@ def render_nfo(existing: str | None, chapters: list[dict],
         ET.SubElement(root, "title").text = title
         ET.SubElement(root, "artist").text = artist
         ET.SubElement(root, "albumartist").text = artist
+        if year:
+            ET.SubElement(root, "year").text = year
+    else:
+        if title:
+            _set_text(root, "title", title)
+        if artist:
+            _set_text(root, "artist", artist)
+            _set_text(root, "albumartist", artist)
+        if year:
+            _set_text(root, "year", year)
 
     for tr in root.findall("track"):
         root.remove(tr)
@@ -134,13 +152,14 @@ def nfo_would_replace(path: str, incoming: list[dict]) -> bool:
 def write_album_nfo(folder: str, audio: str, apply: bool = False,
                     title: str | None = None,
                     artist: str | None = None,
+                    year: str | None = None,
                     force: bool = False) -> int:
     """Write folder/album.nfo from the embedded chapters of `audio`.
 
     Dry runs only report. Real writes back up a pre-existing album.nfo once.
-    `title`/`artist` (e.g. the tags emitted with the file) are used when
-    creating a fresh NFO; without them the folder names are used.
-    Returns the number of chapter tracks involved (0 when skipped).
+    `title`/`artist`/`year` (e.g. the tags emitted with the file) update
+    album-level fields; without them the folder names are used for a fresh
+    NFO. Returns the number of chapter tracks involved (0 when skipped).
     """
     chapters = chapters_from_file(audio)
     if len(chapters) < 2:
@@ -153,8 +172,9 @@ def write_album_nfo(folder: str, audio: str, apply: bool = False,
     artist = (artist or "").strip() or \
         os.path.basename(os.path.dirname(folder.rstrip(os.sep))) \
         or "Unknown Artist"
+    year = (year or "").strip() or None
     text = render_nfo(nfo if os.path.isfile(nfo) else None,
-                      chapters, title, artist)
+                      chapters, title, artist, year=year)
     total = chapters[-1]["end"]
     replacing = nfo_would_replace(nfo, chapters)
 

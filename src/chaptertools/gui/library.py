@@ -70,7 +70,7 @@ def asin_query(audio: str, work_dir: str | None, *,
 def asin_candidates(audio: str, work_dir: str | None) -> list[dict]:
     """Rows from a saved find_asin result.
 
-    Each row has asin, title, author, narrator, runtime, and score.
+    Each row has asin, title, author, narrator, runtime, score, and source.
     Missing, unreadable, or empty files return [].
     """
     data = _load_asin(audio, work_dir)
@@ -98,6 +98,7 @@ def asin_candidates(audio: str, work_dir: str | None) -> list[dict]:
             "narrator": narrator,
             "runtime": "" if runtime is None else f"{runtime} min",
             "score": "" if score is None else f"{float(score):.2f}",
+            "source": str(cand.get("source") or "find-asin"),
         })
     return rows
 

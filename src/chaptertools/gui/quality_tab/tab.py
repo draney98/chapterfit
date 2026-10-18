@@ -1046,7 +1046,7 @@ class QualityTab(ctk.CTkFrame):
             "waiting": palette.BORDER,
             "rendering": palette.RAIL_ACCENT,
             "done": palette.RAIL_DONE,
-            "failed": "#B00020",
+            "failed": palette.ERROR,
         }
         for i, path in enumerate(files):
             state = self._mf_file_states.get(path, "waiting")

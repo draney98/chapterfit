@@ -6,6 +6,7 @@ app's drawer.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import queue
@@ -33,7 +34,20 @@ from .commands import (
     whisper_argv,
 )
 from .facts import MediaFactsLoader
-from .harvest import found_summary, placeholder_harvest
+from .edition_fit import (
+    fit_cell,
+    fit_from_identification,
+    fit_sort_key,
+    format_length,
+    load_fit_cache,
+    numbers_line,
+    plain_found_summary,
+    reason_sentence,
+    save_fit_cache,
+    source_group_label,
+    verdict_headline,
+)
+from .harvest import placeholder_harvest
 from .library import (
     analysis_path,
     asin_candidates,
@@ -139,7 +153,8 @@ def _t(v) -> str:
 
 
 _MODE_LABEL = {
-    "asin": "ASIN", "json": "JSON file", "emb": "Embedded", "nfo": "NFO",
+    "search": "Search", "asin": "ASIN", "json": "JSON",
+    "emb": "Embedded", "nfo": "NFO",
 }
 
 
@@ -189,19 +204,27 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
     # ------------------------------------------------------------ widgets --
     def _build(self):
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(2, weight=1)
+        self.rowconfigure(0, weight=1)
         self._step = "scan"
         self._rescan_quality = False
         self.chapters_var = tk.StringVar(value="Chapters")
 
-        head = ctk_frame(self, fg_color="transparent")
-        head.grid(row=0, column=0, sticky="ew", padx=8, pady=(4, 0))
+        from .ui_kit import BODY, body
+        from .ui_kit import font as ui_font
+
+        shell = ctk_frame(self, fg_color="transparent")
+        shell.grid(row=0, column=0, sticky="nsew", padx=14, pady=(4, 0))
+        shell.columnconfigure(0, weight=1)
+        shell.rowconfigure(2, weight=1)
+
+        head = ctk_frame(shell, fg_color="transparent")
+        head.grid(row=0, column=0, sticky="ew")
         head.columnconfigure(0, weight=1)
         self.book_var = tk.StringVar(value="(nothing selected)")
-        book_lbl = ctk.CTkLabel(
-            head, textvariable=self.book_var, anchor="w",
-            font=ctk.CTkFont(size=14, weight="bold"))
-        book_lbl.grid(row=0, column=0, sticky="w")
+        book_lbl = body(head, text="")
+        book_lbl.configure(
+            textvariable=self.book_var, font=ui_font(BODY, "bold"))
+        book_lbl.grid(row=0, column=0, sticky="ew")
         self._book_label = book_lbl
         self._header_text = "(nothing selected)"
         head.bind("<Configure>", lambda e: self._fit_header(e.width))
@@ -213,11 +236,11 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         self.rail = StepRail(head, self.show_step)
         self.rail.grid(row=1, column=0, sticky="ew", pady=(4, 0))
 
-        self.timeline = Timeline(self, self.app)
+        self.timeline = Timeline(shell, self.app)
         self.timeline.grid(row=1, column=0, sticky="ew", pady=(4, 0))
         self.gap_mode_var = self.timeline.mode
 
-        self.workspace = Workspace(self)
+        self.workspace = Workspace(shell)
         self.workspace.grid(row=2, column=0, sticky="nsew", pady=(4, 0))
         self._main_frames = _stack(self.workspace.main)
         self._insp_frames = _stack(self.workspace.inspector)
@@ -225,9 +248,17 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         self.workspace.inspector.bind("<Configure>", self._on_host_resize)
         place = ttk.Panedwindow(self._insp_frames["place"], orient="vertical")
         place.grid(row=0, column=0, sticky="nsew")
+        match_host = self._insp_frames["match"]
+        match_host.rowconfigure(0, weight=1)
+        match_host.columnconfigure(0, weight=1)
+        from .ui_kit import C as kit_colors
+        self._match_scroll = ctk.CTkScrollableFrame(
+            match_host, fg_color=kit_colors["bg"], corner_radius=0)
+        self._match_scroll.grid(row=0, column=0, sticky="nsew")
+        self._match_scroll.columnconfigure(0, weight=1)
         self._panels = {
             "measure": self._panel_measure(self._main_frames["scan"]),
-            "identify": self._panel_identify(self._insp_frames["match"]),
+            "identify": self._panel_identify(self._match_scroll),
             "align": self._panel_align(place),
             "resolve": self._panel_resolve(place),
             "emit": self._panel_emit(self._main_frames["finish"]),
@@ -235,15 +266,15 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         }
         for key in ("measure", "emit", "finalize"):
             self._panels[key].grid(row=0, column=0, sticky="nsew")
-        self._panels["identify"].grid(row=0, column=0, sticky="new")
-        self._build_book_info(self._insp_frames["match"])
+        self._panels["identify"].grid(row=0, column=0, sticky="ew")
+        self._build_book_info(self._match_scroll)
         self._build_editions(self._main_frames["match"])
         place.add(self._panels["align"], weight=1)
         place.add(self._panels["resolve"], weight=2)
         self._build_chapters_tab(self._main_frames["place"])
         self._build_quality_tab(self._main_frames["cleanup"])
         from .multifile_book import MultifileBook
-        self.multifile = MultifileBook(self, self.app, on_cleanup=self._open_multifile_cleanup)
+        self.multifile = MultifileBook(shell, self.app, on_cleanup=self._open_multifile_cleanup)
         self._multifile_mode = False
         self.section_files: list[str] = []
         self.section_starts: list[float] = []
@@ -290,7 +321,8 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
             return
         width = event.width
         for lbl in self._wrap_labels:
-            lbl.configure(wraplength=max(width - 24, 200))
+            with contextlib.suppress(tk.TclError):
+                lbl.configure(wraplength=max(width - 24, 200))
         self._layout_resolve(side_by_side=True)
 
     # ---------------------------------------------------------- stage panels
@@ -350,17 +382,19 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
 
     def _finish_rail_detail(self, states: dict) -> str:
         """Sub-status for Finish: Place gate, dry run, ready, or applied."""
-        fin = states.get("finalize") or {}
-        if fin.get("state") == BLOCKED or fin.get("why") == "needs Place":
-            return "needs Place"
-        if self._finalize_dry_ok:
+        from .stages import finish_step_status, place_step_status
+        min_conf = self.min_conf.get() if hasattr(self, "min_conf") else 0.5
+        place = place_step_status(self.analysis or {}, min_conf)
+        fin = finish_step_status(
+            place, states.get("finalize") or {}, dry_ok=self._finalize_dry_ok)
+        if self._finalize_dry_ok and place.get("state") == DONE:
             applied = getattr(self, "_applied_at", None)
             if applied and (states.get("finalize") or {}).get("state") == DONE:
                 return f"applied {applied}"
-            return "ready to apply"
         return fin.get("detail") or "needs a dry run"
 
     def _sync_rail(self, states: dict | None = None) -> None:
+        from .stages import finish_step_status, place_step_status
         states = states or self._compute_states()
         preset = self.app.session.cleanup.get("preset") or ""
         on = int(self.app.session.cleanup.get("stages_on") or 0)
@@ -368,14 +402,24 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         if written:
             cleanup = f"{preset or 'cleanup'} · written {written}"
         elif on:
-            name = preset or "custom"
-            if name == "off":
-                name = "custom"
+            name = preset or "Custom"
+            if name.lower() == "off":
+                name = "Custom"
+            elif name and name[0].islower():
+                name = name[:1].upper() + name[1:]
             cleanup = f"{name} · {on} stages"
         else:
             cleanup = "off · optional"
-        self.rail.update(states, self._step, cleanup,
-                         finish_detail=self._finish_rail_detail(states))
+        min_conf = self.min_conf.get() if hasattr(self, "min_conf") else 0.5
+        place = place_step_status(
+            self.analysis or {}, min_conf,
+            nfo_chapters=(self.harvest or {}).get("nfo_chapters") or [])
+        finish = finish_step_status(
+            place, states.get("finalize") or {}, dry_ok=self._finalize_dry_ok)
+        detail = self._finish_rail_detail(states)
+        self.rail.update(
+            states, self._step, cleanup, finish_detail=detail,
+            place_status=place, finish_status=finish)
 
     # ------------------------------------------------------ media facts --
     def _request_facts(self, harvest: bool = False):
@@ -443,7 +487,7 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
     def _set_harvest(self, harvest: dict):
         """Fill Book info, leaving any field the user has edited."""
         self.harvest = harvest
-        self.found_var.set(found_summary(harvest))
+        self.found_var.set(plain_found_summary(harvest))
         self._apply_book_info()
         self._update_header()
 
@@ -726,31 +770,50 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         if not self.audio:
             return
         self._harvest_shown = {}
-        self.found_var.set("reading tags and chapters from the file…")
+        self.found_var.set("Reading tags and chapters from the file…")
         self._request_facts(harvest=True)
 
     def _update_header(self):
-        """One line: Title — Author · duration · ASIN · elided file name."""
+        """One line: Title — Author · duration · source · file name."""
+        from .stages import short_edition_label
         s = self.harvest.get("suggested") or {}
         title = s.get("title") or "(nothing selected)"
         author = s.get("author") or ""
         dur = ((self.analysis.get("envelope") or {}).get("duration"))
         ident = self.analysis.get("identification") or {}
-        asin = ident.get("label") or ident.get("candidate") or ""
-        if not asin:
-            asin = top_asin(self.audio or "", self.work_dir) or ""
+        source = short_edition_label(
+            ident.get("label") or ident.get("candidate"))
+        if not source:
+            source = short_edition_label(
+                top_asin(self.audio or "", self.work_dir) or "")
         name = os.path.basename(self.audio) if self.audio else ""
         bits = [f"{title} — {author}" if author else title]
         if dur:
             bits.append(hms(dur))
-        if asin and asin.lower() != "none":
-            bits.append(asin)
+        if source:
+            bits.append(source)
         self._header_bits = (bits, name)
+        self._header_paths = self._header_path_lines()
         self._fit_header(self._book_label.master.winfo_width())
+
+    def _header_path_lines(self) -> str:
+        """Full paths for the header tooltip (audio + chapter sources)."""
+        lines = []
+        if self.audio:
+            lines.append(self.audio)
+            folder = os.path.dirname(self.audio)
+            for name in sorted(os.listdir(folder)) if os.path.isdir(folder) else []:
+                low = name.lower()
+                if low.startswith("chapters") and (
+                        low.endswith(".json") or low.endswith(".nfo")):
+                    path = os.path.join(folder, name)
+                    if path not in lines:
+                        lines.append(path)
+        return "\n".join(lines) if lines else ""
 
     def _fit_header(self, width: int):
         """The header stays one line: the file name is elided from the
-        middle first, then the title (the full path is in the tooltip)."""
+        middle first, then the title (full paths live in the tooltip)."""
         bits, name = getattr(self, "_header_bits", (["(nothing selected)"],
                                                     ""))
         font = tkfont.nametofont("TkHeadingFont", root=self)
@@ -769,17 +832,18 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
 
     def _show_path_tip(self, _event=None):
         self._hide_tip()
-        if not self.audio:
+        tip_text = getattr(self, "_header_paths", "") or self.audio
+        if not tip_text:
             return
         x = self.winfo_rootx() + 8
         y = self.winfo_rooty() + self.winfo_height() + 2
         self.head_tooltip = tk.Toplevel(self)
         self.head_tooltip.wm_overrideredirect(True)
         self.head_tooltip.wm_geometry(f"+{x}+{y}")
-        tk.Label(self.head_tooltip, text=self.audio, background=palette.TIP,
-                 foreground=palette.TEXT, font="TkDefaultFont",
-                 relief="solid", borderwidth=1, padx=4, pady=1,
-                 takefocus=0).pack()
+        self.head_tooltip.configure(background=palette.BORDER)
+        ttk.Label(self.head_tooltip, text=tip_text, style="Tip.TLabel",
+                  font="TkDefaultFont", justify="left",
+                  takefocus=0).pack(padx=1, pady=1)
 
     def _hide_tip(self, _event=None):
         if getattr(self, "head_tooltip", None) is not None:
@@ -898,14 +962,21 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
 
     def _job_controls(self) -> list:
         """Everything that starts a job or edits what the next job reads."""
-        return [self.measure_btn, self.identify_btn, self.identify_entry,
-                self.identify_browse, *self.identify_radios, self.align_btn,
-                self.min_conf_spin,
-                self.hint_btn, self.listen_btn, self.sweep_start_entry,
-                self.sweep_end_entry, self.range_btn, self.probe_btn,
-                self.full_btn, self.reread_btn,
-                self.finalize_btn, self.apply_btn,
-                self.asin_search_btn]
+        controls = [self.measure_btn, self.identify_btn, self.identify_entry,
+                    self.identify_browse, *self.identify_radios, self.align_btn,
+                    self.min_conf_spin,
+                    self.hint_btn, self.listen_btn, self.sweep_start_entry,
+                    self.sweep_end_entry, self.range_btn, self.probe_btn,
+                    self.full_btn, self.reread_btn,
+                    self.finalize_btn, self.apply_btn,
+                    self.asin_search_btn]
+        if hasattr(self, "identify_found_btn"):
+            controls.append(self.identify_found_btn)
+        if hasattr(self, "use_edition_btn"):
+            controls.append(self.use_edition_btn)
+        if hasattr(self, "use_anyway_btn"):
+            controls.append(self.use_anyway_btn)
+        return controls
 
     def _update_controls(self):
         """One place decides what is enabled, and tooltips say why not."""
@@ -944,22 +1015,20 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
             else:
                 self.bitrate_combo.configure(state="disabled")
         mode = self.identify_mode.get()
-        if mode == "emb":
+        if mode in ("emb", "nfo", "search"):
             off([self.identify_entry],
-                "Embedded uses the chapters already in the file")
-        if mode == "nfo":
-            off([self.identify_entry],
-                "NFO uses the chapter tracks in album.nfo")
+                "this mode does not use the ASIN / path field")
         if mode != "json":
             off([self.identify_browse], "Browse picks a chapters JSON file")
-        if mode != "asin":
-            off([self.asin_search_btn], "Search is for the ASIN source")
+        if mode != "search":
+            off([self.asin_search_btn], "Search is for the Search catalog mode")
         for w in self._job_controls():
             why = reasons.get(w)
             set_enabled(w, not why)
             tip = self._tips.get(w)
             if tip is not None:
                 tip.reason = why
+        self._update_verdict_actions()
 
     def _header_fix(self) -> str | None:
         """The ffmpeg command that rewrites a wrong Xing header."""
@@ -984,8 +1053,8 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
             self.copy_fix_btn.grid()
         else:
             self.copy_fix_btn.grid_remove()
-        self.identify_result.set(proj.identify_text)
-        self.identify_btn.configure(text=proj.identify_button)
+        if hasattr(self, "identify_result"):
+            self.identify_result.set(proj.identify_text)
         self.align_result.set(proj.align_text)
         self.emit_result.set(proj.emit_text)
 
@@ -1003,6 +1072,7 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         for w in self.unresolved_frame.winfo_children():
             w.destroy()
         if weak:
+            from .ui_kit import BODY, font
             ctk.CTkLabel(self.unresolved_frame,
                          text=f"{len(weak)} chapters unresolved:").pack(
                 side="left")
@@ -1011,7 +1081,7 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
                 lbl = ctk.CTkLabel(
                     self.unresolved_frame, text=str(n),
                     text_color=palette.LINK, cursor="hand2",
-                    font=ctk.CTkFont(underline=True))
+                    font=font(BODY, underline=True))
                 lbl.pack(side="left", padx=2)
                 lbl.bind("<Button-1>",
                          lambda e, r=r: self._select_unresolved(r))
@@ -1228,16 +1298,49 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
     # identify ----------------------------------------------------------
     def _identify_mode_changed(self):
         mode = self.identify_mode.get()
-        if hasattr(self, "apply_btn"):  # built: enablement is decided centrally
+        if hasattr(self, "apply_btn"):
             self._update_controls()
         if mode == "json" and not self.identify_value.get():
             self.identify_value.set(os.path.join(
                 os.path.dirname(self.audio or ".") or ".", "chapters.json"))
         if hasattr(self, "asin_frame"):
-            if mode == "asin":
-                self.asin_frame.grid()
-            else:
-                self.asin_frame.grid_remove()
+            frames = {
+                "search": getattr(self, "asin_frame", None),
+                "asin": getattr(self, "_identify_entry_frame", None),
+                "json": getattr(self, "_identify_entry_frame", None),
+                "emb": getattr(self, "_identify_found_frame", None),
+                "nfo": getattr(self, "_identify_found_frame", None),
+            }
+            for frame in {f for f in frames.values() if f is not None}:
+                frame.grid_remove()
+            shown = frames.get(mode)
+            if shown is not None:
+                shown.grid(row=0, column=0, sticky="ew")
+            if mode == "json":
+                self.identify_browse.grid()
+            elif hasattr(self, "identify_browse"):
+                self.identify_browse.grid_remove()
+            if mode in ("asin", "json") and hasattr(self, "identify_btn"):
+                self.identify_btn.grid()
+            self._refresh_identify_found_line()
+
+    def _refresh_identify_found_line(self):
+        if not hasattr(self, "identify_found_var"):
+            return
+        mode = self.identify_mode.get()
+        harvest = self.harvest or {}
+        if mode == "emb":
+            n = len(harvest.get("embedded_chapters") or [])
+            self.identify_found_var.set(
+                f"{n} chapters in the file's tags" if n
+                else "No embedded chapters in this file")
+        elif mode == "nfo":
+            n = len(harvest.get("nfo_chapters") or [])
+            self.identify_found_var.set(
+                f"{n} chapters in album.nfo" if n
+                else "No chapter tracks in album.nfo")
+        else:
+            self.identify_found_var.set("")
 
     def _identify_browse(self):
         path = filedialog.askopenfilename(
@@ -1247,8 +1350,11 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
             self.identify_value.set(path)
 
     def _same_source_as_last(self) -> bool:
+        mode = self.identify_mode.get()
+        if mode == "search":
+            mode = "asin"
         return same_source(
-            self.identify_mode.get(),
+            mode,
             self.identify_value.get().strip(),
             (self.analysis.get("identification") or {}).get("label") or "")
 
@@ -1263,30 +1369,91 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         if not keep_keywords:
             self.asin_keywords.set("")
 
+    def _in_use_asin(self) -> str:
+        label = (self.analysis.get("identification") or {}).get("label") or ""
+        if label.startswith("Audnexus "):
+            return label.split(" ", 1)[1].strip()
+        return ""
+
+    def _edition_fit_map(self) -> dict[str, dict]:
+        fits = dict(load_fit_cache(self.audio or "", self.work_dir))
+        checking = getattr(self, "_fit_checking", set()) or set()
+        for asin in checking:
+            fits.setdefault(asin, {})
+        ident = self.analysis.get("identification") or {}
+        in_use = self._in_use_asin()
+        if in_use and ident:
+            dur = (self.analysis.get("envelope") or {}).get("duration")
+            fits[in_use] = fit_from_identification(ident, file_runtime=dur)
+        return fits
+
     def _fill_asin_list(self):
         if not hasattr(self, "asin_tree"):
             return
         counts = _chapter_counts(self.audio or "", self.work_dir)
+        fits = self._edition_fit_map()
+        checking = getattr(self, "_fit_checking", set()) or set()
+        in_use = self._in_use_asin()
+        rows = []
+        for row in asin_candidates(self.audio or "", self.work_dir):
+            asin = row["asin"]
+            fit = fits.get(asin)
+            ch = ""
+            if fit and fit.get("chapter_count"):
+                ch = str(fit["chapter_count"])
+            elif counts.get(asin):
+                ch = counts[asin]
+            runtime_min = None
+            raw = row.get("runtime") or ""
+            if isinstance(raw, str) and raw.endswith(" min"):
+                with contextlib.suppress(ValueError):
+                    runtime_min = float(raw[:-4].strip())
+            rows.append({
+                **row,
+                "runtime_min": runtime_min,
+                "ch": ch,
+                "fit": fit if fit else None,
+                "checking": asin in checking and not (fit and fit.get("verdict")),
+            })
+        rows.sort(key=fit_sort_key)
+        sources = {r.get("source") or "find-asin" for r in rows}
+        group = len(sources) > 1
         self._filling_editions = True
         self.asin_tree.delete(*self.asin_tree.get_children())
-        for row in asin_candidates(self.audio or "", self.work_dir):
-            self.asin_tree.insert("", "end", values=(
-                row["asin"], row["title"], row["author"], row["narrator"],
-                row["runtime"], counts.get(row["asin"], ""),
-                self._fit_label(row["asin"])))
+        self._edition_tooltips = {}
+        last_source = None
+        for row in rows:
+            source = row.get("source") or "find-asin"
+            if group and source != last_source:
+                last_source = source
+                self.asin_tree.insert(
+                    "", "end", values=("", source_group_label(source),
+                                       "", "", "", "", ""),
+                    tags=("divider",))
+            marker = "●" if row["asin"] == in_use else ""
+            title = row["title"]
+            narrator = row["narrator"]
+            title_shown = title if len(title) <= 48 else title[:47] + "…"
+            narr_shown = (narrator if len(narrator) <= 28
+                          else narrator[:27] + "…")
+            tags = ("in_use",) if row["asin"] == in_use else ()
+            iid = self.asin_tree.insert("", "end", values=(
+                marker, row["asin"], title_shown, narr_shown,
+                format_length(row.get("runtime_min")),
+                row["ch"],
+                fit_cell(row.get("fit"), checking=row["checking"])),
+                tags=tags)
+            self._edition_tooltips[iid] = {
+                "title": title, "narrator": narrator}
+        if hasattr(self, "editions_count_var"):
+            self.editions_count_var.set(f"{len(rows)}" if rows else "")
         self._filling_editions = False
         self._show_edition_marks()
+        self._update_verdict_card()
+        self._update_book_conflicts()
 
     def _fit_label(self, asin: str) -> str:
-        ident = self.analysis.get("identification") or {}
-        label = ident.get("label") or ""
-        if not asin or not label.endswith(asin):
-            return ""
-        verdict = identify_verdict(ident) or ""
-        score = (ident.get("best_trial") or {}).get("score")
-        if isinstance(score, (int, float)):
-            return f"{verdict} {score:.1f}".strip()
-        return verdict
+        return fit_cell(self._edition_fit_map().get(asin))
 
     def _show_edition_marks(self) -> None:
         chapters = (self.analysis.get("identification") or {}).get("chapters") or []
@@ -1296,23 +1463,127 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         if hasattr(self, "timeline"):
             self.timeline.redraw()
         if hasattr(self, "fit_var"):
-            chosen = ""
-            label = (self.analysis.get("identification") or {}).get("label") or ""
-            if label.startswith("Audnexus "):
-                chosen = self._fit_label(label.split(" ", 1)[1].strip())
-            self.fit_var.set(chosen)
+            self.fit_var.set("")
+
+    def _selected_edition_asin(self) -> str:
+        if not hasattr(self, "asin_tree"):
+            return ""
+        sel = self.asin_tree.selection()
+        if not sel:
+            return ""
+        values = self.asin_tree.item(sel[0], "values")
+        if not values or len(values) < 2:
+            return ""
+        asin = str(values[1]).strip()
+        if asin.startswith("From "):
+            return ""
+        return asin
+
+    def _update_verdict_card(self) -> None:
+        if not hasattr(self, "verdict_headline_var"):
+            return
+        asin = self._selected_edition_asin() or self._in_use_asin()
+        fits = self._edition_fit_map()
+        checking = asin in (getattr(self, "_fit_checking", set()) or set())
+        fit = fits.get(asin) if asin else None
+        from chaptertools.gui.ui_kit import C
+        if checking and not (fit and fit.get("verdict")):
+            self.verdict_headline_var.set("Checking this edition…")
+            self.verdict_headline.configure(text_color=C["muted"])
+            self.verdict_reason_var.set("")
+            self.verdict_numbers_var.set("")
+            self._update_verdict_actions()
+            return
+        if not fit or not fit.get("verdict"):
+            self.verdict_headline_var.set(
+                "Select an edition" if asin_candidates(
+                    self.audio or "", self.work_dir) else "")
+            self.verdict_headline.configure(text_color=C["muted"])
+            self.verdict_reason_var.set("")
+            self.verdict_numbers_var.set("")
+            self._update_verdict_actions()
+            return
+        verdict = fit.get("verdict")
+        self.verdict_headline_var.set(verdict_headline(verdict))
+        color = C["ok"] if verdict == "consistent" else C["bad_fg"]
+        self.verdict_headline.configure(text_color=color)
+        ident = self.analysis.get("identification") or {}
+        if self._in_use_asin() == asin and ident:
+            self.verdict_reason_var.set(reason_sentence(ident))
+            self.verdict_numbers_var.set(numbers_line(ident))
+        else:
+            self.verdict_reason_var.set(reason_sentence(fit))
+            bits = []
+            if fit.get("chapter_count"):
+                bits.append(f"{fit['chapter_count']} chapters")
+            if fit.get("score") is not None:
+                bits.append(f"fit {float(fit['score']):.1f}")
+            if fit.get("rate_spread") is not None:
+                bits.append(
+                    f"rate spread {float(fit['rate_spread']) * 100:.1f} %")
+            if fit.get("duration_ratio") is not None:
+                bits.append(
+                    f"runtime ratio {float(fit['duration_ratio']):.2f}")
+            self.verdict_numbers_var.set(" · ".join(bits))
+        self._update_verdict_actions()
+
+    def _update_verdict_actions(self) -> None:
+        if not hasattr(self, "use_edition_btn"):
+            return
+        asin = self._selected_edition_asin() or self._in_use_asin()
+        fit = self._edition_fit_map().get(asin) if asin else None
+        verdict = (fit or {}).get("verdict")
+        busy = getattr(self, "_busy", False)
+        if verdict == "consistent" and not busy:
+            self.use_edition_btn.pack(side="left")
+            set_enabled(self.use_edition_btn, True)
+            self.use_anyway_btn.pack_forget()
+        elif verdict in ("rejected", "weak") and not busy:
+            self.use_edition_btn.pack_forget()
+            self.use_anyway_btn.pack(side="left")
+            set_enabled(self.use_anyway_btn, True)
+        else:
+            self.use_edition_btn.pack(side="left")
+            set_enabled(self.use_edition_btn, False)
+            self.use_anyway_btn.pack_forget()
+
+    def _update_book_conflicts(self) -> None:
+        if not hasattr(self, "_meta_conflict"):
+            return
+        asin = self._selected_edition_asin() or self._in_use_asin()
+        defaults = asin_emit_defaults(
+            self.audio or "", self.work_dir,
+            f"Audnexus {asin}") if asin else {}
+        if asin:
+            for row in asin_candidates(self.audio or "", self.work_dir):
+                if row["asin"] == asin and row.get("narrator"):
+                    defaults["narrator"] = row["narrator"]
+                    break
+        for key, widgets in self._meta_conflict.items():
+            edition_val = (defaults.get(key) or "").strip()
+            current = (self.meta_vars.get(key).get() if self.meta_vars.get(key)
+                       else "").strip()
+            frame = widgets["frame"]
+            if edition_val and edition_val != current:
+                widgets["note"].configure(
+                    text=f'Edition says "{edition_val}"')
+                widgets["use"].configure(
+                    command=lambda k=key, v=edition_val: self.meta_vars[k].set(v))
+                frame.grid()
+            else:
+                frame.grid_remove()
 
     def _on_asin_select(self, _event=None):
         if getattr(self, "_filling_editions", False):
             return
-        sel = self.asin_tree.selection()
-        if not sel:
-            return
-        asin = self.asin_tree.item(sel[0], "values")[0]
+        asin = self._selected_edition_asin()
         if not asin:
+            self._update_verdict_card()
             return
         self.identify_value.set(asin)
         self._identify_autofilled = True
+        self._update_verdict_card()
+        self._update_book_conflicts()
         label = (self.analysis.get("identification") or {}).get("label") or ""
         if label.endswith(asin):
             self._show_edition_marks()
@@ -1321,12 +1592,27 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
 
     def cmd_use_edition(self):
         """Fill empty book-info fields, align, and open Place."""
-        sel = self.asin_tree.selection()
-        if not sel:
+        self._use_edition(confirm=False)
+
+    def cmd_use_edition_anyway(self):
+        if not messagebox.askyesno(
+                "Use anyway?",
+                "This edition does not fit the audio. Use it anyway?",
+                parent=self):
             return
-        asin = str(self.asin_tree.item(sel[0], "values")[0])
+        self._use_edition(confirm=True)
+
+    def _use_edition(self, *, confirm: bool):
+        del confirm
+        asin = self._selected_edition_asin()
+        if not asin:
+            return
         defaults = asin_emit_defaults(
             self.audio or "", self.work_dir, f"Audnexus {asin}")
+        for row in asin_candidates(self.audio or "", self.work_dir):
+            if row["asin"] == asin and row.get("narrator"):
+                defaults.setdefault("narrator", row["narrator"])
+                break
         filled = []
         for key, value in defaults.items():
             var = self.meta_vars.get(key)
@@ -1335,7 +1621,9 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
             var.set(value)
             filled.append(key)
         if filled:
-            self.found_var.set("filled from the edition: " + ", ".join(filled))
+            self.found_var.set(
+                plain_found_summary(self.harvest)
+                + " · filled: " + ", ".join(filled))
         self.show_step("place")
         label = (self.analysis.get("identification") or {}).get("label") or ""
         if not label.endswith(asin):
@@ -1350,12 +1638,16 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
             return
         os.makedirs(self.work_dir, exist_ok=True)
         out = asin_result_path(self.audio, self.work_dir)
+        provider = "find-asin"
+        if hasattr(self, "asin_provider"):
+            provider = self.asin_provider.get() or "find-asin"
         self._run("find-asin", find_asin_argv(
             self.audio, out,
             title=self.asin_title.get(),
             author=self.asin_author.get(),
             keywords=self.asin_keywords.get(),
-            region=self.asin_region.get()),
+            region=self.asin_region.get(),
+            provider=provider),
             then=self._after_asin_search)
 
     def _after_asin_search(self):
@@ -1368,17 +1660,89 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
                 or getattr(self, "_identify_autofilled", False):
             self.identify_value.set(rows[0]["asin"])
             self._identify_autofilled = True
+        self._start_fit_queue([r["asin"] for r in rows])
+
+    def _start_fit_queue(self, asins: list[str]) -> None:
+        """Queue sequential identify probes; write to edition_fits cache."""
+        if not self.audio or not self.work_dir or not asins:
+            return
+        # Identify needs measure gaps; skip until Scan has run.
+        if not (self.analysis.get("gaps") or {}).get("gaps"):
+            self._fit_queue = list(asins)
+            self._fit_checking = set(asins)
+            self._fill_asin_list()
+            self.after(800, self._pump_fit_queue)
+            return
+        cached = load_fit_cache(self.audio, self.work_dir)
+        pending = [a for a in asins if a not in cached]
+        self._fit_queue = pending
+        self._fit_checking = set(pending)
+        self._fill_asin_list()
+        self._pump_fit_queue()
+
+    def _pump_fit_queue(self) -> None:
+        if getattr(self, "_fit_running", False):
+            return
+        queue_list = getattr(self, "_fit_queue", None) or []
+        if not queue_list:
+            self._fit_checking = set()
+            self._fill_asin_list()
+            return
+        if not (self.analysis.get("gaps") or {}).get("gaps"):
+            self.after(800, self._pump_fit_queue)
+            return
+        if self.app.runner.busy:
+            self.after(400, self._pump_fit_queue)
+            return
+        cached = load_fit_cache(self.audio or "", self.work_dir)
+        while queue_list and queue_list[0] in cached:
+            done = queue_list.pop(0)
+            checking = getattr(self, "_fit_checking", set()) or set()
+            checking.discard(done)
+            self._fit_checking = checking
+        self._fit_queue = queue_list
+        if not queue_list:
+            self._fill_asin_list()
+            return
+        asin = queue_list[0]
+        self._fit_running = True
+        self._fit_current = asin
+
+        def after_probe():
+            self._fit_running = False
+            ident = self.analysis.get("identification") or {}
+            label = ident.get("label") or ""
+            if label.endswith(asin):
+                dur = (self.analysis.get("envelope") or {}).get("duration")
+                fits = load_fit_cache(self.audio, self.work_dir)
+                fits[asin] = fit_from_identification(ident, file_runtime=dur)
+                save_fit_cache(self.audio, self.work_dir, fits)
+            checking = getattr(self, "_fit_checking", set()) or set()
+            checking.discard(asin)
+            self._fit_checking = checking
+            q = getattr(self, "_fit_queue", None) or []
+            if q and q[0] == asin:
+                q = q[1:]
+            self._fit_queue = q
+            self._fill_asin_list()
+            self._pump_fit_queue()
+
+        self._run("fit-probe", identify_argv(
+            self._cf, self.work_dir, self.audio, "asin", asin),
+            stage="identify", then=after_probe)
 
     def cmd_identify_primary(self):
+        mode = self.identify_mode.get()
+        if mode == "search":
+            self.cmd_search_asin()
+            return
         verdict = identify_verdict(self.analysis.get("identification") or {})
         if verdict == "rejected" and self._same_source_as_last():
-            # the same source would be rejected again: ask for another one
             self.identify_entry.focus_set()
             self.identify_entry.select_range(0, "end")
             self.app.log("enter a different ASIN or chapters JSON file, "
-                         "then Identify")
+                         "then Check")
             return
-        mode = self.identify_mode.get()
         if mode == "asin":
             asin = self.identify_value.get().strip()
             if asin:
@@ -2060,8 +2424,43 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         assert self.work_dir is not None
         self._emit_into(self.audio or "")
 
+    def _ensure_alignment_for_emit(self) -> bool:
+        """Emit needs an alignment stage. Seed one from placed NFO/pins."""
+        from chaptertools.envelope.artifact import Artifact
+        from chaptertools.nfo import read_nfo_chapters
+
+        from .stages import placement_rows, seed_alignment
+
+        if not self.audio or not self.work_dir:
+            return False
+        art = Artifact(self.audio, self.work_dir)
+        if (art.data.get("alignment") or {}).get("results"):
+            self.analysis = load_analysis(self.audio, self.work_dir)
+            return True
+        analysis = art.data
+        nfo = (self.harvest or {}).get("nfo_chapters") or []
+        if not nfo:
+            nfo = read_nfo_chapters(
+                os.path.join(os.path.dirname(self.audio), "album.nfo"))
+        rows = placement_rows(analysis, nfo)
+        min_conf = self.min_conf.get() if hasattr(self, "min_conf") else 0.5
+        seeded = seed_alignment(rows, min_conf)
+        if seeded is None:
+            messagebox.showerror(
+                "Align first",
+                "Chapters are not placed yet. On Place, run Align so Finish "
+                "can write them.",
+                parent=self)
+            return False
+        art.data["alignment"] = seeded
+        art.save()
+        self.analysis = load_analysis(self.audio, self.work_dir)
+        return True
+
     def _emit_into(self, audio: str, then=None, source: str | None = None):
         assert self.work_dir is not None
+        if not self._ensure_alignment_for_emit():
+            return
         meta = self._meta_overrides()
         overrides = {flag: meta.get(key, "") for flag, key in META_FLAGS.items()}
         self._run("emit", emit_argv(

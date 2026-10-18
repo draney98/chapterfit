@@ -6,6 +6,7 @@ subprocesses.
 """
 from __future__ import annotations
 
+import os
 import tkinter as tk
 from dataclasses import dataclass, field
 from tkinter import ttk
@@ -17,7 +18,8 @@ from . import palette
 DONE, CURRENT, ATTENTION, PENDING, BLOCKED = \
     "done", "current", "attention", "pending", "blocked"
 
-GLYPH = {DONE: "✓", CURRENT: "●", ATTENTION: "!", PENDING: "○", BLOCKED: "✕"}
+# Rail glyphs (never ✕ — it reads as an error).
+GLYPH = {DONE: "✓", CURRENT: "●", ATTENTION: "!", PENDING: "○", BLOCKED: "–"}
 STAGE_KEYS = ("measure", "identify", "align", "resolve", "emit", "finalize")
 STAGE_LABELS = {
     "measure": "Measure", "identify": "Identify", "align": "Align",
@@ -99,12 +101,12 @@ def stage_states(analysis: dict, min_conf: float, disk: DiskFacts,
     ident = analysis.get("identification") or {}
     # the user picked the source (ASIN/JSON/embedded) - the identification
     # stage is done the moment it runs; fit quality is Align's warning
+    n_ch = len(ident.get("chapters") or [])
+    src = short_edition_label(ident.get("label") or ident.get("candidate"))
     out["identify"] = {
         "state": DONE if ident else PENDING,
         "detail": (
-            f"{len(ident.get('chapters') or [])} chapters"
-            + (f" · {str(ident.get('label') or '').removeprefix('Audnexus ').strip()}"
-               if ident.get("label") else "")
+            f"{n_ch} chapters" + (f" · {src}" if src else "")
             if ident else "pick an edition"),
         "blocked": False, "why": "",
     }
@@ -160,7 +162,7 @@ def stage_states(analysis: dict, min_conf: float, disk: DiskFacts,
             "blocked": False, "why": ""}
 
     if not align_ok:
-        out["finalize"] = _blocked("needs Place")
+        out["finalize"] = _blocked("waiting on Place")
     elif not emit_done:
         # Chapters are placed; a dry run / apply still needed. Not blocked.
         out["finalize"] = {
@@ -173,6 +175,144 @@ def stage_states(analysis: dict, min_conf: float, disk: DiskFacts,
             "detail": "applied" if fin_ok else "ready to apply",
             "blocked": False, "why": ""}
     return out
+
+
+def short_edition_label(label: str | None) -> str:
+    """Edition tag for the rail/header — never a filesystem path."""
+    text = (label or "").strip()
+    if not text or text.lower() == "none":
+        return ""
+    text = text.removeprefix("Audnexus ").strip()
+    if os.path.sep in text or text.startswith("~") or (
+            len(text) > 1 and text[1] == ":"):
+        base = os.path.basename(text.rstrip("/\\"))
+        low = base.lower()
+        if "nfo" in low:
+            return "NFO"
+        if low.endswith(".json"):
+            return "JSON"
+        return base or "file"
+    return text
+
+
+def placement_rows(analysis: dict,
+                   nfo_chapters: list | None = None) -> list[dict]:
+    """Rows the Place table paints — NFO times, else alignment, else pins."""
+    nfo = nfo_chapters or []
+    if len(nfo) >= 2:
+        ident_ch = ((analysis.get("identification") or {})
+                    .get("chapters") or [])
+        rows = []
+        for i, chapter in enumerate(nfo):
+            published = None
+            if i < len(ident_ch):
+                published = ident_ch[i].get("start")
+            rows.append({
+                "index": i, "title": chapter.get("title", ""),
+                "published": published, "time": chapter.get("start"),
+                "confidence": 1.0, "pinned": False, "nfo": True,
+            })
+        return rows
+    alignment = analysis.get("alignment") or {}
+    results = list(alignment.get("results") or [])
+    if results:
+        return results
+    ident = analysis.get("identification") or {}
+    source = ident.get("chapters") or []
+    pins_now = analysis.get("pins") or {}
+    return [
+        {"index": i, "title": c.get("title", ""),
+         "published": c.get("start"),
+         "time": pins_now.get(str(i)),
+         "confidence": 1.0 if str(i) in pins_now else None,
+         "pinned": str(i) in pins_now}
+        for i, c in enumerate(source)]
+
+
+def seed_alignment(rows: list[dict], min_conf: float) -> dict | None:
+    """Build an alignment stage from already-placed rows (album.nfo, pins).
+
+    Returns None when any row is still unplaced — emit still needs Align.
+    """
+    if not rows or any(r.get("time") is None for r in rows):
+        return None
+    results = []
+    for row in rows:
+        results.append({
+            "index": row["index"],
+            "title": row.get("title") or "",
+            "published": row.get("published"),
+            "time": float(row["time"]),
+            "confidence": float(row["confidence"]
+                                if row.get("confidence") is not None else 1.0),
+            "spread": 0.0,
+            "pinned": bool(row.get("pinned")),
+            "n_options": 1,
+            "residual": 0.0,
+        })
+    return {
+        "candidate": "nfo" if rows[0].get("nfo") else "seeded",
+        "rate": 1.0,
+        "rate_spread": 0.0,
+        "results": results,
+        "min_confidence": min_conf,
+        "conflicts": [],
+        "seeded": True,
+    }
+
+
+def place_step_status(analysis: dict, min_conf: float,
+                      nfo_chapters: list | None = None) -> dict:
+    """Place rail status from the same rows the table shows.
+
+    Place is blocked only when there is no edition. It is done when every
+    row is placed, none are below min confidence, and there are no conflicts.
+    """
+    ident = analysis.get("identification") or {}
+    if not ident:
+        return {"state": BLOCKED, "detail": "waiting on Match",
+                "blocked": True, "why": "identify first"}
+    results = placement_rows(analysis, nfo_chapters)
+    if not results:
+        return {"state": PENDING, "detail": "not run",
+                "blocked": False, "why": ""}
+    # album.nfo / pins alone are not an Align run — still "not run" unless
+    # every row already has a time (NFO finish) or alignment exists.
+    al = analysis.get("alignment") or {}
+    from_align = bool(al.get("results"))
+    from_nfo = bool(results and results[0].get("nfo"))
+    if not from_align and not from_nfo:
+        return {"state": PENDING, "detail": "not run",
+                "blocked": False, "why": ""}
+    weak = _weak_count(results, min_conf)
+    placed = sum(1 for r in results if r.get("time") is not None)
+    conflicts = al.get("conflicts") or []
+    detail = f"{placed} placed · {weak} to check"
+    if conflicts or weak or placed < len(results):
+        return {"state": ATTENTION, "detail": detail,
+                "blocked": False, "why": ""}
+    return {"state": DONE, "detail": detail, "blocked": False, "why": ""}
+
+
+def finish_step_status(place: dict, finalize: dict,
+                       dry_ok: bool = False) -> dict:
+    """Finish rail status. Waits on Place only when Place is not done."""
+    if place.get("state") != DONE:
+        return {"state": BLOCKED, "detail": "waiting on Place",
+                "blocked": True, "why": "waiting on Place"}
+    if dry_ok or (finalize.get("detail") or "") == "ready to apply":
+        detail = finalize.get("detail") or "ready to apply"
+        if detail.startswith("applied"):
+            return {"state": DONE, "detail": detail,
+                    "blocked": False, "why": ""}
+        if detail == "ready to apply" or dry_ok:
+            return {"state": PENDING, "detail": "ready to apply",
+                    "blocked": False, "why": ""}
+    detail = finalize.get("detail") or "needs a dry run"
+    if detail.startswith("applied"):
+        return {"state": DONE, "detail": detail, "blocked": False, "why": ""}
+    return {"state": PENDING, "detail": "needs a dry run",
+            "blocked": False, "why": ""}
 
 
 def next_stage(states: dict[str, dict]) -> str:
@@ -257,13 +397,13 @@ class StageBar(ttk.Frame):
     def __init__(self, master, on_pick):
         super().__init__(master)
         self.on_pick = on_pick
-        self._labels: dict[str, tk.Label] = {}
+        self._labels: dict[str, ttk.Label] = {}
         self._states: dict[str, dict] = {}
         self._selected: str | None = None
         self._tip = None
         for n, key in enumerate(STAGE_KEYS):
-            lbl = tk.Label(self, text=STAGE_LABELS[key], cursor="hand2",
-                           padx=6, pady=2)
+            lbl = ttk.Label(self, text=STAGE_LABELS[key], cursor="hand2",
+                            padding=(6, 2))
             lbl.grid(row=0, column=n * 2, sticky="w")
             lbl.bind("<Button-1>", lambda e, k=key: self.on_pick(k))
             lbl.bind("<Enter>", lambda e, k=key: self._show_tip(k))
@@ -284,8 +424,9 @@ class StageBar(ttk.Frame):
             glyph = GLYPH.get(st, "○")
             lbl.configure(text=f"{glyph} {STAGE_LABELS[key]}",
                           font=chosen if key == selected else normal,
-                          fg={DONE: palette.OK, ATTENTION: palette.WARN,
-                              BLOCKED: palette.BLOCKED}.get(st, palette.TEXT))
+                          foreground={DONE: palette.OK, ATTENTION: palette.WARN,
+                                      BLOCKED: palette.BLOCKED}.get(
+                                          st, palette.TEXT))
 
     # tooltips for blocked stages
     def _show_tip(self, key):
@@ -298,10 +439,10 @@ class StageBar(ttk.Frame):
         self._tip = tk.Toplevel(self)
         self._tip.wm_overrideredirect(True)
         self._tip.wm_geometry(f"+{x}+{y}")
-        tk.Label(self._tip, text=st.get("why") or "click to open",
-                 background=palette.TIP, foreground=palette.TEXT,
-                 font="TkDefaultFont", relief="solid", borderwidth=1,
-                 padx=4, pady=1, takefocus=0).pack()
+        self._tip.configure(background=palette.BORDER)
+        ttk.Label(self._tip, text=st.get("why") or "click to open",
+                  style="Tip.TLabel", font="TkDefaultFont",
+                  takefocus=0).pack(padx=1, pady=1)
 
     def _hide_tip(self):
         if self._tip is not None:

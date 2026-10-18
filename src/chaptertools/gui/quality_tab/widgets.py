@@ -6,6 +6,7 @@ import tkinter as tk
 
 from chaptertools.gui import palette
 from chaptertools.gui.theme import require_customtkinter
+from chaptertools.gui.ui_kit import BODY, font
 
 from .summary import close, decimals_for, format_number, parse_number, snap
 
@@ -33,7 +34,7 @@ class MetricTile(ctk.CTkFrame):
         self.value_var = tk.StringVar(value="\u2014")
         self.value = ctk.CTkLabel(
             self, textvariable=self.value_var, text_color=palette.Q_TEXT,
-            font=ctk.CTkFont(family="monospace"), anchor="w")
+            font=font(BODY, mono=True), anchor="w")
         self.value.pack(anchor="w", padx=4)
         self.sub_var = tk.StringVar(value="")
         self.sub = ctk.CTkLabel(
@@ -98,7 +99,7 @@ class ParamRow(ctk.CTkFrame):
             self.label.grid(row=0, column=0, sticky="w")
             self.value_label = ctk.CTkLabel(
                 self, textvariable=self.text_var,
-                font=ctk.CTkFont(family="monospace"), width=100, anchor="e")
+                font=font(BODY, mono=True), width=100, anchor="e")
             self.value_label.grid(row=0, column=1, sticky="e")
             self.reset.grid(row=0, column=2, sticky="e")
             self.scale.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(0, 2))

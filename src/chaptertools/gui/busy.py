@@ -12,6 +12,7 @@ ctk = require_customtkinter()
 _SENTENCES = {
     "measure": "Measuring the audio",
     "identify": "Matching an edition",
+    "fit-probe": "Checking an edition",
     "find-asin": "Searching for an ASIN",
     "align": "Placing chapters",
     "sweep": "Sweeping for spoken chapters",

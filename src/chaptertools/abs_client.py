@@ -7,6 +7,7 @@ import shutil
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from chaptertools import media
@@ -153,6 +154,58 @@ class ABS:
     def set_chapters(self, iid, chapters):
         return self._req("PATCH", f"/api/items/{iid}/media",
                          body={"chapters": chapters})
+
+    def set_metadata(self, iid, metadata: dict):
+        """Overwrite stored book metadata. Scans alone will not do this."""
+        return self._req("PATCH", f"/api/items/{iid}/media",
+                         body={"metadata": metadata})
+
+    def search_books(self, provider: str, title: str, author: str = "",
+                     region: str = "") -> list[dict]:
+        """Match-provider search (Google Books, Audible, Open Library, …)."""
+        params = {"provider": provider, "title": title or ""}
+        if author:
+            params["author"] = author
+        if region:
+            params["region"] = region
+        path = "/api/search/books?" + urllib.parse.urlencode(params)
+        result = self._req("GET", path)
+        if isinstance(result, list):
+            return [row for row in result if isinstance(row, dict)]
+        if isinstance(result, dict):
+            for key in ("books", "results", "matches"):
+                rows = result.get(key)
+                if isinstance(rows, list):
+                    return [row for row in rows if isinstance(row, dict)]
+        return []
+
+
+def abs_client_from_env(audio: str = "", work_dir: str | None = None,
+                        *, verbose: bool = False) -> ABS:
+    """Build an ABS client from chapterfit .env / environment variables."""
+    env = load_env(None, work_dir, audio or os.getcwd())
+    url, token = env.get("ABS_URL"), env.get("ABS_TOKEN")
+    if not url or not token:
+        raise RuntimeError(
+            f"ABS_URL and ABS_TOKEN required for Audiobookshelf search "
+            f"(looked in {env.get('_source', '.env')})")
+    return ABS(url, token, verbose=verbose)
+
+
+def metadata_from_emitted_tags(tags: dict) -> dict:
+    """ABS media.metadata payload from emit's tag map (title/artist/date)."""
+    meta: dict = {}
+    title = (tags.get("title") or "").strip()
+    artist = (tags.get("artist") or "").strip()
+    date = (tags.get("date") or "").strip()
+    if title:
+        meta["title"] = title
+    if artist:
+        meta["authorName"] = artist
+        meta["authors"] = [{"name": artist}]
+    if date:
+        meta["publishedYear"] = date[:4]
+    return meta
 
 
 def item_audio_path(it) -> str | None:
@@ -384,6 +437,7 @@ def cmd_finalize(args):
     write_album_nfo(folder, final if apply else src, apply=apply,
                     title=emitted_tags.get("title"),
                     artist=emitted_tags.get("artist"),
+                    year=emitted_tags.get("date"),
                     force=bool(getattr(args, "force_nfo", False)
                                or getattr(args, "yes", False)))
 
@@ -546,6 +600,18 @@ def cmd_finalize(args):
 def finalize_done(api, iid, art, args):
     print("\n  Audiobookshelf agrees with the file on disk.")
     it = api.item(iid)
+    # Scans leave previously stored title/year alone; push emit tags explicitly.
+    tags = (art.data.get("emitted") or {}).get("tags") or {}
+    meta = metadata_from_emitted_tags(tags)
+    if meta:
+        try:
+            api.set_metadata(iid, meta)
+            bits = [meta.get("title"), meta.get("authorName"),
+                    meta.get("publishedYear")]
+            print("  updated ABS metadata: "
+                  + " · ".join(b for b in bits if b))
+        except RuntimeError as e:
+            print(f"  ! metadata push failed: {e}")
     if item_chapter_count(it) < 2 and not args.no_chapters:
         al = art.data.get("alignment") or {}
         chapters = [

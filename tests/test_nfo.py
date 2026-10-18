@@ -153,10 +153,14 @@ def test_render_replaces_tracks_and_keeps_metadata(tmp_path):
     nfo = tmp_path / "album.nfo"
     nfo.write_text(SAMPLE_NFO, encoding="utf-8-sig")
 
-    out = render_nfo(str(nfo), CHAPTERS, "unused", "unused")
+    out = render_nfo(str(nfo), CHAPTERS, "Foundation", "Isaac Asimov",
+                     year="1951")
     root = ET.fromstring(out)
 
     assert root.tag == "album"
+    assert root.findtext("title") == "Foundation"
+    assert root.findtext("artist") == "Isaac Asimov"
+    assert root.findtext("albumartist") == "Isaac Asimov"
     assert root.findtext("year") == "1951"
     assert root.findtext("musicbrainzalbumid") == "abcd-1234"
     assert root.findtext("runtime") == "125"
@@ -164,6 +168,16 @@ def test_render_replaces_tracks_and_keeps_metadata(tmp_path):
     assert len(tracks) == 3
     assert tracks[0].findtext("title") == "Opening Credits"
     assert tracks[1].findtext("duration") == "1:04:44"
+
+
+def test_render_updates_year_on_existing(tmp_path):
+    nfo = tmp_path / "album.nfo"
+    nfo.write_text(SAMPLE_NFO, encoding="utf-8-sig")
+    out = render_nfo(str(nfo), CHAPTERS, "Foundation", "Isaac Asimov",
+                     year="2009")
+    root = ET.fromstring(out)
+    assert root.findtext("year") == "2009"
+    assert root.findtext("musicbrainzalbumid") == "abcd-1234"
 
 
 def test_render_fresh_when_no_existing(tmp_path):
