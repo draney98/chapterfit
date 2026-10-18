@@ -16,7 +16,7 @@ def test_finish_write_table_and_plan_use_window_surface(tmp_path, monkeypatch):
     from chaptertools.gui import palette
     from chaptertools.gui.app import App
 
-    app = App(library_root=str(tmp_path))
+    app = App(library_root=str(tmp_path), modal_busy=False)
     try:
         wf = app.workflow
         wf.show_step("finish")

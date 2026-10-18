@@ -72,6 +72,9 @@ class JobWindow:
         self.bar: ctk.CTkProgressBar | None = None
 
     def sync(self) -> None:
+        if not getattr(self.app, "modal_busy", True):
+            self.close()
+            return
         job = self.app.session.job
         if job.running and job.modal:
             self._open()

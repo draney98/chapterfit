@@ -347,7 +347,9 @@ def test_serve_keeps_model_logs_off_the_json_reply():
 def test_log_lines_flush_to_the_file(tmp_path, monkeypatch):
     import chaptertools.file_log as fl
 
-    assert fl.LOG_PATH == "/tmp/chapterfit.log"
+    # Tests isolate the log; the shared /tmp file must not be the one written.
+    assert fl.LOG_PATH.endswith("chapterfit.log")
+    assert fl.LOG_PATH != "/tmp/chapterfit.log"
     assert fl.STEP == 50 * 1024 * 1024
     path = tmp_path / "chapterfit.log"
     monkeypatch.setattr(fl, "LOG_PATH", str(path))

@@ -206,6 +206,8 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         self.rowconfigure(0, weight=1)
         self._step = "scan"
         self._rescan_quality = False
+        self._measure_due = False
+        self._quality_due = False
         self.chapters_var = tk.StringVar(value="Chapters")
 
         from .ui_kit import C, body, number, title
@@ -440,6 +442,7 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         bar = getattr(self.app, "player_bar", None)
         if bar is not None:
             bar._show_hear()
+        self._start_deferred_work(step)
 
     def set_stage(self, key: str):
         if key in STAGE_STEP:
@@ -1351,7 +1354,7 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
             self._maybe_identify_from_nfo()
             if self._rescan_quality:
                 self._rescan_quality = False
-                self._scan_quality()
+                self._offer_quality_scan()
 
     def _write_playlist_sig(self) -> None:
         """Remember the section playlist so autoscan skips when unchanged."""
@@ -1436,15 +1439,43 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
 
     def _maybe_autoscan(self) -> None:
         """Measure when this file size has no envelope. The mtime-only
-        rule stays in the artifact: a tag rewrite does not count as new."""
+        rule stays in the artifact: a tag rewrite does not count as new.
+
+        Measure belongs to Scan and the loudness decode belongs to Audio
+        cleanup. Neither starts while another step is on screen.
+        """
         if not self._large_audio() or self.app.runner.busy:
             return
         if not self._measure_current():
             self._rescan_quality = not self._quality_current()
-            self.cmd_measure()
+            self._offer_measure()
             return
-        if not self._quality_current():
+        self._offer_quality_scan()
+
+    def _start_deferred_work(self, step: str) -> None:
+        if step == "scan" and self._measure_due and not self.app.runner.busy:
+            self._measure_due = False
+            if not self._measure_current():
+                self.cmd_measure()
+        elif step == "cleanup" and self._quality_due:
+            self._offer_quality_scan()
+
+    def _offer_measure(self) -> None:
+        if self._step == "scan":
+            self._measure_due = False
+            self.cmd_measure()
+        else:
+            self._measure_due = True
+
+    def _offer_quality_scan(self) -> None:
+        if self._quality_current():
+            self._quality_due = False
+            return
+        if self._step == "cleanup":
+            self._quality_due = False
             self._scan_quality()
+        else:
+            self._quality_due = True
 
     def _scan_quality(self) -> None:
         quality = getattr(self, "quality", None)

@@ -48,7 +48,8 @@ ctk = require_customtkinter()
 
 
 class App(ctk.CTk):
-    def __init__(self, library_root: str | None = None):
+    def __init__(self, library_root: str | None = None, *,
+                 modal_busy: bool = True):
         prefs = load_gui_prefs()
         mode = prefs.get("appearance", "Auto")
         if mode == "System":
@@ -64,6 +65,7 @@ class App(ctk.CTk):
         self.appearance_mode = mode
         self.library_root = resolve_library_root(library_root)
         self.runner = Runner()
+        self.modal_busy = modal_busy
         file_log.add_pause_hook(self.runner.pause_for_log)
         self._log_prompt_open = False
         self.player = Player()
@@ -110,15 +112,39 @@ class App(ctk.CTk):
         CustomTkinter ignores ``geometry`` until the window has been
         mapped, then opens at ``minsize`` and forgets the request.
         """
-        pending = getattr(self, "_geometry_pending", None)
         super().update()
-        if not pending:
+        self.realize_geometry()
+
+    def realize_geometry(self) -> None:
+        """Apply a geometry requested before the window was mapped."""
+        pending = getattr(self, "_geometry_pending", None)
+        if not pending or self.winfo_width() <= 1:
             return
         self._geometry_pending = None
-        if self.winfo_width() <= 1:
-            return
         super().geometry(pending)
         super().update_idletasks()
+
+    def is_idle(self) -> bool:
+        """No job of any kind is running and the status bar says Idle."""
+        if self.runner.busy or self.session.job.running:
+            return False
+        quality = getattr(getattr(self, "workflow", None), "quality", None)
+        if getattr(quality, "busy", False):
+            return False
+        harvest = getattr(getattr(self, "workflow", None), "harvest", None) or {}
+        if harvest.get("loading"):
+            return False
+        bar = getattr(self, "player_bar", None)
+        if bar is None:
+            return False
+        return bar.status_var.get() == "Idle"
+
+    def destroy(self):
+        hook = getattr(getattr(self, "runner", None), "pause_for_log", None)
+        if hook is not None:
+            with contextlib.suppress(ValueError):
+                file_log._hooks.remove(hook)
+        super().destroy()
 
     def _setup_fonts(self, base: int | None = None):
         if base is None:
@@ -951,7 +977,7 @@ class App(ctk.CTk):
         return iid if os.path.isfile(iid) else None
 
     # ------------------------------------------------------------ plumbing --
-    def _pump(self):
+    def _pump(self, again: bool = True):
         """Drain runner events and poll the player on the Tk thread."""
         self._check_log_size()
         while True:
@@ -1010,7 +1036,8 @@ class App(ctk.CTk):
             self.session.set_job(False)
         elif busy and not self.session.job.running:
             self.session.set_job(True, "busy", "Working")
-        self.after(100, self._pump)
+        if again:
+            self.after(100, self._pump)
 
     def _check_log_size(self) -> None:
         """A new 50 MB step stops the job and asks before anything else runs."""

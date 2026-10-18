@@ -380,10 +380,10 @@ def fake_whisper(tmp_path, monkeypatch):
 def _make_app(tmp_path):
     tkinter = pytest.importorskip("tkinter")
     try:
-        tkinter.Tk()
+        probe = tkinter.Tk()
+        probe.destroy()
     except tkinter.TclError:
         pytest.skip("no display available")
-    import chaptertools.gui.workflow as wf
     from chaptertools.gui.app import App
     root = tmp_path / "library"
     book = root / "Author" / "Book"
@@ -391,13 +391,7 @@ def _make_app(tmp_path):
     (book / "Book.mp3").touch()
     mp = pytest.MonkeyPatch()
     mp.setenv("CHAPTERFIT_WORK", str(tmp_path / "work"))
-    app = App(library_root=str(root))
-    app.dialogs = []
-
-    for name in ("showinfo", "showerror", "showwarning"):
-        def recorder(title=None, message=None, _n=name, **kw):
-            app.dialogs.append((_n, message))
-        mp.setattr(wf.messagebox, name, recorder)
+    app = App(library_root=str(root), modal_busy=False)
 
     real_destroy = app.destroy
     def destroy():
@@ -406,6 +400,27 @@ def _make_app(tmp_path):
     app.destroy = destroy
     app.update_idletasks()
     return app
+
+
+def test_oversized_log_asks_without_blocking(tmp_path, dialogs):
+    """A 60 MB log asks once and returns; it must not open a real dialog."""
+    import time
+
+    from chaptertools import file_log
+
+    with open(file_log.LOG_PATH, "wb") as handle:
+        handle.truncate(60 * 1024 * 1024)
+    dialogs.answer(True)
+    app = _make_app(tmp_path)
+    try:
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline:
+            app.update()
+            time.sleep(0.05)
+        assert any(kind == "askyesno" and title == "Log file"
+                   for kind, title, _message in dialogs.seen)
+    finally:
+        app.destroy()
 
 
 def _walk(widget):
@@ -778,14 +793,9 @@ def test_cleanup_dropdown_stops_playback(tmp_path, monkeypatch):
         app.destroy()
 
 
-def test_preset_change_prompts_only_when_asked(tmp_path, monkeypatch):
+def test_preset_change_prompts_only_when_asked(tmp_path, monkeypatch, dialogs):
     monkeypatch.setenv("CHAPTERFIT_CONFIG", str(tmp_path / "config"))
     monkeypatch.delenv("CHAPTERFIT_CONFIRM_PRESET", raising=False)
-    import chaptertools.gui.quality_tab.tab as quality_tab
-    asked = []
-    monkeypatch.setattr(
-        quality_tab.messagebox, "askyesno",
-        lambda *args, **kwargs: asked.append(args[0]) or False)
     app = _make_app(tmp_path)
     try:
         quality = app.workflow.quality
@@ -793,13 +803,16 @@ def test_preset_change_prompts_only_when_asked(tmp_path, monkeypatch):
         quality._preset_name = "Gentle cleanup"
         quality.chain.stage("compressor").params["ratio"] = 4.0
         quality._on_preset_picked("Audiobook master")
-        assert asked == []
+        assert not any(kind == "askyesno" for kind, _t, _m in dialogs.seen)
         assert quality._preset_name == "Audiobook master"
 
         quality.chain.stage("compressor").params["ratio"] = 9.0
         monkeypatch.setenv("CHAPTERFIT_CONFIRM_PRESET", "1")
+        dialogs.seen.clear()
+        dialogs.answer(False)
         quality._on_preset_picked("Gentle cleanup")
-        assert asked == ["Apply preset"]
+        assert [(kind, title) for kind, title, _m in dialogs.seen] == [
+            ("askyesno", "Apply preset")]
         assert quality._preset_name == "Audiobook master"
     finally:
         app.destroy()
@@ -847,7 +860,7 @@ def test_app_builds_and_selects_book(tmp_path):
         app.destroy()
 
 
-def test_workflow_refresh_renders_alignment(tmp_path):
+def test_workflow_refresh_renders_alignment(tmp_path, dialogs):
     app = _make_app(tmp_path)
     try:
         book_path = str(tmp_path / "library" / "Author" / "Book" / "Book.mp3")
@@ -894,7 +907,8 @@ def test_workflow_refresh_renders_alignment(tmp_path):
             app.workflow.analysis = {"pins": {"0": 5.0}}
             app.workflow.cmd_unpin()
             assert not ran
-            assert any("has no pin" in (m or "") for _, m in app.dialogs)
+            assert any("has no pin" in (m or "")
+                       for _k, _t, m in dialogs.seen)
         finally:
             monkey.undo()
     finally:
@@ -1241,9 +1255,11 @@ def test_dry_run_stays_enabled_after_align(tmp_path):
 
 
 def test_search_is_on_screen_at_default_size(tmp_path):
+    from test_gui_legibility import _settle
+
     app = _make_app(tmp_path)
     try:
-        app.geometry("1600x960+0+0")
+        _settle(app, "1600x960+0+0")
         app.workflow.set_book(_book(tmp_path))
         app.workflow.show_step("match")
         app.update()
@@ -1257,17 +1273,17 @@ def test_search_is_on_screen_at_default_size(tmp_path):
         app.destroy()
 
 
-def test_spawn_failure_is_reported(tmp_path):
+def test_spawn_failure_is_reported(tmp_path, dialogs):
     app = _make_app(tmp_path)
     try:
         wf = app.workflow
         wf.set_book(_book(tmp_path))
         wf._on_done(None, name="measure")
         assert any("measure could not start" in (m or "")
-                   for _, m in app.dialogs)
-        app.dialogs.clear()
+                   for _k, _t, m in dialogs.seen)
+        dialogs.seen.clear()
         wf._on_done(-15, name="sweep", cancelled=True)
-        assert app.dialogs == []  # a cancel is not an error dialog
+        assert dialogs.seen == []  # a cancel is not an error dialog
     finally:
         app.destroy()
 
@@ -1558,10 +1574,13 @@ def test_busy_sentence_is_a_hover_unless_the_job_is_modal(tmp_path):
         assert app.job_window.win is None
         assert app.player_bar._busy_tip.text == "Measuring the audio"
         app.session.set_job(True, "align", "Placing chapters", True)
-        assert app.job_window.win is not None
-        assert "Placing chapters" in app.job_window.var.get()
+        # Tests pass modal_busy=False, so the Working window never opens.
+        # The sentence stays on the status bar.
+        assert app.job_window.win is None
+        assert app.player_bar.status_var.get() == "Placing chapters"
         app.session.set_job(False)
         assert app.job_window.win is None
+        assert app.player_bar.status_var.get() == "Idle"
     finally:
         app.destroy()
 
@@ -1847,7 +1866,7 @@ def test_book_info_prefill_and_emit_flags(tmp_path, monkeypatch):
         app.destroy()
 
 
-def test_identify_embedded_dumps_and_runs(tmp_path, monkeypatch):
+def test_identify_embedded_dumps_and_runs(tmp_path, monkeypatch, dialogs):
     import chaptertools.gui.workflow as wf
 
     app = _make_app(tmp_path)
@@ -1883,7 +1902,8 @@ def test_identify_embedded_dumps_and_runs(tmp_path, monkeypatch):
                                                        "title": "One"}]}
         app.workflow.cmd_identify_embedded()
         assert ran == []
-        assert any("embedded" in (m or "").lower() for _, m in app.dialogs)
+        assert any("embedded" in (m or "").lower()
+                   for _k, _t, m in dialogs.seen)
     finally:
         app.destroy()
 
@@ -1991,7 +2011,7 @@ def test_gui_opens_without_numpy(tmp_path, monkeypatch):
     root.mkdir(parents=True)
     (root / "Book.mp3").touch()
     monkeypatch.setenv("CHAPTERFIT_WORK", str(tmp_path / "work"))
-    app = App(library_root=str(tmp_path / "library"))
+    app = App(library_root=str(tmp_path / "library"), modal_busy=False)
     try:
         assert app.workflow.quality.available is False
     finally:

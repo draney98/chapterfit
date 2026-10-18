@@ -9,12 +9,13 @@ SIZES := 1600x1030 1366x768
 
 .PHONY: screenshots
 screenshots:
+	@command -v xvfb-run >/dev/null || { echo "xvfb-run is missing. Run: sudo apt install xvfb"; exit 1; }
 	@mkdir -p $(OUT)
 	@test -e "$(BOOK)" || (echo "BOOK not found: $(BOOK)"; exit 1)
 	@for size in $(SIZES); do \
 	  for step in $(STEPS); do \
 	    echo "$$step $$size"; \
-	    CHAPTERFIT_LIBRARY="$(LIBRARY)" $(PYTHON) -m chaptertools.gui \
+	    xvfb-run -a -s "-screen 0 1920x1200x24" env CHAPTERFIT_LIBRARY="$(LIBRARY)" $(PYTHON) -m chaptertools.gui \
 	      --screenshot "$(OUT)/$${step}-$${size}.png" \
 	      --book "$(BOOK)" \
 	      --step "$$step" \

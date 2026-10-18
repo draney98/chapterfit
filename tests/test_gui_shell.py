@@ -30,7 +30,7 @@ def test_session_player_and_log_drawer(tmp_path, monkeypatch):
         pytest.skip("no display")
     from chaptertools.gui.app import App
 
-    app = App(library_root=str(tmp_path))
+    app = App(library_root=str(tmp_path), modal_busy=False)
     try:
         assert app.session.book is None
         assert app.player_bar is not None

@@ -103,7 +103,7 @@ def test_set_book_librivox_keeps_the_step_rail(tmp_path, monkeypatch):
     monkeypatch.setenv("CHAPTERFIT_LIBRARY", str(tmp_path / "library"))
     folder, files, _ = _folder(tmp_path / "library")
     from chaptertools.gui.app import App
-    app = App(library_root=str(tmp_path / "library"))
+    app = App(library_root=str(tmp_path / "library"), modal_busy=False)
     try:
         wf = app.workflow
         wf.set_book(folder)
@@ -138,7 +138,7 @@ def test_cmd_identify_nfo_chosen_when_album_has_tracks(tmp_path, monkeypatch):
     folder, files, _ = _folder(tmp_path / "library")
     from chaptertools.gui.app import App
     from chaptertools.nfo import read_nfo_chapters
-    app = App(library_root=str(tmp_path / "library"))
+    app = App(library_root=str(tmp_path / "library"), modal_busy=False)
     try:
         wf = app.workflow
         wf.set_book(folder)

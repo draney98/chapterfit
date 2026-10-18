@@ -69,7 +69,7 @@ def app(tmp_path, monkeypatch):
     book.mkdir(parents=True)
     audio = book / "A Book Whose Folder Name Goes On for Quite a While.mp3"
     audio.touch()
-    a = App(library_root=str(tmp_path / "library"))
+    a = App(library_root=str(tmp_path / "library"), modal_busy=False)
     a.overrideredirect(True)  # the window manager must not resize it
     wf = a.workflow
     wf.set_book(str(audio))
@@ -141,9 +141,20 @@ def _scrolled_out(widget) -> bool:
 
 
 def _settle(app, geometry):
-    app.geometry(geometry)
-    for _ in range(3):
+    """Apply ``WxH`` and fail if the window never actually becomes that size."""
+    import time
+
+    width_s, rest = geometry.split("x", 1)
+    height = int(rest.split("+", 1)[0])
+    width = int(width_s)
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        app.geometry(geometry)
         app.update()
+        if app.winfo_width() == width and app.winfo_height() == height:
+            return
+    raise AssertionError(
+        f"asked {width}x{height}, got {app.winfo_width()}x{app.winfo_height()}")
 
 
 @pytest.mark.parametrize("size", SIZES, ids=lambda s: f"{s[0]}x{s[1]}")

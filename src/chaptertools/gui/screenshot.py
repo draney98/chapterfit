@@ -40,6 +40,9 @@ def parse_screenshot_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--settle-ms", type=int, default=800,
         help="ms to wait after layout before capture")
+    parser.add_argument(
+        "--allow-busy", action="store_true",
+        help="capture even when a job is still running")
     return parser.parse_args(argv)
 
 
@@ -84,6 +87,43 @@ def grab_window(app, path: str) -> None:
             ) from pillow_err
 
 
+def _require_png_size(path: str, width: int, height: int) -> None:
+    from PIL import Image
+
+    with Image.open(path) as image:
+        got_w, got_h = image.size
+    if (got_w, got_h) != (width, height):
+        raise SystemExit(f"asked {width}x{height}, got {got_w}x{got_h}")
+
+
+def _wait_ready(app, width: int, height: int, allow_busy: bool) -> None:
+    """Block until the window is the requested size and, unless allowed, idle.
+
+    A timeout never captures. The status text is the reason.
+    """
+    import time
+
+    deadline = time.monotonic() + 60
+    geometry = f"{width}x{height}+0+0"
+    while True:
+        app.geometry(geometry)
+        app.update_idletasks()
+        app.realize_geometry()
+        app._pump(again=False)
+        sized = (app.winfo_width() == width and app.winfo_height() == height)
+        idle = allow_busy or app.is_idle()
+        if sized and idle:
+            return
+        if time.monotonic() >= deadline:
+            if not allow_busy and not app.is_idle():
+                status = app.player_bar.status_var.get()
+                raise SystemExit(f"not idle after 60 s: {status}")
+            raise SystemExit(
+                f"asked {width}x{height}, "
+                f"got {app.winfo_width()}x{app.winfo_height()}")
+        time.sleep(0.05)
+
+
 def run_screenshot(argv: list[str]) -> int:
     """Open the GUI, load book/step, capture, exit."""
     args = parse_screenshot_args(argv)
@@ -117,21 +157,14 @@ def run_screenshot(argv: list[str]) -> int:
 
     def _capture() -> None:
         try:
-            # update() never returns while a job keeps posting events.
-            import time
-            deadline = time.monotonic() + 5.0
-            while time.monotonic() < deadline:
-                app.update_idletasks()
-                harvest = getattr(app.workflow, "harvest", None) or {}
-                ready = (not app.runner.busy
-                         and not harvest.get("loading", False))
-                if args.book and not harvest:
-                    ready = False
-                if ready:
-                    break
-                time.sleep(0.05)
+            _wait_ready(app, width, height, args.allow_busy)
             app.workflow._refresh()
             app.update_idletasks()
+            app.realize_geometry()
+            if (app.winfo_width() != width or app.winfo_height() != height):
+                raise SystemExit(
+                    f"asked {width}x{height}, "
+                    f"got {app.winfo_width()}x{app.winfo_height()}")
             from chaptertools.gui.debug_layout import check
             target = getattr(getattr(app, "workflow", None), "workspace", None)
             problems = check(target or app)
@@ -142,8 +175,11 @@ def run_screenshot(argv: list[str]) -> int:
                     f"debug_layout: {len(problems)} problem(s) "
                     f"before screenshot")
             grab_window(app, args.screenshot)
+            _require_png_size(args.screenshot, width, height)
         except BaseException as exc:  # noqa: BLE001 — surface to caller
             result["err"] = exc
+            text = str(exc).strip() or exc.__class__.__name__
+            print(text, file=sys.stderr)
         # quit() does not return while idle timers keep the queue busy.
         os._exit(1 if result["err"] is not None else 0)
 
