@@ -1203,7 +1203,9 @@ def test_resolve_summary_keeps_next_label(tmp_path):
         wf._refresh()
         wf._refresh()
         assert wf.next_label.winfo_exists()
-        assert wf.next_var.get() == "next: Listen"
+        assert wf.next_var.get() == "Next: Listen"
+        assert wf.next_label.cget("text") == "Next:"
+        assert wf._next_jump.cget("text") == "Listen"
         links = [w.cget("text") for w in wf.unresolved_frame.winfo_children()]
         assert "3" in links
         from chaptertools.gui import palette

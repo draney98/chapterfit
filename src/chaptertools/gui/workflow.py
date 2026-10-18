@@ -145,6 +145,14 @@ def _stack(parent):
     return frames
 
 
+def _header_clock(seconds) -> str:
+    """Header clocks stop at the second."""
+    text = hms(seconds)
+    if "." in text:
+        return text.split(".", 1)[0]
+    return text
+
+
 def _t(v) -> str:
     """No empty time cells: a zero clock instead of '-' or blank."""
     if v is None or v == "" or v == "-":
@@ -940,11 +948,13 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         if not source:
             source = short_edition_label(
                 top_asin(self.audio or "", self.work_dir) or "")
+        if source == "from file":
+            source = "chapters from file"
         name = os.path.basename(self.audio) if self.audio else ""
         self._header_bits = {
             "title": title,
             "author": author,
-            "duration": hms(dur) if dur else "",
+            "duration": _header_clock(dur) if dur else "",
             "source": source,
             "name": name,
         }
@@ -1323,7 +1333,7 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
                          text="Nothing unresolved. Spot-check by ear.").pack(
                 side="left")
         accent = proj.recommendation
-        self.next_var.set(f"next: {accent}")
+        self.next_var.set(f"Next: {accent}" if accent else "Next:")
         if hasattr(self, "_next_jump"):
             self._next_jump.configure(text=accent or "")
 
@@ -1857,19 +1867,10 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
             self.verdict_numbers_var.set(numbers_line(ident))
         else:
             self.verdict_reason_var.set(reason_sentence(fit))
-            bits = []
-            if fit.get("chapter_count"):
-                bits.append(f"{fit['chapter_count']} chapters")
-            if fit.get("score") is not None:
-                from chaptertools.gui.ui_kit import fmt_fit
-                bits.append(f"fit {fmt_fit(fit['score'])}")
-            if fit.get("rate_spread") is not None:
-                bits.append(
-                    f"rate spread {float(fit['rate_spread']) * 100:.1f} %")
-            if fit.get("duration_ratio") is not None:
-                bits.append(
-                    f"runtime ratio {float(fit['duration_ratio']):.2f}")
-            self.verdict_numbers_var.set(" · ".join(bits))
+            from .edition_fit import verdict_numbers
+            self.verdict_numbers_var.set(verdict_numbers(
+                fit.get("score"), fit.get("rate_spread"),
+                fit.get("duration_ratio")))
         self._update_verdict_actions()
 
     def _update_verdict_actions(self) -> None:

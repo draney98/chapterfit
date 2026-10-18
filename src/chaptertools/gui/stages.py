@@ -191,7 +191,7 @@ def short_edition_label(label: str | None) -> str:
         if "nfo" in low:
             return "NFO"
         if low.endswith(".json"):
-            return "JSON"
+            return "from file"
         return base or "file"
     return text
 

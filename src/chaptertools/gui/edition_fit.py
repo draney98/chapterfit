@@ -131,23 +131,36 @@ def reason_sentence(ident: dict) -> str:
     return ""
 
 
+def _length_words(ratio) -> str:
+    if ratio is None:
+        return ""
+    value = float(ratio)
+    if abs(value - 1.0) < 0.005:
+        return "same length"
+    return "longer than the edition" if value > 1 else "shorter than the edition"
+
+
+def verdict_numbers(score, rate_spread, duration_ratio) -> str:
+    """Fit, speed difference, and length. No raw ratios."""
+    bits = []
+    if score is not None:
+        from chaptertools.gui.ui_kit import fmt_fit
+        bits.append(f"Fit {fmt_fit(score)} (5 or more fits)")
+    if rate_spread is not None:
+        bits.append(f"speed difference {float(rate_spread) * 100:.1f} %")
+    length = _length_words(duration_ratio)
+    if length:
+        bits.append(length)
+    return " · ".join(bits)
+
+
 def numbers_line(ident: dict) -> str:
-    """Muted mono summary under the reason sentence."""
+    """Muted summary under the reason sentence."""
     if not ident:
         return ""
-    bits = []
-    chapters = ident.get("chapters") or []
-    if chapters:
-        bits.append(f"{len(chapters)} chapters")
     best = ident.get("best_trial") or {}
-    if best.get("score") is not None:
-        from chaptertools.gui.ui_kit import fmt_fit
-        bits.append(f"fit {fmt_fit(best['score'])}")
-    if best.get("rate_spread") is not None:
-        bits.append(f"rate spread {float(best['rate_spread']) * 100:.1f} %")
-    if ident.get("duration_ratio") is not None:
-        bits.append(f"runtime ratio {float(ident['duration_ratio']):.2f}")
-    return " · ".join(bits)
+    return verdict_numbers(
+        best.get("score"), best.get("rate_spread"), ident.get("duration_ratio"))
 
 
 def plain_found_summary(harvest: dict | None) -> str:

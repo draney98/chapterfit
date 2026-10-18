@@ -155,7 +155,7 @@ class ChainRow:
         self.summary_var = tk.StringVar(value="")
         self.summary = ctk.CTkLabel(
             self.frame, textvariable=self.summary_var,
-            text_color=palette.Q_MUTED, font=font(BODY, mono=True),
+            text_color=palette.Q_MUTED, font=font(BODY),
             anchor="e")
         self.summary.grid(row=0, column=2, sticky="ew", padx=4)
         self.dot = tk.Canvas(self.frame, width=10, height=16, highlightthickness=0,
@@ -185,6 +185,9 @@ class ChainRow:
             summary = "Not installed"
             self.check.grid_remove()
         self.summary_var.set(summary)
+        from chaptertools.gui.ui_kit import BODY, font
+        mono = any(ch.isdigit() for ch in summary)
+        self.summary.configure(font=font(BODY, mono=mono))
         self._paint()
 
     def set_modified(self, modified: bool) -> None:

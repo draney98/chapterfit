@@ -50,8 +50,7 @@ class StagePanels:
         self.measure_btn = self._primary(row, 0, 0, "Run measure",
                                          self.cmd_measure)
         scan_note = ctk.CTkLabel(
-            row, text="Analyzes the audio: loudness envelope, timeline "
-                      "check, noise calibration, gaps",
+            row, text="Finds the pauses in the audio.",
             anchor="w", justify="left")
         scan_note.grid(row=0, column=1, sticky="ew", padx=8)
         row.columnconfigure(1, weight=1)
@@ -288,12 +287,13 @@ class StagePanels:
         from chaptertools.gui.ui_kit import BODY, font, text_button
         row = ctk_frame(summary, fg_color="transparent")
         row.pack(side="top", anchor="w")
+        from chaptertools.gui.ui_kit import C
         self.next_label = ctk.CTkLabel(
-            row, text="next:", text_color=palette.OK,
-            font=font(BODY, "bold"), anchor="w")
+            row, text="Next:", text_color=C["text"],
+            font=font(BODY), anchor="w")
         self.next_label.pack(side="left")
         self._next_jump = text_button(
-            row, "", command=self._jump_next, width=140)
+            row, "", command=self._jump_next)
         self._next_jump.pack(side="left", padx=(4, 0))
         inner = getattr(self._resolve_scroll, "_scrollable_frame", None)
         if inner is not None:
@@ -586,15 +586,13 @@ class StagePanels:
 
         head = ctk_frame(p, fg_color="transparent")
         head.grid(row=0, column=0, sticky="ew", pady=(0, 6))
-        ctk.CTkLabel(head, text="Finish",
-                     font=font(BODY, "bold")).pack(side="left")
-        note = ctk.CTkLabel(
+        from chaptertools.gui.ui_kit import section, small, wrap_to_parent
+        section(head, "Finish").pack(anchor="w")
+        note = small(
             head,
-            text="Writes one new file into the library. "
-                 "The first original is always kept.",
-            text_color=palette.MUTED, anchor="w", justify="left")
-        note.pack(side="left", fill="x", expand=True, padx=(10, 0))
-        from chaptertools.gui.ui_kit import wrap_to_parent
+            "Writes one new file into the library. "
+            "The first original is always kept.")
+        note.pack(anchor="w")
         wrap_to_parent(note, pad=10)
 
         table = ctk_frame(p, fg_color="transparent")
@@ -675,10 +673,9 @@ class StagePanels:
 
         plan_head = ctk_frame(p, fg_color="transparent")
         plan_head.grid(row=2, column=0, sticky="ew", pady=(10, 4))
-        ctk.CTkLabel(plan_head, text="Plan",
-                     font=font(SMALL, "bold")).pack(side="left")
-        ctk.CTkLabel(plan_head, text="From the last dry run",
-                     text_color=palette.MUTED).pack(side="left", padx=(8, 0))
+        from chaptertools.gui.ui_kit import section, small
+        section(plan_head, "Plan").pack(anchor="w")
+        small(plan_head, "From the last dry run").pack(anchor="w")
 
         plan_wrap = ctk_frame(p, corner_radius=8, border_width=1,
                               border_color=palette.BORDER, fg_color=palette.FIELD)

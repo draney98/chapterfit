@@ -49,7 +49,11 @@ def duration_mismatch_note(analysis: dict) -> str:
     delta = src.get("header_error_sec")
     if not isinstance(delta, (int, float)):
         delta = float(declared) - float(decoded)
-    return f"The file header is {delta:+.1f} s off the measured audio."
+    amount = abs(float(delta))
+    word = "shorter" if float(delta) < 0 else "longer"
+    return (
+        f"The file's stated length is {amount:.1f} s {word} than the audio."
+    )
 
 
 @dataclass(frozen=True)
@@ -221,10 +225,18 @@ class WorkflowProjection:
         al = self.analysis.get("alignment") or {}
         if not al:
             return ""
+        results = al.get("results") or []
+        placed = sum(1 for r in results if r.get("time") is not None)
+        total = len(results)
         rate = al.get("rate")
-        drift = f"{(rate - 1) * 3600:+.1f}s/h" if rate else "?"
-        placed = sum(1 for r in al["results"] if r["time"] is not None)
-        return f"placed {placed}/{len(al['results'])} - rate {rate} ({drift})"
+        drift = (
+            f"{(float(rate) - 1) * 3600:.1f}"
+            if isinstance(rate, (int, float)) else "0.0")
+        if total and placed == total:
+            head = f"All {total} chapters placed"
+        else:
+            head = f"{placed} of {total} chapters placed"
+        return f"{head} · drift {drift} s/h"
 
     def _emit_text(self) -> str:
         emitted = self.analysis.get("emitted") or {}

@@ -23,6 +23,47 @@ ctk = require_customtkinter()
 
 PREVIEW_SECONDS = 30.0
 _MODIFIED = "Modified \u2014 Save as\u2026 to keep these settings"
+_INSTALL = "python3 -m pip install -e '.[quality]'"
+
+
+def _install_banner(parent, reason: str) -> None:
+    """The quality extra is missing. The command is selectable, not a paragraph."""
+    import re
+
+    from chaptertools.gui.ui_kit import BODY, C, banner, font, secondary, small
+
+    box = banner(parent, "warn")
+    box.pack(fill="x", padx=14, pady=14)
+    box.columnconfigure(0, weight=1)
+    ctk.CTkLabel(
+        box, text="Audio cleanup isn't installed",
+        font=font(BODY, "bold"), text_color=C["warn_fg"], anchor="w",
+    ).grid(row=0, column=0, sticky="w", padx=8, pady=(8, 0))
+    small(box, "Install the optional audio tools to use this step.").grid(
+        row=1, column=0, sticky="w", padx=8, pady=(2, 0))
+    row = ctk.CTkFrame(box, fg_color="transparent")
+    row.grid(row=2, column=0, sticky="ew", padx=8, pady=(8, 0))
+    row.columnconfigure(0, weight=1)
+    entry = ctk.CTkEntry(row, font=font(BODY, mono=True))
+    entry.grid(row=0, column=0, sticky="ew")
+    entry.insert(0, _INSTALL)
+
+    def _keep(_event):
+        if _event.state & 0x4 and _event.keysym.lower() in ("c", "a", "left", "right"):
+            return None
+        if _event.keysym in ("Left", "Right", "Shift_L", "Shift_R", "Home", "End"):
+            return None
+        return "break"
+
+    entry.bind("<Key>", _keep)
+    def _copy() -> None:
+        parent.clipboard_clear()
+        parent.clipboard_append(_INSTALL)
+    secondary(row, "Copy", command=_copy).grid(row=0, column=1, padx=(8, 0))
+    found = re.search(r"\(missing ([^)]+)\)", reason or "")
+    if found:
+        small(box, found.group(1)).grid(
+            row=3, column=0, sticky="w", padx=8, pady=(4, 8))
 
 
 class QualityTab(ctk.CTkFrame):
@@ -53,11 +94,7 @@ class QualityTab(ctk.CTkFrame):
         ok, reason = quality_status()
         self.available = ok
         if not ok:
-            missing = ctk.CTkLabel(
-                self, text=reason, justify="left", anchor="w")
-            missing.pack(anchor="w", padx=8, pady=8)
-            from chaptertools.gui.ui_kit import wrap_to_parent
-            wrap_to_parent(missing)
+            _install_banner(self, reason)
             self.jobs = _IdleJobs()
             return
         from chaptertools.audio_quality.presets import load_session

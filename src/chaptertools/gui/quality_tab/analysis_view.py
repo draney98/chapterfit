@@ -30,12 +30,12 @@ class AnalysisFrame(ctk.CTkFrame):
         header = ctk.CTkFrame(self, fg_color=palette.Q_GROUND, corner_radius=0)
         header.grid(row=0, column=0, sticky="ew")
         header.columnconfigure(1, weight=1)
-        ctk.CTkLabel(header, text="Analysis", text_color=palette.Q_TEXT,
-                     anchor="w").grid(row=0, column=0, sticky="w")
+        from chaptertools.gui.ui_kit import section, small
+        section(header, "Analysis").grid(row=0, column=0, sticky="w")
         self.source_var = tk.StringVar(value="No book selected")
-        ctk.CTkLabel(header, textvariable=self.source_var,
-                     text_color=palette.Q_MUTED, anchor="w", text="").grid(
-            row=0, column=1, sticky="w", padx=8)
+        source = small(header, "")
+        source.configure(textvariable=self.source_var)
+        source.grid(row=1, column=0, columnspan=3, sticky="w")
         from chaptertools.gui.ui_kit import primary, text_button
         rescan = text_button(header, "Re-scan", command=on_rescan, width=90)
         rescan.grid(row=0, column=2, sticky="e")

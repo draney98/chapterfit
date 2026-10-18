@@ -245,6 +245,9 @@ class TableViews:
             ctk.CTkLabel(chips, text=text, height=16,
                          text_color=palette.MUTED).pack(
                 side="left", padx=(0, 12))
+        ctk.CTkLabel(
+            chips, text="? = withheld, not written to the file",
+            height=16, text_color=palette.MUTED).pack(side="left")
         from .ui_kit import text_button
         from . import tips
         hint = text_button(foot, "?", width=28)
