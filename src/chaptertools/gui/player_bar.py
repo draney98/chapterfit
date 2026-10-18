@@ -203,8 +203,11 @@ class PlayerBar(ctk.CTkFrame):
             self.progress.configure(mode="indeterminate")
             self.progress.start()
             self.cancel_btn.grid(row=0, column=12, padx=(2, 0), pady=PAD // 2)
-            if not self.status_var.get() or self.status_var.get() == "Idle":
+            # Progress ticks update the tooltip only. The bar keeps the
+            # sentence from when this job started.
+            if getattr(self, "_status_job", None) != job.name:
                 self.status_var.set(job.detail or "Working…")
+                self._status_job = job.name
             # Hide the idle busy glyph; progress bar is the signal.
             self.busy_label.grid_remove()
         else:
@@ -214,6 +217,7 @@ class PlayerBar(ctk.CTkFrame):
                     self.progress.stop()
             self.progress.grid_remove()
             self.cancel_btn.grid_remove()
+            self._status_job = None
             if not self.app.busy_var.get():
                 self.status_var.set("Idle")
 
@@ -237,7 +241,7 @@ class PlayerBar(ctk.CTkFrame):
             and quality is not None
             and getattr(quality, "_preview", None) is not None
         )
-        if on > 0:
+        if on > 0 or loaded:
             self._source.grid(row=0, column=5, padx=(PAD, PAD // 2))
             state = "normal" if loaded else "disabled"
             self._source_seg.configure(state=state)

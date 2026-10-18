@@ -312,12 +312,6 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
 
         place.bind("<Configure>", _keep_align_visible, add="+")
         place.after_idle(_keep_align_visible)
-        # The chapter table is the main content. Keep the controls a
-        # fixed height so the table gets the free space (at least 8 rows
-        # at 1600x1030). The resolve pane scrolls inside that height.
-        place_host = self._insp_frames["place"]
-        place_host.configure(height=300)
-        place_host.grid_propagate(False)
         self._build_chapters_tab(self._main_frames["place"])
         self._build_quality_tab(self._main_frames["cleanup"])
         from .multifile_book import MultifileBook
@@ -348,19 +342,29 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
 
     def min_width(self) -> int:
         self.update_idletasks()
-        table = sum(int(self.tree.column(c, "minwidth"))
-                    for c, *_ in CHAPTER_COLUMNS) + 24
+        shown = self.tree["displaycolumns"]
+        if shown in (("#all",), "#all", ""):
+            shown = [c for c, *_rest in CHAPTER_COLUMNS]
+        table = sum(
+            int(self.tree.column(c, "minwidth"))
+            for c, *_rest in CHAPTER_COLUMNS
+            if c in shown and int(self.tree.column(c, "width")) > 0
+        ) + 24
         return max([self._panel_need(k)[0] for k in self._panels]
                    + [self.rail.winfo_reqwidth(), table]) + 16
 
     def min_height(self) -> int:
-        """Header, timeline, and enough rows that the table is usable."""
+        """Header, timeline, and enough rows that the table is usable.
+
+        The panel's only grid slave is the whole shell, so measure the
+        header frame rather than that slave (it already contains the table).
+        """
         self.update_idletasks()
         rowh = int(ttk.Style(self).lookup("Chapter.Treeview", "rowheight")
                    or 24)
-        chrome = self.grid_slaves(row=0)[0].winfo_reqheight()
-        chrome += self.timeline.winfo_reqheight()
-        return chrome + rowh * (self.TABLE_MIN_ROWS + 1) + 80
+        head = self.rail.master.winfo_reqheight()
+        return (head + self.timeline.winfo_reqheight()
+                + rowh * (self.TABLE_MIN_ROWS + 1) + 16)
 
     def _on_host_resize(self, event):
         """Long text wraps to the panel width instead of widening it."""

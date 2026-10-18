@@ -733,7 +733,7 @@ class App(ctk.CTk):
                 continue
             try:
                 text = str(child.cget("text") or "").strip()
-            except tk.TclError:
+            except (tk.TclError, ValueError):
                 continue
             kind = ctk_kind(child) or child.winfo_class()
             if text and not text.isdigit() and kind in (

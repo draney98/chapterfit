@@ -633,7 +633,7 @@ def test_click_log_names_the_action_and_the_preset(tmp_path):
 
         button = ttk.Button(app, text="Identify")
         _click(app, button)
-        assert "Identify: asin — Revelation Space — Place" in app.log_text.get("1.0", "end")
+        assert "Identify: search — Revelation Space — Place" in app.log_text.get("1.0", "end")
 
         chosen = tk.BooleanVar(value=False)
         check = ttk.Checkbutton(app, text="Embed chapters", variable=chosen)
@@ -813,7 +813,7 @@ def test_busy_logs_when_it_starts_and_when_it_ends(tmp_path):
         text = app.log_text.get("1.0", "end")
         assert text.count("busy: Preparing a 30 s preview") == 1
         assert "Decoding" not in text
-        assert app.player_bar.status_var.get() == "busy: Preparing a 30 s preview"
+        assert app.player_bar.status_var.get() == "Preparing a 30 s preview"
         app.session.set_job(True, "process", "Rendering cleaned audio", True)
         text = app.log_text.get("1.0", "end")
         assert "idle: Preparing a 30 s preview" in text
@@ -821,7 +821,7 @@ def test_busy_logs_when_it_starts_and_when_it_ends(tmp_path):
         app.session.set_job(False)
         text = app.log_text.get("1.0", "end")
         assert "idle: Rendering cleaned audio" in text
-        assert app.player_bar.status_var.get() == "idle: Rendering cleaned audio"
+        assert app.player_bar.status_var.get() == "Idle"
     finally:
         app.destroy()
 
@@ -1127,6 +1127,15 @@ def _write_artifact(wf, art):
         json.dump({"schema": 3, **art}, f)
 
 
+def _write_kept_artifact(wf, art):
+    """Write an artifact Artifact.load will keep (matching file size)."""
+    st = os.stat(wf.audio)
+    _write_artifact(wf, {
+        "file": {"size": st.st_size, "mtime": int(st.st_mtime)},
+        **art,
+    })
+
+
 def test_blocked_step_hover_says_what_to_do(tmp_path):
     app = _make_app(tmp_path)
     try:
@@ -1140,14 +1149,14 @@ def test_blocked_step_hover_says_what_to_do(tmp_path):
         app.update()
         place = "On Match, Search for the book, then choose an edition."
         assert all(tip.text == place for tip in wf.rail._tips["place"])
-        assert wf.rail._subs["place"].get() == "blocked"
+        assert wf.rail._subs["place"].get() == "waiting on Match"
         wf.show_step("match")
         app.update()
         assert wf.asin_search_btn.winfo_viewable()
         _write_artifact(wf, WEAK_ART)
         wf._refresh()
-        # Place is done; Finish waits on a dry run (not blocked)
-        assert wf.rail._subs["finish"].get() == "needs a dry run"
+        # A low-confidence row keeps Place unfinished, so Finish waits.
+        assert wf.rail._subs["finish"].get() == "waiting on Place"
         assert wf.rail._tips["place"][0].text == ""
     finally:
         app.destroy()
@@ -1601,7 +1610,7 @@ def test_log_is_selectable_but_readonly(tmp_path):
         logged = app.log_text.get("1.0", "end-1c")
         assert "hello log line" in logged
         assert logged.split()[0].count(":") == 2
-        assert app.player_bar.status_var.get() == "hello log line"
+        assert app.player_bar.status_var.get() == "Idle"
         assert str(app.log_text.cget("state")) == "normal"
 
         class FakeEvent:
@@ -1772,6 +1781,11 @@ def test_cleanup_apply_emits_the_cleaned_file_from_the_library(tmp_path, monkeyp
         app.workflow.set_book(audio)
         app.workflow.include_cleanup.set(True)
         app.workflow._chapters_placed = lambda: True
+        _write_kept_artifact(app.workflow, {
+            "alignment": {"results": [
+                {"index": 0, "title": "One", "published": 0.0, "time": 0.0,
+                 "confidence": 1.0, "pinned": False}]},
+        })
         ran = []
         monkeypatch.setattr(
             wf.WorkflowPanel, "_run",
@@ -1795,7 +1809,7 @@ def test_book_info_prefill_and_emit_flags(tmp_path, monkeypatch):
                                   / "Book.mp3"))
         # folder names show at once; the file is read off the Tk thread
         assert app.workflow.meta_vars["title"].get() == "Book"
-        assert "reading" in app.workflow.found_var.get()
+        assert "Reading" in app.workflow.found_var.get()
         app.workflow.meta_vars["year"].set("1950")  # typed while loading
         app.workflow.wait_for_facts()
         # no tags/nfo in the fixture -> fallback to folder names
@@ -1812,6 +1826,11 @@ def test_book_info_prefill_and_emit_flags(tmp_path, monkeypatch):
         app.workflow.meta_vars["year"].set("1961")
         app.workflow.meta_vars["album"].set("")  # empty = keep original
         app.workflow.meta_vars["author"].set("")  # cleared = no override
+        _write_kept_artifact(app.workflow, {
+            "alignment": {"results": [
+                {"index": 0, "title": "One", "published": 0.0, "time": 0.0,
+                 "confidence": 1.0, "pinned": False}]},
+        })
         app.workflow.cmd_emit()
         argv = ran[0]
         assert "--title" in argv and argv[argv.index("--title") + 1] == "My Title"
@@ -1820,7 +1839,7 @@ def test_book_info_prefill_and_emit_flags(tmp_path, monkeypatch):
         assert "--author" not in argv
 
         # found summary reflects the empty harvest
-        assert "no album.nfo" in app.workflow.found_var.get()
+        assert "no chapters" in app.workflow.found_var.get()
     finally:
         app.destroy()
 
@@ -1902,6 +1921,9 @@ def test_parse_reply_filters_events_and_garbage():
 
 @pytest.mark.integration
 def test_player_reports_playback_time(tmp_path):
+    import shutil
+    if shutil.which("mpv") is None:
+        pytest.skip("mpv is not installed")
     from chaptertools.gui.mpv import Player
 
     wav = tmp_path / "tone.wav"
@@ -1946,3 +1968,28 @@ def poll_time(player, timeout: float, min_wait: float = 0.0):
             return t
         time.sleep(0.2)
     return None
+
+
+def test_gui_opens_without_numpy(tmp_path, monkeypatch):
+    """The window builds when the optional quality extra is missing."""
+    tkinter = pytest.importorskip("tkinter")
+    try:
+        tkinter.Tk().destroy()
+    except tkinter.TclError:
+        pytest.skip("no display available")
+    import sys
+    for name in list(sys.modules):
+        if name == "chaptertools.audio_quality.worker" or name.startswith(
+                "chaptertools.audio_quality.worker."):
+            del sys.modules[name]
+    monkeypatch.setitem(sys.modules, "numpy", None)
+    from chaptertools.gui.app import App
+    root = tmp_path / "library" / "Author" / "Book"
+    root.mkdir(parents=True)
+    (root / "Book.mp3").touch()
+    monkeypatch.setenv("CHAPTERFIT_WORK", str(tmp_path / "work"))
+    app = App(library_root=str(tmp_path / "library"))
+    try:
+        assert app.workflow.quality.available is False
+    finally:
+        app.destroy()

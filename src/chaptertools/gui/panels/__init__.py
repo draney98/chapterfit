@@ -52,7 +52,8 @@ class StagePanels:
                                          self.cmd_measure)
         ctk.CTkLabel(row, text="Analyzes the audio: loudness envelope, timeline "
                                "check, noise calibration, gaps",
-                     anchor="w").grid(row=0, column=1, sticky="w", padx=8)
+                     anchor="w", justify="left", wraplength=420).grid(
+                         row=0, column=1, sticky="w", padx=8)
         from chaptertools.gui.ui_kit import text_button
         rescan = text_button(
             row, "Re-scan", command=self.cmd_rescan, width=_btn_width("Re-scan"))

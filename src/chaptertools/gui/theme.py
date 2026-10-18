@@ -900,7 +900,7 @@ def is_disabled(widget) -> bool:
     if is_ctk(widget):
         try:
             return str(widget.cget("state")) == "disabled"
-        except tk.TclError:
+        except (tk.TclError, ValueError):
             return False
     try:
         return bool(widget.instate(["disabled"]))

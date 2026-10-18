@@ -16,14 +16,8 @@ import subprocess
 import threading
 import time
 
-import numpy as np
-import soundfile as sf
-
 from chaptertools import file_log
 from chaptertools.util import clock
-
-from .analysis import Cancelled, LogPaused, check_cancel
-from .signal import StreamingLoudness, crossfade, gain_for_target, lin_to_db, true_peak
 
 CHUNK_SECONDS = 600.0
 NEURAL_CHUNK_SECONDS = 15.0
@@ -61,6 +55,7 @@ class QualityJobs:
             cancel = self.cancel_event
 
         def run():
+            from .analysis import Cancelled
             try:
                 result = fn(cancel, self._progress)
                 self.events.put(("done", name, result))
@@ -146,6 +141,7 @@ def source_facts(path: str) -> dict:
 
 def read_segment(path: str, start: float, duration: float):
     """``(audio, sample_rate)`` for a preview. Audio is float32."""
+    import soundfile as sf
     with sf.SoundFile(path) as handle:
         sr = int(handle.samplerate)
         origin = min(len(handle), max(0, int(start * sr)))
@@ -203,6 +199,8 @@ def process_wav(wav: str, source: str, work_dir: str, snapshot: dict,
                 chunk_seconds: float = CHUNK_SECONDS,
                 overlap_seconds: float = OVERLAP_SECONDS) -> dict:
     """Two passes over an existing WAV. ``source`` supplies tags and chapters."""
+    from .analysis import Cancelled
+    from .signal import lin_to_db
     from . import neural
     from .stages import default_chain, pass1_skip
 
@@ -298,6 +296,9 @@ def render_chunked(path: str, chain, *, skip: set[str] | None = None,
     ``on_chunk(start, end, duration)`` runs before the chunk is processed,
     so a slow stage still leaves a progress line.
     """
+    import soundfile as sf
+    import numpy as np
+    from .analysis import Cancelled, LogPaused, check_cancel
     with sf.SoundFile(path) as handle:
         sr = int(handle.samplerate)
         total = len(handle)
@@ -340,6 +341,8 @@ def render_chunked(path: str, chain, *, skip: set[str] | None = None,
 
 
 def _join(processed, prev_tail, overlap_n: int, at_end: bool):
+    import numpy as np
+    from .signal import crossfade
     if overlap_n <= 0 or len(processed) == 0:
         return processed, None
     if prev_tail is None:
@@ -359,6 +362,8 @@ def _join(processed, prev_tail, overlap_n: int, at_end: bool):
 
 def _pass_one(wav, dest, chain, skip, cancel, report,
               chunk_seconds, overlap_seconds, session):
+    import soundfile as sf
+    from .signal import StreamingLoudness, true_peak
     info = sf.info(wav)
     meter = StreamingLoudness(int(info.samplerate))
     peak = 0.0
@@ -386,6 +391,8 @@ def _pass_one(wav, dest, chain, skip, cancel, report,
 
 def _pass_two(pass1, dest_mp3, source, chain, bitrate, cancel, report,
               chunk_seconds, overlap_seconds, session):
+    import soundfile as sf
+    from .analysis import Cancelled
     info = sf.info(pass1)
     only = set()
     if not chain.stage("loudness").bypass:
@@ -424,6 +431,7 @@ def _pass_two(pass1, dest_mp3, source, chain, bitrate, cancel, report,
 
 
 def _write_s16(proc: subprocess.Popen, emit: np.ndarray) -> None:
+    import numpy as np
     if proc.stdin is None:
         return
     clipped = np.clip(emit, -1.0, 1.0)
@@ -435,6 +443,7 @@ def _write_s16(proc: subprocess.Popen, emit: np.ndarray) -> None:
 
 
 def _arm_gain(chain, meter: StreamingLoudness) -> float:
+    from .signal import gain_for_target
     loud = chain.stage("loudness")
     gain = gain_for_target(
         meter.integrated(),
@@ -520,6 +529,7 @@ def _require_space(directory: str, facts: dict) -> None:
 
 
 def _ffmpeg(cmd: list[str], cancel) -> None:
+    from .analysis import Cancelled
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     try:
         while proc.poll() is None:

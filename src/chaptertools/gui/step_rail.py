@@ -57,7 +57,7 @@ class StepRail(ctk.CTkFrame):
             col = index
             cell = ctk.CTkFrame(
                 self, corner_radius=4, fg_color=C["sunken"], cursor="hand2",
-                border_width=0)
+                border_width=0, width=176)
             cell.grid(row=0, column=col, sticky="nsew", padx=PAD // 2, pady=2)
             cell.columnconfigure(0, weight=1)
             title = body(cell, text=STEP_LABELS[key])
@@ -69,7 +69,7 @@ class StepRail(ctk.CTkFrame):
             sub.configure(textvariable=var, wraplength=160)
             sub.grid(row=1, column=0, sticky="ew", padx=PAD, pady=(0, PAD))
             bar = ctk.CTkFrame(
-                cell, height=2, corner_radius=0, fg_color=C["border"])
+                cell, width=1, height=2, corner_radius=0, fg_color=C["border"])
             bar.grid(row=2, column=0, sticky="ew")
             cell._bar = bar  # noqa: SLF001
             for widget in (cell, title, sub):

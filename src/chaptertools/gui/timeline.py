@@ -18,7 +18,7 @@ from .ui_kit import FONT, PAD, SMALL, C, panel, secondary, section, small
 
 ctk = require_customtkinter()
 
-_HEIGHT = 72
+_HEIGHT = 52
 _TICK = 6
 _LABEL_GAP = 28
 PLOT_INSET = 14

@@ -272,17 +272,17 @@ class TableViews:
     def _layout_foot(self, event=None):
         legend, keys = self._table_legend, self.shortcut_label
         width = event.width if event else 10 ** 6
-        # Always stack shortcuts under the legend when the foot is narrow;
-        # prefer stacked layout so chips and keys never collide.
-        split = width < 900 or (
-            legend.winfo_reqwidth() + keys.winfo_reqwidth() + 24 > width)
-        if split == self._foot_split:
+        # Keep the foot to one line. Shortcuts move to the Help menu when
+        # they would wrap under the legend and steal a chapter row.
+        fits = width >= 900 and (
+            legend.winfo_reqwidth() + keys.winfo_reqwidth() + 24 <= width)
+        if fits == self._foot_split:
             return
-        self._foot_split = split
+        self._foot_split = fits
         legend.grid(row=0, column=0, sticky="w")
-        if split:
-            keys.grid(row=1, column=0, sticky="w", padx=0, pady=(2, 0))
-            legend.master.columnconfigure(1, weight=0)
-        else:
+        if fits:
             keys.grid(row=0, column=1, sticky="e", padx=(24, 0))
             legend.master.columnconfigure(1, weight=1)
+        else:
+            keys.grid_remove()
+            legend.master.columnconfigure(1, weight=0)
