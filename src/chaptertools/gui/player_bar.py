@@ -84,14 +84,13 @@ class PlayerBar(ctk.CTkFrame):
         self.busy_label = small(self, text="")
         self.busy_label.configure(textvariable=self.app.busy_var)
         self._busy_tip = tips.tooltip(self.busy_label, "")
-        self.log_btn = secondary(self, "Log", command=self.app.toggle_log,
-                                 width=fit("Log"))
-        self.log_btn.grid(row=0, column=10, padx=(0, 0), pady=PAD // 2)
-        tips.tooltip(self.log_btn, "open the log (Ctrl+Shift+L)")
         self.cancel_btn = secondary(
             self, "Cancel", command=self.app._cancel, width=80)
         tips.tooltip(self.cancel_btn, "stop the running job and any playback")
-        # progress + cancel shown only while a job runs (_show_job).
+        self.log_btn = secondary(self, "Log", command=self.app.toggle_log,
+                                 width=fit("Log"))
+        self.log_btn.grid(row=0, column=13, padx=(PAD * 2, 0), pady=PAD // 2)
+        tips.tooltip(self.log_btn, "open the log (Ctrl+Shift+L)")
 
     def _bind_keys(self) -> None:
         root = self.winfo_toplevel()
@@ -199,10 +198,10 @@ class PlayerBar(ctk.CTkFrame):
         job = self.app.session.job
         self._busy_tip.text = job.detail if job.running else ""
         if job.running:
-            self.progress.grid(row=0, column=11, padx=(2, 0), pady=PAD // 2)
+            self.progress.grid(row=0, column=10, padx=(2, 0), pady=PAD // 2)
             self.progress.configure(mode="indeterminate")
             self.progress.start()
-            self.cancel_btn.grid(row=0, column=12, padx=(2, 0), pady=PAD // 2)
+            self.cancel_btn.grid(row=0, column=11, padx=(2, 0), pady=PAD // 2)
             # Progress ticks update the tooltip only. The bar keeps the
             # sentence from when this job started.
             if getattr(self, "_status_job", None) != job.name:

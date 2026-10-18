@@ -14,8 +14,9 @@ from tkinter import ttk
 from chaptertools.gui import palette
 from chaptertools.gui.commands import chapterfit_prefix
 from chaptertools.gui.runner import Job
-from chaptertools.gui.theme import ctk_frame, require_customtkinter
-from chaptertools.gui.ui_kit import BODY, SMALL, font
+from chaptertools.gui.theme import ctk_frame, require_customtkinter, set_enabled
+from chaptertools.gui.ui_kit import (
+    BODY, C, SMALL, font, primary, secondary, text_button)
 from chaptertools.util import clock
 
 ctk = require_customtkinter()
@@ -81,12 +82,14 @@ class LibrivoxView(ctk.CTkFrame):
         head.columnconfigure(0, weight=1)
         ctk.CTkLabel(head, text="Get a book from LibriVox",
                   font=font(BODY, "bold")).grid(row=0, column=0, sticky="w")
+        close = text_button(
+            head, "Close", command=self.close,
+            width=font(SMALL).measure("Close") + 24)
+        close.grid(row=0, column=1, sticky="e")
         ctk.CTkLabel(
             head,
             text="Search the catalog, pick a finished recording, fetch tagged sections.",
             text_color=palette.MUTED).grid(row=1, column=0, sticky="w")
-        ctk.CTkButton(head, text="Close", command=self.close).grid(
-            row=0, column=1, rowspan=2, sticky="e")
 
         form = ctk_frame(self.search_frame)
         form.grid(row=1, column=0, sticky="ew", pady=(0, 6))
@@ -98,7 +101,7 @@ class LibrivoxView(ctk.CTkFrame):
         self.author_var = tk.StringVar()
         self.author_entry = ctk.CTkEntry(form, textvariable=self.author_var, width=160)
         self.author_entry.grid(row=0, column=3, sticky="ew", padx=(6, 12))
-        ctk.CTkButton(form, text="Search", command=self._do_search).grid(
+        primary(form, "Search", command=self._do_search).grid(
             row=0, column=4, sticky="e")
         form.columnconfigure(1, weight=1)
         ctk.CTkLabel(
@@ -169,9 +172,9 @@ class LibrivoxView(ctk.CTkFrame):
         ctk.CTkLabel(self.detail, textvariable=self._detail_note,
                   text_color=palette.MUTED, wraplength=440, text="").grid(
             row=6, column=0, sticky="w", pady=(4, 0))
-        self.fetch_btn = ctk.CTkButton(
-            self.detail, text="Fetch into library",
-            command=self._start_fetch, state="disabled")
+        self.fetch_btn = secondary(
+            self.detail, "Fetch into library", command=self._start_fetch)
+        set_enabled(self.fetch_btn, False)
         self.fetch_btn.grid(row=7, column=0, sticky="ew", pady=(8, 0))
 
         self._status_var = tk.StringVar(value="")
@@ -353,6 +356,13 @@ class LibrivoxView(ctk.CTkFrame):
                 "Titles match from the first word.")
             self._status_var.set("")
 
+    def _arm_fetch(self, kind: str, enabled: bool, **kw) -> None:
+        """Search stays the primary until a recording is chosen."""
+        self.fetch_btn._kind = kind  # noqa: SLF001
+        if kw:
+            self.fetch_btn.configure(**kw)
+        set_enabled(self.fetch_btn, enabled)
+
     def _on_result_select(self, _e=None):
         sel = self.results.selection()
         if not sel:
@@ -360,7 +370,7 @@ class LibrivoxView(ctk.CTkFrame):
         iid = sel[0]
         if iid == "__sep__" or iid in self._unfinished_ids:
             self.results.selection_remove(iid)
-            self.fetch_btn.configure(state="disabled")
+            self._arm_fetch("secondary", False)
             return
         self._load_plan(iid)
 
@@ -368,7 +378,8 @@ class LibrivoxView(ctk.CTkFrame):
         self._on_result_select()
 
     def _load_plan(self, lv_id: str, set_name: str | None = None):
-        self.fetch_btn.configure(state="disabled", text="Fetch into library")
+        self._arm_fetch("secondary", False, text="Fetch into library",
+                        command=self._start_fetch)
         self._detail_title.set("Loading plan…")
         self._detail_meta.set("")
         self._detail_order.set("")
@@ -402,7 +413,7 @@ class LibrivoxView(ctk.CTkFrame):
                 self._order_lbl.configure(text_color=palette.ERROR)
             else:
                 self._detail_order.set("")
-            self.fetch_btn.configure(state="disabled")
+            self._arm_fetch("secondary", False)
             return
         self._detail_title.set(obj.get("title") or "")
         readers = []
@@ -439,12 +450,12 @@ class LibrivoxView(ctk.CTkFrame):
             except (OSError, ValueError):
                 existing = {}
             if int(existing.get("id") or 0) == int(obj.get("id") or -1):
-                self.fetch_btn.configure(
-                    state="normal", text="Open the book",
+                self._arm_fetch(
+                    "primary", True, text="Open the book",
                     command=lambda d=dest: self._open_book(d))
                 return
-        self.fetch_btn.configure(
-            state="normal", text="Fetch into library",
+        self._arm_fetch(
+            "primary", True, text="Fetch into library",
             command=self._start_fetch)
 
     def _open_book(self, dest: str):

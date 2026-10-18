@@ -72,7 +72,8 @@ from .stages import (
 )
 from .step_rail import STAGE_STEP, STEPS, StepRail, Workspace
 from .table import CHAPTER_COLUMNS, TableViews
-from .theme import accent_colors, ctk_frame, require_customtkinter, set_enabled
+from .theme import (
+    accent_colors, ctk_frame, require_customtkinter, set_enabled, widget_text)
 from .timeline import Timeline
 
 ctk = require_customtkinter()
@@ -1819,7 +1820,7 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         elif verdict in ("rejected", "weak") and not busy:
             self.use_anyway_btn.pack(side="left")
             set_enabled(self.use_anyway_btn, True)
-        else:
+        elif asin and widget_text(self.use_edition_btn):
             self.use_edition_btn.pack(side="left")
             set_enabled(self.use_edition_btn, False)
 

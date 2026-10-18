@@ -292,17 +292,23 @@ def number(parent, text="", **kw):
 
 
 def primary(parent, text, command=None, **kw):
-    return ctk.CTkButton(
+    btn = ctk.CTkButton(
         parent, text=text, command=command, height=CTRL_H, corner_radius=4,
-        font=font(BODY, "bold"), fg_color=C["accent"],
-        hover_color=C["accent_hover"], text_color=C["white"], **kw)
+        font=font(BODY), fg_color=C["accent"],
+        hover_color=C["accent_hover"], text_color=C["white"],
+        text_color_disabled=C["disabled"], border_width=0, **kw)
+    btn._kind = "primary"  # noqa: SLF001
+    return btn
 
 
 def secondary(parent, text, command=None, **kw):
-    return ctk.CTkButton(
+    btn = ctk.CTkButton(
         parent, text=text, command=command, height=CTRL_H, corner_radius=4,
         font=font(BODY), fg_color=C["panel"], hover_color=C["sunken"],
-        text_color=C["text"], border_width=1, border_color=C["border"], **kw)
+        text_color=C["text"], text_color_disabled=C["disabled"],
+        border_width=1, border_color=C["border"], **kw)
+    btn._kind = "secondary"  # noqa: SLF001
+    return btn
 
 
 def post_menu(menu, anchor) -> None:
@@ -319,10 +325,13 @@ def text_button(parent, text, command=None, **kw):
     """e.g. reset glyph, Edit in Match."""
     kw.setdefault("width", 10)
     kw.setdefault("height", CTRL_H)
-    return ctk.CTkButton(
+    btn = ctk.CTkButton(
         parent, text=text, command=command, corner_radius=4,
         font=font(SMALL), fg_color="transparent",
-        hover_color=C["sunken"], text_color=C["accent"], **kw)
+        hover_color=C["sunken"], text_color=C["accent"],
+        text_color_disabled=C["disabled"], border_width=0, **kw)
+    btn._kind = "text"  # noqa: SLF001
+    return btn
 
 
 def panel(parent, **kw):

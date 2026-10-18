@@ -871,20 +871,56 @@ def set_enabled(widget, enabled: bool) -> None:
             widget.configure(state=state)
 
 
+def _button_look(widget) -> dict:
+    """Colours to put back when a button is enabled again."""
+    look = {
+        "fg_color": widget.cget("fg_color"),
+        "hover_color": widget.cget("hover_color"),
+        "text_color": widget.cget("text_color"),
+        "border_width": widget.cget("border_width"),
+    }
+    with contextlib.suppress(Exception):
+        look["border_color"] = widget.cget("border_color")
+    return look
+
+
+def _disabled_look(kind: str) -> dict:
+    """Kind-specific disabled colours. Never the shared blue fill."""
+    muted = pair("disabled")
+    if kind == "primary":
+        return {"fg_color": pair("surface_alt"), "text_color_disabled": muted,
+                "border_width": 0}
+    if kind == "text":
+        return {"fg_color": "transparent", "text_color": muted,
+                "text_color_disabled": muted, "border_width": 0}
+    return {"fg_color": pair("surface"), "hover_color": pair("surface_alt"),
+            "text_color_disabled": muted, "border_width": 1,
+            "border_color": pair("border")}
+
+
 def _set_button_enabled(widget, enabled: bool) -> None:
+    """Disabled styling follows the button's kind.
+
+    A disabled primary is a sunken block with muted text, not a blue
+    button and not the shared disabled_fill. A disabled secondary keeps
+    its panel fill and border. A text button stays transparent.
+
+    Enabling restores the colours the button had, so a secondary painted
+    as the one accent action stays accent.
+    """
+    kind = getattr(widget, "_kind", "secondary")
     state = "normal" if enabled else "disabled"
     if enabled:
-        saved = getattr(widget, "_ctk_enabled_fg", None)
-        if saved is not None:
-            widget.configure(state=state, fg_color=saved)
-            widget._ctk_enabled_fg = None  # noqa: SLF001
+        saved = getattr(widget, "_kind_enabled", None)
+        widget._kind_enabled = None  # noqa: SLF001
+        if saved:
+            widget.configure(state=state, **saved)
         else:
-            widget.configure(state=state)
+            widget.configure(state=state, text_color_disabled=pair("disabled"))
         return
-    current = widget.cget("fg_color")
-    if not _is_disabled_button_fg(current):
-        widget._ctk_enabled_fg = current  # noqa: SLF001
-    widget.configure(state=state, fg_color=_btn_disabled_fg())
+    if getattr(widget, "_kind_enabled", None) is None:
+        widget._kind_enabled = _button_look(widget)  # noqa: SLF001
+    widget.configure(state=state, **_disabled_look(kind))
 
 
 def _is_disabled_button_fg(color) -> bool:

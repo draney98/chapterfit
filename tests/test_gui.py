@@ -2016,3 +2016,31 @@ def test_gui_opens_without_numpy(tmp_path, monkeypatch):
         assert app.workflow.quality.available is False
     finally:
         app.destroy()
+
+
+def test_disabled_buttons_are_not_filled_blue(tmp_path):
+    """A disabled control keeps its kind. It is never the shared blue fill."""
+    from chaptertools.gui.theme import pair, set_enabled
+    from chaptertools.gui.ui_kit import primary, secondary, text_button
+
+    app = _make_app(tmp_path)
+    try:
+        host = app.workflow
+        buttons = (
+            primary(host, "Run"),
+            secondary(host, "Check"),
+            text_button(host, "Close"),
+        )
+        banned = {tuple(str(c).lower() for c in pair("disabled_fill")),
+                  tuple(str(c).lower() for c in pair("accent"))}
+
+        def flat(color):
+            if isinstance(color, (tuple, list)):
+                return tuple(str(part).lower() for part in color)
+            return (str(color).lower(),)
+
+        for button in buttons:
+            set_enabled(button, False)
+            assert flat(button.cget("fg_color")) not in banned
+    finally:
+        app.destroy()
