@@ -209,8 +209,7 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         self._rescan_quality = False
         self.chapters_var = tk.StringVar(value="Chapters")
 
-        from .ui_kit import BODY, body
-        from .ui_kit import font as ui_font
+        from .ui_kit import C, body, number, title
 
         shell = ctk_frame(self, fg_color="transparent")
         shell.grid(row=0, column=0, sticky="nsew", padx=14, pady=(4, 0))
@@ -221,16 +220,36 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         head.grid(row=0, column=0, sticky="ew")
         head.columnconfigure(0, weight=1)
         self.book_var = tk.StringVar(value="(nothing selected)")
-        book_lbl = body(head, text="")
-        book_lbl.configure(
-            textvariable=self.book_var, font=ui_font(BODY, "bold"))
-        book_lbl.grid(row=0, column=0, sticky="ew")
-        self._book_label = book_lbl
+        row = ctk_frame(head, fg_color="transparent")
+        row.grid(row=0, column=0, sticky="ew")
+        self._header_row = row
+        self._h_title = title(row, "(nothing selected)")
+        self._h_author = body(row, text="")
+        self._h_dur = number(row, text="")
+        self._h_source = number(row, text="")
+        self._h_file = body(row, text="")
+        for label in (self._h_author, self._h_dur, self._h_source, self._h_file):
+            label.configure(text_color=C["muted"], anchor="w")
+        self._h_title.pack(side="left")
+        for label in (self._h_author, self._h_dur, self._h_source, self._h_file):
+            label.pack(side="left")
+        self._book_label = self._h_title
         self._header_text = "(nothing selected)"
-        head.bind("<Configure>", lambda e: self._fit_header(e.width))
+        self._header_bits = None
+        def _schedule_header(event):
+            pending = getattr(self, "_header_fit_after", None)
+            if pending is not None:
+                self.after_cancel(pending)
+            width = event.width
+            self._header_fit_after = self.after(
+                30, lambda: self._fit_header(width))
+
+        head.bind("<Configure>", _schedule_header)
         self.head_tooltip = None
-        book_lbl.bind("<Enter>", self._show_path_tip)
-        book_lbl.bind("<Leave>", self._hide_tip)
+        for widget in (row, self._h_title, self._h_author, self._h_dur,
+                       self._h_source, self._h_file):
+            widget.bind("<Enter>", self._show_path_tip)
+            widget.bind("<Leave>", self._hide_tip)
         self.found_var = tk.StringVar(value="")
 
         self.rail = StepRail(head, self.show_step)
@@ -256,6 +275,9 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
             match_host, fg_color=kit_colors["bg"], corner_radius=0)
         self._match_scroll.grid(row=0, column=0, sticky="nsew")
         self._match_scroll.columnconfigure(0, weight=1)
+        inner = getattr(self._match_scroll, "_scrollable_frame", None)
+        if inner is not None:
+            inner.bind("<Configure>", self._fit_match_scroll, add="+")
         self._panels = {
             "measure": self._panel_measure(self._main_frames["scan"]),
             "identify": self._panel_identify(self._match_scroll),
@@ -271,6 +293,16 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         self._build_editions(self._main_frames["match"])
         place.add(self._panels["align"], weight=1)
         place.add(self._panels["resolve"], weight=2)
+
+        def _keep_align_visible(_event=None):
+            try:
+                if place.winfo_height() > 220 and place.sashpos(0) < 160:
+                    place.sashpos(0, 160)
+            except tk.TclError:
+                return
+
+        place.bind("<Configure>", _keep_align_visible, add="+")
+        place.after_idle(_keep_align_visible)
         self._build_chapters_tab(self._main_frames["place"])
         self._build_quality_tab(self._main_frames["cleanup"])
         from .multifile_book import MultifileBook
@@ -336,8 +368,15 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
     # ------------------------------------------------------------- tabs --
     def _build_quality_tab(self, parent):
         from chaptertools.gui.quality_tab import QualityTab
-        self.quality = QualityTab(parent, app=self.app, workflow=self)
-        self.quality.grid(row=0, column=0, sticky="nsew")
+        parent.rowconfigure(0, weight=1)
+        parent.columnconfigure(0, weight=1)
+        # At 1366x768 the chain is taller than the pane. Scrolling keeps
+        # every control reachable instead of painting past the window.
+        scroll = ctk.CTkScrollableFrame(
+            parent, fg_color="transparent", corner_radius=0, height=120)
+        scroll.grid(row=0, column=0, sticky="nsew")
+        self.quality = QualityTab(scroll, app=self.app, workflow=self)
+        self.quality.pack(fill="both", expand=True)
 
     def _bind_step_keys(self) -> None:
         root = self.winfo_toplevel()
@@ -363,10 +402,7 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
                 frame.grid_remove()
         self.workspace.set_inspector(
             step in ("match", "place"), table=step == "place")
-        if step == "finish":
-            self.timeline.grid_remove()
-        else:
-            self.timeline.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        self.timeline.grid(row=1, column=0, sticky="ew", pady=(4, 0))
         self._sync_rail()
         bar = getattr(self.app, "player_bar", None)
         if bar is not None:
@@ -774,12 +810,13 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         self._request_facts(harvest=True)
 
     def _update_header(self):
-        """One line: Title — Author · duration · source · file name."""
+        """Title is bold. Author, duration, edition and file stay regular."""
+        from .projection import audio_duration
         from .stages import short_edition_label
         s = self.harvest.get("suggested") or {}
         title = s.get("title") or "(nothing selected)"
         author = s.get("author") or ""
-        dur = ((self.analysis.get("envelope") or {}).get("duration"))
+        dur = audio_duration(self.analysis)
         ident = self.analysis.get("identification") or {}
         source = short_edition_label(
             ident.get("label") or ident.get("candidate"))
@@ -787,14 +824,15 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
             source = short_edition_label(
                 top_asin(self.audio or "", self.work_dir) or "")
         name = os.path.basename(self.audio) if self.audio else ""
-        bits = [f"{title} — {author}" if author else title]
-        if dur:
-            bits.append(hms(dur))
-        if source:
-            bits.append(source)
-        self._header_bits = (bits, name)
+        self._header_bits = {
+            "title": title,
+            "author": author,
+            "duration": hms(dur) if dur else "",
+            "source": source,
+            "name": name,
+        }
         self._header_paths = self._header_path_lines()
-        self._fit_header(self._book_label.master.winfo_width())
+        self._fit_header(self._header_row.master.winfo_width())
 
     def _header_path_lines(self) -> str:
         """Full paths for the header tooltip (audio + chapter sources)."""
@@ -814,21 +852,51 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
     def _fit_header(self, width: int):
         """The header stays one line: the file name is elided from the
         middle first, then the title (full paths live in the tooltip)."""
-        bits, name = getattr(self, "_header_bits", (["(nothing selected)"],
-                                                    ""))
-        font = tkfont.nametofont("TkHeadingFont", root=self)
+        bits = getattr(self, "_header_bits", None) or {
+            "title": self.book_var.get() or "(nothing selected)",
+            "author": "", "duration": "", "source": "", "name": "",
+        }
+        title = bits["title"]
+        name = bits["name"]
         room = max(width - 8, 200) if width > 1 else 10 ** 6
 
-        def text(bits, name):
-            return "  ·  ".join([*bits, name] if name else bits)
+        def piece(label, text):
+            return label.cget("font").measure(text) if text else 0
 
-        if font.measure(text(bits, name)) > room and name:
-            rest = font.measure(text(bits, "")) + font.measure("  ·  ")
-            name = _elide(name, font, max(room - rest, font.measure("ab…yz")))
-        if font.measure(text(bits, name)) > room:
-            rest = font.measure(text(["", *bits[1:]], name))
-            bits = [_elide(bits[0], font, max(room - rest, 80)), *bits[1:]]
-        self.book_var.set(text(bits, name))
+        def line_width(title_text, name_text):
+            total = piece(self._h_title, title_text)
+            total += piece(self._h_author, f"  ·  {bits['author']}" if bits["author"] else "")
+            total += piece(self._h_dur, f"  ·  {bits['duration']}" if bits["duration"] else "")
+            total += piece(self._h_source, f"  ·  {bits['source']}" if bits["source"] else "")
+            total += piece(self._h_file, f"  ·  {name_text}" if name_text else "")
+            return total
+
+        if line_width(title, name) > room and name:
+            rest = line_width(title, "")
+            name = _elide(name, self._h_file.cget("font"),
+                          max(room - rest - piece(self._h_file, "  ·  "), 48))
+        if line_width(title, name) > room:
+            rest = line_width("", name)
+            title = _elide(title, self._h_title.cget("font"), max(room - rest, 80))
+        def _set(label, text):
+            if str(label.cget("text") or "") != text:
+                label.configure(text=text)
+
+        _set(self._h_title, title)
+        _set(self._h_author, f"  ·  {bits['author']}" if bits["author"] else "")
+        _set(self._h_dur, f"  ·  {bits['duration']}" if bits["duration"] else "")
+        _set(self._h_source, f"  ·  {bits['source']}" if bits["source"] else "")
+        _set(self._h_file, f"  ·  {name}" if name else "")
+        shown = [title]
+        if bits["author"]:
+            shown.append(bits["author"])
+        if bits["duration"]:
+            shown.append(bits["duration"])
+        if bits["source"]:
+            shown.append(bits["source"])
+        if name:
+            shown.append(name)
+        self.book_var.set("  ·  ".join(shown))
 
     def _show_path_tip(self, _event=None):
         self._hide_tip()
@@ -844,6 +912,27 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         ttk.Label(self.head_tooltip, text=tip_text, style="Tip.TLabel",
                   font="TkDefaultFont", justify="left",
                   takefocus=0).pack(padx=1, pady=1)
+
+    def _fit_match_scroll(self, _event=None, frame=None):
+        """Hide a scrollbar when its content fits."""
+        if frame is None or not hasattr(frame, "_scrollbar"):
+            frame = getattr(self, "_match_scroll", None)
+        if frame is None:
+            return
+        bar = getattr(frame, "_scrollbar", None)
+        canvas = getattr(frame, "_parent_canvas", None)
+        if bar is None or canvas is None:
+            return
+        bbox = canvas.bbox("all")
+        height = canvas.winfo_height()
+        if height < 2:
+            return
+        fits = not bbox or bbox[3] <= height + 1
+        shown = bool(bar.winfo_ismapped())
+        if fits and shown:
+            bar.grid_remove()
+        elif not fits and not shown:
+            bar.grid()
 
     def _hide_tip(self, _event=None):
         if getattr(self, "head_tooltip", None) is not None:
@@ -887,8 +976,11 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
             self.analysis = load_analysis(self.audio, self.work_dir)
         session = self.app.session
         session.scan = self.analysis or None
-        env = (self.analysis or {}).get("envelope") or {}
-        session.duration = float(env.get("duration") or 0.0)
+        from .projection import audio_duration
+        session.duration = float(audio_duration(self.analysis) or 0.0)
+        bar = getattr(self.app, "player_bar", None)
+        if bar is not None:
+            bar.update_time(None)
         session.chapters = list((self.analysis or {}).get("chapters") or [])
         session.emit("scan")
         self._apply_book_info()

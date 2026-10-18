@@ -115,9 +115,8 @@ class MultifileBook(ctk.CTkFrame):
             self.table.column(col, width=width, stretch=col == "title")
         self.table.grid(row=0, column=0, sticky="nsew")
         self.table.bind("<Double-1>", self._play_row)
-        sb = ttk.Scrollbar(body, orient="vertical", command=self.table.yview)
-        sb.grid(row=0, column=0, sticky="nse")
-        self.table.configure(yscrollcommand=sb.set)
+        from .ui_kit import vscroll
+        vscroll(body, self.table, row=0, column=0, sticky="nse")
 
         side = ctk_frame(body, width=380)
         side.grid(row=0, column=1, sticky="nsew", padx=(8, 0))

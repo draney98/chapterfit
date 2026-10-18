@@ -59,31 +59,29 @@ def grab_window(app, path: str) -> None:
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
     app.update_idletasks()
-    app.update()
     x = int(app.winfo_rootx())
     y = int(app.winfo_rooty())
     width = int(app.winfo_width())
     height = int(app.winfo_height())
     if width < 2 or height < 2:
         raise RuntimeError("window has no size yet")
-    bbox = (x, y, x + width, y + height)
+    wid = hex(int(app.winfo_id()))
     try:
-        from PIL import ImageGrab
-        image = ImageGrab.grab(bbox=bbox)
-        image.save(out)
+        subprocess.run(
+            ["import", "-window", wid, str(out)],
+            check=True, capture_output=True, text=True, timeout=15)
         return
-    except Exception as pillow_err:
-        wid = hex(int(app.winfo_id()))
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as magick_err:
         try:
-            subprocess.run(
-                ["import", "-window", wid, str(out)],
-                check=True, capture_output=True, text=True)
+            from PIL import ImageGrab
+            image = ImageGrab.grab(bbox=(x, y, x + width, y + height))
+            image.save(out)
             return
-        except (OSError, subprocess.CalledProcessError) as magick_err:
+        except Exception as pillow_err:
             raise SystemExit(
-                f"screenshot failed (PIL: {pillow_err}; "
-                f"ImageMagick: {magick_err})"
-            ) from magick_err
+                f"screenshot failed (ImageMagick: {magick_err}; "
+                f"PIL: {pillow_err})"
+            ) from pillow_err
 
 
 def run_screenshot(argv: list[str]) -> int:
@@ -119,11 +117,11 @@ def run_screenshot(argv: list[str]) -> int:
 
     def _capture() -> None:
         try:
-            # Wait out set_book autoscan and the async harvest (NFO rows).
+            # update() never returns while a job keeps posting events.
             import time
             deadline = time.monotonic() + 5.0
             while time.monotonic() < deadline:
-                app.update()
+                app.update_idletasks()
                 harvest = getattr(app.workflow, "harvest", None) or {}
                 ready = (not app.runner.busy
                          and not harvest.get("loading", False))
@@ -146,8 +144,8 @@ def run_screenshot(argv: list[str]) -> int:
             grab_window(app, args.screenshot)
         except BaseException as exc:  # noqa: BLE001 — surface to caller
             result["err"] = exc
-        finally:
-            app.quit()
+        # quit() does not return while idle timers keep the queue busy.
+        os._exit(1 if result["err"] is not None else 0)
 
     app.after(max(0, args.settle_ms), _capture)
     app.mainloop()

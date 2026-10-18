@@ -45,14 +45,35 @@ def time_to_x(seconds: float, start: float, end: float, width: int,
 
 
 def label_indexes(xs: list[float], min_gap: float = _LABEL_GAP) -> list[int]:
-    """Indexes whose labels fit ≥ min_gap px after the previous drawn label."""
-    kept: list[int] = []
-    last = -1e9
-    for index, x in enumerate(xs):
-        if x - last >= min_gap:
-            kept.append(index)
-            last = x
-    return kept
+    """Every Nth label, N the smallest stride that avoids overlap.
+
+    The first and last chapter are always labelled. Every mark is still drawn.
+    """
+    count = len(xs)
+    if count == 0:
+        return []
+    if count == 1:
+        return [0]
+
+    def chosen(stride: int) -> list[int]:
+        indexes = list(range(0, count, stride))
+        if indexes[-1] != count - 1:
+            indexes.append(count - 1)
+        return indexes
+
+    def fits(indexes: list[int]) -> bool:
+        last = xs[indexes[0]]
+        for index in indexes[1:]:
+            if xs[index] - last < min_gap:
+                return False
+            last = xs[index]
+        return True
+
+    for stride in range(1, count):
+        indexes = chosen(stride)
+        if fits(indexes):
+            return indexes
+    return [0, count - 1]
 
 
 def silence_pixel_xs(gaps: list[dict], start: float, end: float,
@@ -107,7 +128,7 @@ class Timeline(ctk.CTkFrame):
             value="duration", command=self.redraw)
         self._opts = secondary(
             bar, "Options ▾", command=self._open_options, width=110)
-        self._opts.grid(row=0, column=2, sticky="e")
+        self._opts.grid(row=0, column=2, sticky="e", padx=(PAD, PLOT_INSET))
         tips.tooltip(self._opts, "which candidate silences to emphasise")
         self.legend = tk.StringVar(value="")  # kept for callers; unused in chrome
 
@@ -306,11 +327,14 @@ class Timeline(ctk.CTkFrame):
                                     fill=C["bad_fg"], width=0)
 
     def _draw_silences(self, canvas, data, start, end, width, height) -> None:
-        x0, y0, plot_w, _plot_h = plot_box(width, height)
-        # All gaps: 6 px ticks in the top silence lane (never full-height).
+        x0, y0, plot_w, plot_h = plot_box(width, height)
+        # Silences sit in the bottom third so chapter marks stay readable.
+        band = max(_TICK, plot_h // 3)
+        bottom = y0 + plot_h
         for x in silence_pixel_xs(data["gaps"], start, end, plot_w):
             canvas.create_line(
-                x0 + x, y0, x0 + x, y0 + _TICK, fill=C["silence"], width=1)
+                x0 + x, bottom - band, x0 + x, bottom,
+                fill=C["silence"], width=1)
         # Candidate extras (Options mode) get a slightly taller tick + tip.
         _chapters, extras = gap_marks(data["gaps"], data["rows"], self.mode.get())
         for item in extras:
@@ -321,7 +345,7 @@ class Timeline(ctk.CTkFrame):
             x = self._x(mid, start, end, width)
             tag = f"gap{round(mid, 3)}"
             canvas.create_line(
-                x, y0, x, y0 + _TICK + 4, fill=C["silence"], width=2,
+                x, bottom - band - 4, x, bottom, fill=C["silence"], width=1,
                 tags=(tag,))
             tip = f"{hms(mid)} · {gap.get('dur', 0):.2f} s silence"
             canvas.tag_bind(tag, "<Enter>",

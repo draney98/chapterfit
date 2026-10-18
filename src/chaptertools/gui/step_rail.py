@@ -8,7 +8,7 @@ import customtkinter as ctk  # noqa: E402 — after ui_kit font pick
 
 from .stages import ATTENTION, BLOCKED, DONE, PENDING
 from .tips import tooltip
-from .ui_kit import PAD, BODY, C, font, small
+from .ui_kit import PAD, BODY, C, body, font, small
 
 _FIX = {
     "identify first": "On Match, Search for the book, then choose an edition.",
@@ -56,26 +56,21 @@ class StepRail(ctk.CTkFrame):
         for index, key in enumerate(STEPS):
             col = index
             cell = ctk.CTkFrame(
-                self, width=140, height=52, corner_radius=4,
-                fg_color=C["bg"], cursor="hand2",
+                self, corner_radius=4, fg_color=C["sunken"], cursor="hand2",
                 border_width=0)
             cell.grid(row=0, column=col, sticky="nsew", padx=PAD // 2, pady=2)
-            cell.grid_propagate(False)
             cell.columnconfigure(0, weight=1)
-            cell.rowconfigure(2, weight=1)
-            title = ctk.CTkLabel(
-                cell, text=STEP_LABELS[key], anchor="w", height=18,
-                font=font(BODY, "bold"), text_color=C["text"],
-                fg_color="transparent")
-            title.grid(row=0, column=0, sticky="ew", padx=PAD, pady=(6, 0))
+            title = body(cell, text=STEP_LABELS[key])
+            title.configure(anchor="w", font=font(BODY, "bold"))
+            title.grid(row=0, column=0, sticky="ew", padx=PAD, pady=(PAD, 0))
             var = tk.StringVar(value="")
             self._subs[key] = var
             sub = small(cell, text="")
-            sub.configure(textvariable=var, height=18)
-            sub.grid(row=1, column=0, sticky="ew", padx=PAD, pady=(0, 2))
+            sub.configure(textvariable=var, wraplength=160)
+            sub.grid(row=1, column=0, sticky="ew", padx=PAD, pady=(0, PAD))
             bar = ctk.CTkFrame(
-                cell, width=1, height=2, corner_radius=0, fg_color=C["border"])
-            bar.grid(row=3, column=0, sticky="sew")
+                cell, height=2, corner_radius=0, fg_color=C["border"])
+            bar.grid(row=2, column=0, sticky="ew")
             cell._bar = bar  # noqa: SLF001
             for widget in (cell, title, sub):
                 widget.bind("<Button-1>", lambda _e, k=key: self.on_pick(k))
@@ -148,12 +143,10 @@ class StepRail(ctk.CTkFrame):
 
     def _paint(self, key: str, current: bool) -> None:
         cell = self._buttons[key]
-        bg = C["panel"] if current else C["bg"]
-        bar_h = 3 if current else 2
-        bar_bg = C["accent"] if current else C["border"]
+        bg = C["panel"] if current else C["sunken"]
+        bar_bg = C["accent"] if current else C["sunken"]
         cell.configure(fg_color=bg)
-        self._title[key].configure(fg_color="transparent")
-        cell._bar.configure(height=bar_h, fg_color=bar_bg)  # noqa: SLF001
+        cell._bar.configure(height=2, fg_color=bar_bg)  # noqa: SLF001
 
 
 def blocked_hint(key: str, states: dict) -> str:

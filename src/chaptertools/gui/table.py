@@ -189,9 +189,8 @@ class TableViews:
         self.tree.tag_configure("lowconf", background=palette.ROW_LOWCONF)
         self.tree.tag_configure("conflict", background=palette.ROW_CONFLICT)
         self.tree.grid(row=0, column=0, sticky="nsew")
-        sb = ttk.Scrollbar(tab, orient="vertical", command=self.tree.yview)
-        sb.grid(row=0, column=1, sticky="ns")
-        self.tree.configure(yscrollcommand=sb.set)
+        from .ui_kit import vscroll
+        vscroll(tab, self.tree, row=0, column=1, sticky="ns")
         self.tree.bind("<Double-1>", lambda e: self.preview_row())
         self.tree.bind("<<TreeviewSelect>>", self._fill_from_selection)
         for seq, fn in (("space", self._key_playpause),

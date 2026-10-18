@@ -128,9 +128,8 @@ class LibrivoxView(ctk.CTkFrame):
             self.results.column(col, width=width, stretch=col in ("title", "author"))
         self.results.tag_configure("unfinished", foreground=palette.MUTED)
         self.results.grid(row=0, column=0, sticky="nsew")
-        sb = ttk.Scrollbar(body, orient="vertical", command=self.results.yview)
-        sb.grid(row=0, column=0, sticky="nse")
-        self.results.configure(yscrollcommand=sb.set)
+        from .ui_kit import vscroll
+        vscroll(body, self.results, row=0, column=0, sticky="nse")
         self.results.bind("<<TreeviewSelect>>", self._on_result_select)
         self.results.bind("<Double-1>", self._on_result_activate)
         self.results.bind("<Return>", self._on_result_activate)

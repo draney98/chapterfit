@@ -72,6 +72,11 @@ def ctk_px(size: int = BODY) -> int:
     return max(size, int(round(size / _CTK_DRAW)))
 
 
+def fmt_int(value: int) -> str:
+    """Counts use a comma thousands separator: 4549 → 4,549."""
+    return f"{int(value):,}"
+
+
 def font(size=BODY, weight="normal", mono=False, underline=False):
     return ctk.CTkFont(
         family=MONO if mono else FONT, size=ctk_px(size), weight=weight,
@@ -123,9 +128,11 @@ def secondary(parent, text, command=None, **kw):
 
 def text_button(parent, text, command=None, **kw):
     """e.g. reset glyph, Edit in Match."""
+    kw.setdefault("width", 10)
+    kw.setdefault("height", 26)
     return ctk.CTkButton(
-        parent, text=text, command=command, height=26, width=10,
-        corner_radius=4, font=font(SMALL), fg_color="transparent",
+        parent, text=text, command=command, corner_radius=4,
+        font=font(SMALL), fg_color="transparent",
         hover_color=C["sunken"], text_color=C["accent"], **kw)
 
 
@@ -151,6 +158,35 @@ def checkbox(parent, text, variable=None, command=None):
         parent, text=text, variable=variable, command=command, font=font(BODY),
         checkbox_width=18, checkbox_height=18, corner_radius=3, border_width=1,
         fg_color=C["accent"], border_color=C["border"], text_color=C["text"])
+
+
+def vscroll(parent, widget, **grid):
+    """A themed scrollbar that hides when the widget's content fits."""
+    bar = ctk.CTkScrollbar(parent, orientation="vertical", command=widget.yview)
+    state = {"busy": False, "shown": False}
+
+    def _set(first, last):
+        bar.set(first, last)
+        if state["busy"]:
+            return
+        fits = float(first) <= 0.0 and float(last) >= 0.999
+        show = not fits
+        if show == state["shown"]:
+            return
+        state["busy"] = True
+        state["shown"] = show
+        try:
+            if show:
+                bar.grid(**grid)
+            else:
+                bar.grid_remove()
+        finally:
+            state["busy"] = False
+
+    widget.configure(yscrollcommand=_set)
+    bar.grid(**grid)
+    bar.grid_remove()
+    return bar
 
 
 def style_treeview(root):

@@ -100,6 +100,27 @@ class App(ctk.CTk):
         need_h = self.workflow.min_height() + 60  # menu + status bar
         self.minsize(max(need_w, 1024), max(need_h, 600))
 
+    def geometry(self, geometry_string=None):
+        if geometry_string is not None:
+            self._geometry_pending = geometry_string
+        return super().geometry(geometry_string)
+
+    def update(self):
+        """Re-apply a geometry the first map snapped to the minimum size.
+
+        CustomTkinter ignores ``geometry`` until the window has been
+        mapped, then opens at ``minsize`` and forgets the request.
+        """
+        pending = getattr(self, "_geometry_pending", None)
+        super().update()
+        if not pending:
+            return
+        self._geometry_pending = None
+        if self.winfo_width() <= 1:
+            return
+        super().geometry(pending)
+        super().update_idletasks()
+
     def _setup_fonts(self, base: int | None = None):
         if base is None:
             base = int(os.environ.get("CHAPTERGUI_FONT", "14"))
@@ -170,7 +191,28 @@ class App(ctk.CTk):
         help_menu.add_command(label="About chaptertools",
                               command=self._show_about)
         menu.add_cascade(label="Help", menu=help_menu)
-        self.config(menu=menu)
+        # A native menubar sits on the window edge and clips "File".
+        # These buttons post the same menus, inset with the rest of the shell.
+        from .ui_kit import SMALL, font, text_button
+        bar = ctk_frame(self, fg_color="transparent")
+        bar.pack(side="top", fill="x", padx=14, pady=(4, 0))
+        self._menu_bar = bar
+
+        def post(submenu, widget):
+            x = widget.winfo_rootx()
+            y = widget.winfo_rooty() + widget.winfo_height()
+            try:
+                submenu.tk_popup(x, y)
+            finally:
+                submenu.grab_release()
+
+        for label, submenu in (
+                ("File", file_menu), ("View", view), ("Help", help_menu)):
+            button = text_button(
+                bar, label, width=font(SMALL).measure(label) + 20)
+            button.configure(
+                command=lambda w=button, m=submenu: post(m, w))
+            button.pack(side="left", padx=(0, 8))
 
     def _show_shortcuts(self):
         messagebox.showinfo(
@@ -204,7 +246,7 @@ class App(ctk.CTk):
             lib, text="›", width=36, height=28, command=self.toggle_library)
         self._lib_body = ctk_frame(lib, corner_radius=0, fg_color=C["bg"])
         self._lib_body.pack(side="top", fill="both", expand=True,
-                            padx=PAD // 2, pady=PAD // 2)
+                            padx=14, pady=PAD // 2)
         self._lib_body.columnconfigure(0, weight=1)
         self._lib_body.rowconfigure(2, weight=1)
 
@@ -215,7 +257,7 @@ class App(ctk.CTk):
         self._search_has_placeholder = False
         search_entry = ctk.CTkEntry(
             searchbar, textvariable=self.search_var,
-            placeholder_text="Search title or author",
+            placeholder_text="Search books",
             fg_color=C["panel"], border_color=C["border"],
             text_color=C["text"])
         search_entry.grid(row=0, column=0, sticky="ew")
@@ -226,8 +268,10 @@ class App(ctk.CTk):
 
         self.search_var.trace_add("write", _on_search_write)
         search_entry.bind("<Escape>", lambda e: self.search_var.set(""))
-        secondary(searchbar, "‹", command=self.toggle_library, width=36).grid(
-            row=0, column=1, padx=(PAD // 2, 0))
+        collapse = secondary(searchbar, "‹", command=self.toggle_library, width=36)
+        collapse.grid(row=0, column=1, padx=(PAD // 2, 0))
+        from . import tips
+        tips.tooltip(collapse, "Hide the library")
 
         chips = ctk_frame(self._lib_body, fg_color="transparent")
         chips.grid(row=1, column=0, sticky="ew", pady=(0, PAD // 2))
@@ -253,8 +297,8 @@ class App(ctk.CTk):
         paint_segment_text(self._lib_seg)
         self._lib_count_var = tk.StringVar(value="")
         self._lib_count = small(chips, text="")
-        self._lib_count.configure(textvariable=self._lib_count_var, anchor="e")
-        self._lib_count.grid(row=0, column=1, sticky="e", padx=(PAD // 2, 0))
+        self._lib_count.configure(textvariable=self._lib_count_var, anchor="w")
+        self._lib_count.grid(row=1, column=0, sticky="w", pady=(4, 0))
 
         tree_box = ctk_frame(self._lib_body, fg_color="transparent")
         tree_box.grid(row=2, column=0, sticky="nsew")
@@ -266,10 +310,12 @@ class App(ctk.CTk):
         self.lib_tree.column("#0", stretch=True, minwidth=40)
         self.lib_tree.column("status", width=56, stretch=False, anchor="e")
         self.lib_tree.grid(row=0, column=0, sticky="nsew")
-        sb = ttk.Scrollbar(tree_box, orient="vertical",
-                           command=self.lib_tree.yview)
-        sb.grid(row=0, column=1, sticky="ns")
-        self.lib_tree.configure(yscrollcommand=sb.set)
+        from .ui_kit import vscroll
+        vscroll(tree_box, self.lib_tree, row=0, column=1, sticky="ns")
+        self._status_tips: dict[str, str] = {}
+        self.lib_tree.bind("<Motion>", self._library_status_tip)
+        self.lib_tree.bind("<Leave>", self._hide_status_tip)
+        self._status_tip = None
         self.lib_tree.bind("<<TreeviewSelect>>", self._on_select)
         self._librivox_btn = secondary(
             self._lib_body, "+ Get a book from LibriVox…",
@@ -282,7 +328,7 @@ class App(ctk.CTk):
         self.busy_var = tk.StringVar(value="")
         self.status_var = tk.StringVar(value="")
         self.player_bar = PlayerBar(self, self)
-        self.player_bar.pack(side="bottom", fill="x", before=pane)
+        self.player_bar.pack(side="bottom", fill="x", padx=14, before=pane)
         self.job_window = JobWindow(self)
         self.session.subscribe("job", self.job_window.sync)
         self.log_drawer = LogDrawer(self)
@@ -724,6 +770,7 @@ class App(ctk.CTk):
         query = (query or "").strip().lower()
         active = len(query) >= 3
         self.lib_tree.delete(*self.lib_tree.get_children())
+        self._status_tips = {}
         selected = self.lib_tree.selection()
         shown_books = 0
         total_books = 0
@@ -769,6 +816,9 @@ class App(ctk.CTk):
                     self.lib_tree.insert(
                         author_id, "end", iid=iid, text=label,
                         values=(status,))
+                    tip = _status_tip(status)
+                    if tip:
+                        self._status_tips[iid] = tip
                     shown_books += 1
                 else:
                     label = _book_label(path, self._library[author])
@@ -776,13 +826,43 @@ class App(ctk.CTk):
                     self.lib_tree.insert(
                         author_id, "end", iid=str(path), text=label,
                         values=(status,))
+                    tip = _status_tip(status)
+                    if tip:
+                        self._status_tips[str(path)] = tip
                     shown_books += 1
 
         if selected and self.lib_tree.exists(selected[0]):
             self.lib_tree.selection_set(selected[0])
         if hasattr(self, "_lib_count_var"):
             self._lib_count_var.set(
-                f"{shown_books}/{total_books}" if total_books else "")
+                f"{shown_books} books" if total_books else "")
+
+    def _library_status_tip(self, event):
+        row = self.lib_tree.identify_row(event.y)
+        col = self.lib_tree.identify_column(event.x)
+        text = self._status_tips.get(row, "") if col == "#1" else ""
+        current = getattr(self, "_status_tip_text", "")
+        if text == current:
+            return
+        self._hide_status_tip()
+        self._status_tip_text = text
+        if not text:
+            return
+        tip = tk.Toplevel(self)
+        tip.wm_overrideredirect(True)
+        tip.wm_geometry(f"+{event.x_root + 12}+{event.y_root + 16}")
+        from . import palette
+        tip.configure(background=palette.BORDER)
+        ttk.Label(tip, text=text, style="Tip.TLabel", takefocus=0).pack(
+            padx=1, pady=1)
+        self._status_tip = tip
+
+    def _hide_status_tip(self, _event=None):
+        tip = getattr(self, "_status_tip", None)
+        if tip is not None:
+            tip.destroy()
+            self._status_tip = None
+        self._status_tip_text = ""
 
     def _apply_search(self):
         self._render_library(self.search_var.get())
@@ -1039,6 +1119,14 @@ def _folder_librivox(folder: str) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+def _status_tip(status: str) -> str:
+    if status == "✓":
+        return "4 of 4 steps done"
+    if status == "•":
+        return "Needs work"
+    return ""
+
+
 def _book_status(folder: str, files: list[str], meta: dict | None) -> str:
     """Right-aligned library status: 4/4, 1/4, 27 files, ↓ 9/27."""
     if meta and meta.get("fetch"):
@@ -1051,11 +1139,10 @@ def _book_status(folder: str, files: list[str], meta: dict | None) -> str:
     audio = files[0] if files else ""
     marks = book_marks(audio) if audio else ""
     if "✓" in marks:
-        return "4/4"
+        return "✓"
     if marks:
-        # crude progress from glyphs; detailed stage count is in the rail
-        return "1/4" if "●" in marks else "0/4"
-    return "0/4"
+        return "•"
+    return ""
 
 
 def main(argv: list[str] | None = None):

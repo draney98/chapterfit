@@ -25,6 +25,33 @@ from .stages import (
 )
 
 
+def audio_duration(analysis: dict) -> float | None:
+    """The measured audio length. The container header is not this number."""
+    src = (analysis or {}).get("source") or {}
+    decoded = src.get("decoded_duration")
+    if isinstance(decoded, (int, float)) and decoded > 0:
+        return float(decoded)
+    env = ((analysis or {}).get("envelope") or {}).get("duration")
+    if isinstance(env, (int, float)) and env > 0:
+        return float(env)
+    return None
+
+
+def duration_mismatch_note(analysis: dict) -> str:
+    """One muted sentence when the file header disagrees with the audio."""
+    src = (analysis or {}).get("source") or {}
+    declared = src.get("declared_duration")
+    decoded = src.get("decoded_duration")
+    if not isinstance(declared, (int, float)) or not isinstance(decoded, (int, float)):
+        return ""
+    if abs(float(declared) - float(decoded)) < 0.05:
+        return ""
+    delta = src.get("header_error_sec")
+    if not isinstance(delta, (int, float)):
+        delta = float(declared) - float(decoded)
+    return f"The file header is {delta:+.1f} s off the measured audio."
+
+
 @dataclass(frozen=True)
 class TableRow:
     """One chapter as the table paints it."""
@@ -146,16 +173,15 @@ class WorkflowProjection:
         gaps = self.analysis.get("gaps") or {}
         pops = gaps.get("populations") or []
         src = self.analysis.get("source") or {}
-        lines = [f"{len(gaps.get('gaps') or [])} gaps in {len(pops)} "
+        from .ui_kit import fmt_int
+        n_gaps = len(gaps.get("gaps") or [])
+        lines = [f"{fmt_int(n_gaps)} gaps in {len(pops)} "
                  f"length populations"
                  + (f"; longest: {pops[-1]['n']} around "
                     f"{pops[-1]['centre']:.1f} s" if pops else "")]
-        if src.get("declared_duration") is not None \
-                and src.get("decoded_duration") is not None:
-            lines.append(
-                f"header says {hms(src['declared_duration'])}, audio is "
-                f"{hms(src['decoded_duration'])} "
-                f"({src.get('header_error_sec', 0):+.1f} s)")
+        note = duration_mismatch_note(self.analysis)
+        if note:
+            lines.append(note)
         if self.header_fix:
             lines.append(
                 f"The header is wrong by "

@@ -231,9 +231,7 @@ class StagePanels:
         self.hints_box.grid(row=0, column=3, sticky="ew")
         self._tip(self.hints_box, "one CH=TIME per line, for example 12=3:45:00")
         self.align_btn = self._primary(p, 0, 4, "Align", self.cmd_align)
-        ctk.CTkLabel(p, text="places every published chapter on a real gap",
-                     anchor="w").grid(row=1, column=0, columnspan=5, sticky="w")
-        self.align_result = self._result_line(p, row=2, colspan=5)
+        self.align_result = self._result_line(p, row=1, colspan=5)
         self._tip(self.align_btn, "place every published chapter on a "
                   "real gap, keeping local reading rate consistent")
         self._tip(self.min_conf_spin, "chapters below this confidence are "
@@ -242,8 +240,13 @@ class StagePanels:
 
     def _panel_resolve(self, host):
         p = ctk_frame(host, fg_color="transparent", corner_radius=0)
-        summary = ctk_frame(p, fg_color="transparent")
-        summary.grid(row=0, column=0, columnspan=2, sticky="ew", padx=4, pady=2)
+        p.rowconfigure(0, weight=1)
+        p.columnconfigure(0, weight=1)
+        self._resolve_scroll = ctk.CTkScrollableFrame(
+            p, fg_color="transparent", corner_radius=0, height=120)
+        self._resolve_scroll.grid(row=0, column=0, sticky="nsew")
+        summary = ctk_frame(self._resolve_scroll, fg_color="transparent")
+        summary.pack(fill="x", padx=4, pady=2)
         self.unresolved_frame = ctk_frame(summary, fg_color="transparent")
         self.unresolved_frame.pack(side="top", anchor="w", fill="x")
         self.next_var = tk.StringVar(value="")
@@ -252,8 +255,13 @@ class StagePanels:
             summary, textvariable=self.next_var, text_color=palette.OK,
             font=font(BODY, "bold"), anchor="w")
         self.next_label.pack(side="top", anchor="w")
-
-        left = ctk_frame(p, corner_radius=8, border_width=1,
+        inner = getattr(self._resolve_scroll, "_scrollable_frame", None)
+        if inner is not None:
+            inner.bind(
+                "<Configure>",
+                lambda _e: self._fit_match_scroll(frame=self._resolve_scroll),
+                add="+")
+        left = ctk_frame(self._resolve_scroll, corner_radius=8, border_width=1,
                          border_color=palette.BORDER, fg_color=palette.RAIL_IDLE)
         ctk.CTkLabel(left, text="Automatic", height=20,
                      font=font(BODY, "bold"), anchor="w").grid(
@@ -358,8 +366,7 @@ class StagePanels:
     def _layout_resolve(self, side_by_side: bool):
         del side_by_side
         left = self._resolve_left
-        left.master.columnconfigure(0, weight=1)
-        left.grid(row=1, column=0, sticky="nsew", padx=4, pady=2)
+        left.pack(fill="x", padx=4, pady=2)
 
     def _build_book_info(self, parent):
         from chaptertools.gui.ui_kit import (
@@ -432,8 +439,8 @@ class StagePanels:
         self.asin_tree = ttk.Treeview(table_card, columns=cols, show="headings",
                                       height=8)
         headings = (
-            ("marker", "", 24, "center"),
-            ("asin", "ASIN", 130, "w"),
+            ("marker", "", 36, "center"),
+            ("asin", "ASIN", 150, "w"),
             ("title", "Title", 180, "w"),
             ("narrator", "Narrator", 170, "w"),
             ("length", "Length", 80, "e"),
@@ -492,6 +499,20 @@ class StagePanels:
     def _panel_emit(self, host):
         """Finish: one-column write table, plan box, Dry run / Apply."""
         from chaptertools.gui.ui_kit import BODY, SMALL, font
+
+        def _fit_label(lbl):
+            def _wrap(_event=None):
+                width = lbl.winfo_width()
+                if width < 40:
+                    return
+                lbl.configure(wraplength=width)
+                for child in lbl.winfo_children():
+                    try:
+                        child.configure(wraplength=width)
+                    except tk.TclError:
+                        pass
+            lbl.bind("<Configure>", _wrap)
+            lbl.after_idle(_wrap)
         p = ctk_frame(host, fg_color="transparent", corner_radius=0)
         p.columnconfigure(0, weight=1)
         p.rowconfigure(3, weight=1)
@@ -511,11 +532,20 @@ class StagePanels:
         head.grid(row=0, column=0, sticky="ew", pady=(0, 6))
         ctk.CTkLabel(head, text="Finish",
                      font=font(BODY, "bold")).pack(side="left")
-        ctk.CTkLabel(
+        note = ctk.CTkLabel(
             head,
             text="Writes one new file into the library. "
                  "The first original is always kept.",
-            text_color=palette.MUTED).pack(side="left", padx=(10, 0))
+            text_color=palette.MUTED, anchor="w", justify="left",
+            wraplength=360)
+        note.pack(side="left", fill="x", expand=True, padx=(10, 0))
+
+        def _wrap_finish_note(_event=None):
+            width = note.winfo_width()
+            if width > 40:
+                note.configure(wraplength=width)
+
+        note.bind("<Configure>", _wrap_finish_note)
 
         table = ctk_frame(p, fg_color="transparent")
         table.grid(row=1, column=0, sticky="ew")
@@ -537,9 +567,11 @@ class StagePanels:
         self.chapters_check = ctk.CTkCheckBox(
             inner, text="Chapters", variable=self.embed_var)
         self.chapters_check.grid(row=1, column=0, sticky="w", padx=8, pady=4)
-        ctk.CTkLabel(inner, textvariable=self.chapters_card,
-                     text_color=palette.TEXT, anchor="w", text="").grid(
-            row=1, column=1, sticky="ew", padx=8)
+        chapters_lbl = ctk.CTkLabel(inner, textvariable=self.chapters_card,
+                     text_color=palette.TEXT, anchor="w", justify="left",
+                     text="", wraplength=200)
+        chapters_lbl.grid(row=1, column=1, sticky="ew", padx=8)
+        _fit_label(chapters_lbl)
         ctk.CTkLabel(inner, text="Embed in the audio",
                      text_color=palette.TEXT, anchor="w").grid(
             row=1, column=2, sticky="w", padx=8)
@@ -553,9 +585,11 @@ class StagePanels:
         ctk.CTkCheckBox(inner, text="Tags", variable=self.tags_on,
                         state="disabled").grid(
             row=2, column=0, sticky="w", padx=8, pady=4)
-        ctk.CTkLabel(inner, textvariable=self.tags_card,
-                     text_color=palette.TEXT, anchor="w", text="").grid(
-            row=2, column=1, sticky="ew", padx=8)
+        tags_lbl = ctk.CTkLabel(inner, textvariable=self.tags_card,
+                     text_color=palette.TEXT, anchor="w", justify="left",
+                     text="", wraplength=200)
+        tags_lbl.grid(row=2, column=1, sticky="ew", padx=8)
+        _fit_label(tags_lbl)
         ctk.CTkLabel(inner, text="also written to album.nfo",
                      text_color=palette.TEXT, anchor="w").grid(
             row=2, column=2, sticky="w", padx=8)
@@ -570,9 +604,11 @@ class StagePanels:
             variable=self.include_cleanup,
             command=self._sync_cleanup_choice).grid(
             row=3, column=0, sticky="w", padx=8, pady=4)
-        ctk.CTkLabel(inner, textvariable=self.cleanup_card,
-                     text_color=palette.TEXT, anchor="w", text="").grid(
-            row=3, column=1, sticky="ew", padx=8)
+        cleanup_lbl = ctk.CTkLabel(inner, textvariable=self.cleanup_card,
+                     text_color=palette.TEXT, anchor="w", justify="left",
+                     text="", wraplength=200)
+        cleanup_lbl.grid(row=3, column=1, sticky="ew", padx=8)
+        _fit_label(cleanup_lbl)
         opt = ctk_frame(inner, fg_color="transparent")
         opt.grid(row=3, column=2, sticky="w", padx=8)
         ctk.CTkLabel(opt, text="MP3").pack(side="left")
@@ -628,7 +664,19 @@ class StagePanels:
             text="Allow delete-and-re-add in Audiobookshelf "
                  "(clears listening progress)",
             variable=self.allow_delete_var)
-        allow_delete_cb.grid(row=0, column=0, columnspan=3, sticky="w")
+        allow_delete_cb.grid(row=0, column=0, columnspan=3, sticky="ew")
+
+        def _wrap_allow_delete(_event=None):
+            width = allow_delete_cb.winfo_width()
+            if width < 40:
+                return
+            for child in allow_delete_cb.winfo_children():
+                try:
+                    child.configure(wraplength=max(80, width - 28))
+                except tk.TclError:
+                    pass
+
+        allow_delete_cb.bind("<Configure>", _wrap_allow_delete)
         self._tip(allow_delete_cb, "last resort: delete the ABS database "
                   "entry and let the library scan re-add it; clears "
                   "listening progress")

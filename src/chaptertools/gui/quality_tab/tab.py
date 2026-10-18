@@ -692,7 +692,8 @@ class QualityTab(ctk.CTkFrame):
         from chaptertools.audio_quality.worker import nearest_bitrate, source_facts
         facts = source_facts(self.audio) if self.audio else {}
         name = os.path.basename(self.audio) if self.audio else ""
-        duration = facts.get("duration")
+        from chaptertools.gui.projection import audio_duration
+        duration = audio_duration(self.workflow.analysis or {}) or facts.get("duration")
         rate = facts.get("sample_rate")
         channels = facts.get("channels")
         blank = "\u2014"

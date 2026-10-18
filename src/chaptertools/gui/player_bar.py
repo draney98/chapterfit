@@ -9,17 +9,15 @@ from chaptertools.util import clock
 
 from . import tips
 from .theme import ctk_frame, require_customtkinter
-from .ui_kit import PAD, SMALL, C, font, number, secondary, small
+from .ui_kit import BODY, PAD, SMALL, C, font, number, secondary, small
 
 ctk = require_customtkinter()
 
 
 class PlayerBar(ctk.CTkFrame):
     def __init__(self, master, app):
-        super().__init__(
-            master, corner_radius=0, fg_color=C["bg"], height=40)
+        super().__init__(master, corner_radius=0, fg_color=C["bg"])
         self.app = app
-        self.grid_propagate(False)
         self.columnconfigure(8, weight=1)
         self._build()
         session = app.session
@@ -29,19 +27,23 @@ class PlayerBar(ctk.CTkFrame):
         self._bind_keys()
 
     def _build(self) -> None:
+        def fit(text: str) -> int:
+            return font(BODY).measure(text) + 16
+
         col = 0
         for delta, text in ((-10, "−10"), (-5, "−5")):
-            b = secondary(self, text, command=lambda d=delta: self._seek(d),
-                          width=44)
-            b.grid(row=0, column=col, padx=1, pady=PAD // 2)
+            secondary(self, text, command=lambda d=delta: self._seek(d),
+                      width=fit(text)).grid(
+                row=0, column=col, padx=(0, 4), pady=PAD // 2)
             col += 1
-        self.play_btn = secondary(self, "▶", command=self.toggle, width=44)
-        self.play_btn.grid(row=0, column=col, padx=2, pady=PAD // 2)
+        self.play_btn = secondary(self, "▶", command=self.toggle, width=fit("▶"))
+        self.play_btn.grid(row=0, column=col, padx=(0, 4), pady=PAD // 2)
         tips.tooltip(self.play_btn, "play or pause (Space)")
         col += 1
         for delta, text in ((5, "+5"), (10, "+10")):
             secondary(self, text, command=lambda d=delta: self._seek(d),
-                      width=44).grid(row=0, column=col, padx=1, pady=PAD // 2)
+                      width=fit(text)).grid(
+                row=0, column=col, padx=(0, 4), pady=PAD // 2)
             col += 1
         self.source_var = tk.StringVar(self, value="edited")
         self._source = ctk_frame(self, fg_color="transparent")
@@ -83,8 +85,8 @@ class PlayerBar(ctk.CTkFrame):
         self.busy_label.configure(textvariable=self.app.busy_var)
         self._busy_tip = tips.tooltip(self.busy_label, "")
         self.log_btn = secondary(self, "Log", command=self.app.toggle_log,
-                                 width=64)
-        self.log_btn.grid(row=0, column=10, padx=2, pady=PAD // 2)
+                                 width=fit("Log"))
+        self.log_btn.grid(row=0, column=10, padx=(0, 0), pady=PAD // 2)
         tips.tooltip(self.log_btn, "open the log (Ctrl+Shift+L)")
         self.cancel_btn = secondary(
             self, "Cancel", command=self.app._cancel, width=80)
@@ -187,10 +189,7 @@ class PlayerBar(ctk.CTkFrame):
         total = session.duration
         shown = clock(session.playhead) if session.playhead else "0:00:00"
         end = clock(total) if total else "—"
-        ch = ""
-        if session.chapter_index is not None:
-            ch = f"  · ch {session.chapter_index + 1}"
-        self.time_var.set(f"{shown} / {end}{ch}")
+        self.time_var.set(f"{shown} / {end}")
         self._sync_button()
 
     def _show_time(self) -> None:

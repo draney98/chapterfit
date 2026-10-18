@@ -85,12 +85,13 @@ def stage_states(analysis: dict, min_conf: float, disk: DiskFacts,
     out = {k: {"state": PENDING, "detail": "", "blocked": False, "why": ""}
            for k in STAGE_KEYS}
 
+    from .ui_kit import fmt_int
     measured = all(analysis.get(k) for k in
                    ("envelope", "calibration", "gaps", "fingerprint"))
     src = analysis.get("source") or {}
     out["measure"] = {
         "state": DONE if measured else PENDING,
-        "detail": (f"{len((analysis.get('gaps') or {}).get('gaps', [])):,} gaps"
+        "detail": (f"{fmt_int(len((analysis.get('gaps') or {}).get('gaps', [])))} gaps"
                    if measured else ""),
         "blocked": False, "why": "",
     }

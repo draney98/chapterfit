@@ -56,10 +56,9 @@ class ChainPanel(ctk.CTkFrame):
         self.rowconfigure(3, weight=1)
         self.canvas = tk.Canvas(
             host, height=80, highlightthickness=0, background=palette.Q_PANEL)
-        scroll = ttk.Scrollbar(host, orient="vertical", command=self.canvas.yview)
-        self.canvas.configure(yscrollcommand=scroll.set)
+        from chaptertools.gui.ui_kit import vscroll
         self.canvas.grid(row=0, column=0, sticky="nsew")
-        scroll.grid(row=0, column=1, sticky="ns")
+        vscroll(host, self.canvas, row=0, column=1, sticky="ns")
         host.rowconfigure(0, weight=1)
         host.columnconfigure(0, weight=1)
         self.inner = ctk.CTkFrame(self.canvas, fg_color=palette.Q_PANEL,
