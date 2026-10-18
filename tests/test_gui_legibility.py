@@ -189,8 +189,8 @@ def test_font_size_change_keeps_columns_and_fonts_in_step(app):
     _settle(app, "1920x1080+0+0")
     wf = app.workflow
     assert int(tkfont.nametofont("TkDefaultFont", root=app).cget("size")) \
-        == 15
-    assert int(wf.table_font.cget("size")) >= 15
+        == -15
+    assert abs(int(wf.table_font.cget("size"))) == 15
     for n, (col, _h, _s, _a) in enumerate(CHAPTER_COLUMNS):
         if col == "title":
             continue

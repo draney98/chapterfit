@@ -46,3 +46,5 @@ def refresh(widget) -> None:
     root = widget.winfo_toplevel()
     for key, f in (_by_root.get(root) or {}).items():
         _apply(root, f, key)
+    from .ui_kit import refresh_type
+    refresh_type(root)

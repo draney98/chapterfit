@@ -12,7 +12,6 @@ import os
 import queue
 import time
 import tkinter as tk
-import tkinter.font as tkfont
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from chaptertools.nfo import chapters_differ, read_nfo_chapters
@@ -367,14 +366,29 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
                 + rowh * (self.TABLE_MIN_ROWS + 1) + 16)
 
     def _on_host_resize(self, event):
-        """Long text wraps to the panel width instead of widening it."""
+        """Long text wraps to its own width instead of widening the panel."""
         if not hasattr(self, "_resolve_left"):
             return
         width = event.width
-        for lbl in self._wrap_labels:
-            with contextlib.suppress(tk.TclError):
-                lbl.configure(wraplength=max(width - 24, 200))
+        self._apply_wraps(width)
+        pending = getattr(self, "_wrap_after", None)
+        if pending is not None:
+            self.after_cancel(pending)
+        self._wrap_after = self.after_idle(lambda: self._apply_wraps(width))
         self._layout_resolve(side_by_side=True)
+
+    def _apply_wraps(self, host_width: int) -> None:
+        for lbl in getattr(self, "_wrap_labels", ()):
+            own = lbl.winfo_width()
+            span = own if own > 40 else max(host_width - 48, 200)
+            with contextlib.suppress(tk.TclError, ValueError):
+                lbl.configure(wraplength=max(span, 120))
+            for child in lbl.winfo_children():
+                child_w = child.winfo_width()
+                if child_w <= 40:
+                    continue
+                with contextlib.suppress(tk.TclError, ValueError):
+                    child.configure(wraplength=child_w)
 
     # ---------------------------------------------------------- stage panels
     def _copy_header_fix(self):

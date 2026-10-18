@@ -1,6 +1,14 @@
-"""Fonts, spacing, and widget builders. Colours come from the theme palette."""
+"""Fonts, spacing, and widget builders. Colours come from the theme palette.
+
+Sizes are real pixels. Tk treats a negative size as pixels, so every Tk
+font is given a negative size. Nothing outside this module constructs a
+font.
+"""
 from __future__ import annotations
 
+import tkinter as tk
+import tkinter.font as tkfont
+import weakref
 from tkinter import ttk
 
 import customtkinter as ctk
@@ -59,17 +67,150 @@ C = _Colors()
 PAD = 8  # base spacing unit: use PAD, PAD*2, PAD//2 only
 
 
-# CustomTkinter paints fonts at ~75% of the requested size onto the
-# inner Tk label. Ask for enough that the drawn size matches `size`.
-_CTK_DRAW = 0.75
+# Real pixels. Tk treats a negative size as pixels. Never pass a positive size.
+# SMALL and TITLE track the View-menu base (base-2 and base+2).
+SMALL, BODY, TITLE = 12, 14, 16
+MONO_DELTA = -1          # mono looks larger at the same px, so it's drawn 1 px smaller
+ROW_H = 26               # Treeview row height at BODY
+CTRL_H = 28              # buttons, entries, option menus
+TYPE_MIN, TYPE_MAX = 12, 18
 
-# Nominal sizes. Nothing is smaller than SMALL or larger than TITLE.
-SMALL, BODY, TITLE = 13, 14, 16
+_ctk_fonts: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_tk_fonts: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 
-def ctk_px(size: int = BODY) -> int:
-    """Pixel size CustomTkinter must be asked for to draw `size`."""
-    return max(size, int(round(size / _CTK_DRAW)))
+def set_type_base(base: int) -> int:
+    """View menu. Body is `base` px; secondary and title sit 2 px either side."""
+    global SMALL, BODY, TITLE
+    base = max(TYPE_MIN, min(int(base), TYPE_MAX))
+    SMALL, BODY, TITLE = base - 2, base, base + 2
+    return base
+
+
+def _px(size: int, mono: bool) -> int:
+    return int(size) + (MONO_DELTA if mono else 0)
+
+
+def font(size=None, weight="normal", mono=False, underline=False):
+    """A cached CTk font. `size` is pixels (SMALL / BODY / TITLE).
+
+    The cache is per Tk interpreter. Tests create and destroy roots;
+    a font from a destroyed root must not be handed to the next one.
+    """
+    if size is None:
+        size = BODY
+    delta = int(size) - BODY
+    key = (delta, weight, bool(mono), bool(underline))
+    px = _px(int(size), mono)
+    root = tk._default_root
+    per = None
+    if root is not None:
+        try:
+            if root.winfo_exists():
+                per = _ctk_fonts.setdefault(root, {})
+        except tk.TclError:
+            per = None
+    cached = per.get(key) if per is not None else None
+    if cached is not None:
+        try:
+            cached.configure(size=px, weight=weight, underline=underline)
+            return cached
+        except tk.TclError:
+            cached = None
+    cached = ctk.CTkFont(
+        family=MONO if mono else FONT, size=px, weight=weight,
+        underline=underline)
+    if per is not None:
+        per[key] = cached
+    return cached
+
+
+def tk_font(root, size=None, weight="normal", mono=False) -> tkfont.Font:
+    """For ttk styles and canvases. Cached per root so Tk never collects it."""
+    if size is None:
+        size = BODY
+    top = root.winfo_toplevel()
+    delta = int(size) - BODY
+    key = (delta, weight, bool(mono))
+    per = _tk_fonts.setdefault(top, {})
+    px = _px(int(size), mono)
+    cached = per.get(key)
+    if cached is None:
+        cached = tkfont.Font(
+            root=top, family=MONO if mono else FONT, size=-px, weight=weight)
+        per[key] = cached
+    else:
+        cached.configure(size=-px, weight=weight)
+    return cached
+
+
+def refresh_type(root) -> None:
+    """Re-apply every cached font after the View menu changes the base."""
+    top = root.winfo_toplevel()
+    for (delta, weight, mono, underline), face in (
+            _ctk_fonts.get(top) or {}).items():
+        try:
+            face.configure(
+                size=_px(BODY + delta, mono), weight=weight,
+                underline=underline)
+        except tk.TclError:
+            continue
+    per = _tk_fonts.get(top) or {}
+    for (delta, weight, mono), face in per.items():
+        face.configure(size=-_px(BODY + delta, mono), weight=weight)
+
+
+def apply_named_fonts(root, base: int) -> int:
+    """Every predefined Tk font, in pixels. Heading is secondary bold; fixed is mono."""
+    base = set_type_base(base)
+    for name in tkfont.names(root):
+        if not str(name).startswith("Tk"):
+            continue
+        try:
+            face = tkfont.nametofont(name, root=root)
+        except tk.TclError:
+            continue
+        if name == "TkHeadingFont":
+            face.configure(family=FONT, size=-(base - 2), weight="bold")
+        elif name == "TkFixedFont":
+            face.configure(family=MONO, size=-(base - 1), weight="normal")
+        else:
+            face.configure(family=FONT, size=-base)
+    refresh_type(root)
+    return base
+
+
+def linespace_of(spec) -> int | None:
+    """Drawn line height in pixels, whatever created the font."""
+    face = _font_for(spec)
+    if face is None:
+        return None
+    try:
+        return int(face.metrics("linespace"))
+    except tk.TclError:
+        return None
+
+
+def text_width(spec, text: str) -> int:
+    """Pixel width of `text` in `spec`."""
+    face = _font_for(spec)
+    if face is None:
+        return 0
+    try:
+        return int(face.measure(str(text)))
+    except tk.TclError:
+        return 0
+
+
+def _font_for(spec):
+    if spec is None or spec == "":
+        return None
+    if hasattr(spec, "metrics"):
+        return spec
+    try:
+        return tkfont.Font(font=spec)
+    except tk.TclError:
+        return None
 
 
 def fmt_int(value: int) -> str:
@@ -107,7 +248,7 @@ def option_menu(parent, variable, values, **kw):
     """A standard-height menu that is not an accent button."""
     return ctk.CTkOptionMenu(
         parent, variable=variable, values=list(values),
-        font=font(BODY), fg_color=C["panel"], button_color=C["border"],
+        font=font(BODY), height=CTRL_H, fg_color=C["panel"], button_color=C["border"],
         button_hover_color=C["sunken"], text_color=C["text"],
         dropdown_fg_color=C["panel"], dropdown_text_color=C["text"],
         **kw)
@@ -121,13 +262,7 @@ def toggle(parent, text, variable=None, command=None, **kw):
         button_color=C["panel"], **kw)
 
 
-def font(size=BODY, weight="normal", mono=False, underline=False):
-    return ctk.CTkFont(
-        family=MONO if mono else FONT, size=ctk_px(size), weight=weight,
-        underline=underline)
-
-
-# type scale: title 16 bold, section/small 13, body 14
+# type scale: title 16 bold, section/small 12, body 14
 def title(parent, text):
     return ctk.CTkLabel(
         parent, text=text, font=font(TITLE, "bold"), text_color=C["text"])
@@ -158,14 +293,14 @@ def number(parent, text="", **kw):
 
 def primary(parent, text, command=None, **kw):
     return ctk.CTkButton(
-        parent, text=text, command=command, height=32, corner_radius=4,
+        parent, text=text, command=command, height=CTRL_H, corner_radius=4,
         font=font(BODY, "bold"), fg_color=C["accent"],
         hover_color=C["accent_hover"], text_color=C["white"], **kw)
 
 
 def secondary(parent, text, command=None, **kw):
     return ctk.CTkButton(
-        parent, text=text, command=command, height=30, corner_radius=4,
+        parent, text=text, command=command, height=CTRL_H, corner_radius=4,
         font=font(BODY), fg_color=C["panel"], hover_color=C["sunken"],
         text_color=C["text"], border_width=1, border_color=C["border"], **kw)
 
@@ -183,7 +318,7 @@ def post_menu(menu, anchor) -> None:
 def text_button(parent, text, command=None, **kw):
     """e.g. reset glyph, Edit in Match."""
     kw.setdefault("width", 10)
-    kw.setdefault("height", 26)
+    kw.setdefault("height", CTRL_H)
     return ctk.CTkButton(
         parent, text=text, command=command, corner_radius=4,
         font=font(SMALL), fg_color="transparent",
@@ -247,10 +382,11 @@ def style_treeview(root):
     s = ttk.Style(root)
     s.theme_use("clam")
     s.configure(
-        "Treeview", font=(FONT, BODY), rowheight=28, background=C["panel"],
+        "Treeview", font=tk_font(root), rowheight=ROW_H, background=C["panel"],
         fieldbackground=C["panel"], foreground=C["text"], borderwidth=0)
     s.configure(
-        "Treeview.Heading", font=(FONT, SMALL, "bold"), foreground=C["muted"],
+        "Treeview.Heading", font=tk_font(root, SMALL, "bold"),
+        foreground=C["muted"],
         background=C["sunken"], relief="flat", padding=(PAD, 4))
     s.map(
         "Treeview",

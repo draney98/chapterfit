@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import tkinter as tk
-import tkinter.font as tkfont
 from tkinter import ttk
 
 from chaptertools.gui import palette
@@ -294,8 +293,9 @@ class StagePanels:
                      font=font(BODY, "bold"), anchor="w").grid(
             row=0, column=0, columnspan=3, sticky="w", padx=8, pady=(6, 2))
         self._resolve_left = left
-        left.columnconfigure(0, minsize=110)
-        left.columnconfigure(2, minsize=130)
+        label_col, gap_col = 110, 130
+        left.columnconfigure(0, minsize=label_col)
+        left.columnconfigure(2, minsize=gap_col)
         left.columnconfigure(3, weight=1)
 
         def option(row, label, button, cmd, cost_var, status_var, tip,
@@ -451,7 +451,7 @@ class StagePanels:
 
     def _build_editions(self, parent):
         from chaptertools.gui.ui_kit import (
-            PAD, BODY, C, FONT, SMALL, TITLE, font, panel, primary,
+            PAD, BODY, C, SMALL, TITLE, font, panel, primary,
             secondary, section, small)
 
         parent.columnconfigure(0, weight=1)
@@ -470,7 +470,6 @@ class StagePanels:
         table_card.grid(row=1, column=0, sticky="ew")
         table_card.columnconfigure(0, weight=1)
         style = ttk.Style(parent)
-        style.configure("Edition.Treeview", font=(FONT, BODY))
         style.map(
             "Edition.Treeview",
             background=[("selected", C["accent_soft"])],
@@ -684,12 +683,11 @@ class StagePanels:
             "No dry run yet. A dry run shows what Apply will write, "
             "without changing the library.",
         ).pack(anchor="w", padx=8, pady=8)
-        fixed = tkfont.nametofont("TkFixedFont", root=self)
+        from chaptertools.gui.ui_kit import font
         self.dry_log = ctk.CTkTextbox(
             plan_wrap, wrap="none", height=160,
             fg_color=palette.WINDOW, text_color=palette.TEXT,
-            font=ctk.CTkFont(family=fixed.actual("family"),
-                             size=fixed.actual("size")))
+            font=font(mono=True))
         self.dry_log.configure(state="disabled")
         # dry_log shown after first dry run
 

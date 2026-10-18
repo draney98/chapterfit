@@ -7,7 +7,6 @@ import os
 import queue
 import sys
 import tkinter as tk
-import tkinter.font as tkfont
 from tkinter import filedialog, messagebox, ttk
 
 from chaptertools import file_log
@@ -124,26 +123,18 @@ class App(ctk.CTk):
     def _setup_fonts(self, base: int | None = None):
         if base is None:
             base = int(os.environ.get("CHAPTERGUI_FONT", "14"))
-        base = max(13, min(base, 16))
-        self.font_base = base
-        for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont",
-                     "TkHeadingFont", "TkFixedFont"):
-            try:
-                f = tkfont.nametofont(name, root=self)
-            except tk.TclError:
-                continue
-            f.configure(size=base)
+        from .ui_kit import apply_named_fonts
+        self.font_base = apply_named_fonts(self, base)
         restyle_ttk(self)
 
     def set_font_size(self, base: int):
         """View menu: every font, column width and minimum size follows."""
-        base = max(13, min(base, 16))
         self._setup_fonts(base)
         fonts.refresh(self)
         self.workflow.size_table()
         self._render_library(self.search_var.get())
         self.fit_minsize()
-        self.log(f"text size {base} pt")
+        self.log(f"text size {self.font_base}")
 
     def set_appearance(self, mode: str):
         """View menu: Auto / Light / Dark."""

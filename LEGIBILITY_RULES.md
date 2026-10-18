@@ -10,12 +10,8 @@ The Match screen is hard to read. These rules apply to **every** screen from now
 
 ### A. Text size and fonts
 
-1. **One base size: 14 px.** Everything is derived from it:
-   - 16 bold for the screen title
-   - 14 for body text, form fields, table cells and buttons
-   - 13 for secondary/muted lines and section labels
-   - **Nothing below 13. Nothing above 16.** The View menu stays in that range.
-2. **Tables use the body size.** Today the editions table renders at ~17 px while the inspector renders at ~11 px. They must match. Set the Treeview font and row height (`rowheight = 28`) from `ui_kit`, and set CTk widget scaling once at startup.
+1. **Sizes are real pixels: title 16, body 14, secondary 12.** Tk sizes are always passed negative, so Tk draws pixels and not points. Nothing sits outside 12–16 at the default base. The View menu scales the base from 12 to 18; secondary is base−2 and the title is base+2.
+2. **Tables use the body size.** The editions table, the chapter table, and the inspector use the same 14 px. Treeview `rowheight` is 26, from `ui_kit`. The chapter table does not get a separate larger font.
 3. **One family** (`ui_kit.FONT`) for all text, including section headers. "Book Info (written at Finish)" is in a different, rounded font today. **Mono only** for times, durations, ASINs and numeric values in tables — and with normal letter spacing (the "6 : 34 : 33" in the status bar is spaced out).
 4. **Bold is for one thing per block:** a title, a verdict or a selected row. Not for labels.
 
@@ -23,7 +19,7 @@ The Match screen is hard to read. These rules apply to **every** screen from now
 
 23. **One ground.** The window, timeline, step rail, and form hosts use `ui_kit.C["bg"]`. White (`C["panel"]`) is only for cards: the editions table, the verdict card, Book info, and text fields. A white rectangle on a gray rectangle with no card border is a bug.
 24. **White text only on accent.** Body and muted text are dark on `bg` or `panel` (WCAG AA, 4.5:1). White is allowed on `C["accent"]` only: the primary button and the selected segment. Unselected segments use `C["text"]` on `C["sunken"]`. White on gray or white on sunken is not allowed.
-25. **A label's drawn text fits its widget** (rules 5–8). Segmented controls are included. `debug_layout` must report a segment whose label is wider than its button. Widgets built with `ui_kit.font()` already compensate for CustomTkinter drawing fonts smaller than requested; a theme-default font must still draw at 12 px or larger and must not clip.
+25. **A label's drawn text fits its widget** (rules 5–8). Segmented controls are included. `debug_layout` must report a segment whose label is wider than its button. Fonts are real pixels (`ui_kit.font` / `ui_kit.tk_font`); a theme-default font must still draw at 12 px or larger and must not clip.
 26. **A painted strip is a card.** The title, step rail, timeline, and workspace share one 14 px left and right inset. The timeline canvas draws marks, labels, levels, and the playhead another 14 px inside its own border, and stops 14 px before the opposite border. Time maps onto that inner width, and clicks use the same inset, so the first and last moment are not drawn on the border.
 
 ### B. Nothing overlaps, nothing is cut off
@@ -45,7 +41,7 @@ The Match screen is hard to read. These rules apply to **every** screen from now
 
 10. **Forms:** labels in one left-aligned column of fixed width (90 px), no trailing colons, fields stretching to the right edge minus 16 px. One form style app-wide — today Book info uses right-aligned labels with colons while the search form above it uses left labels without.
 11. **Fields fit their container.** No entry extends past its pane ("Anthony Burgess, Walter" is cut off). In a 400 px inspector, a form is **one column**, not two.
-12. **Vertical rhythm:** 8 px between related rows, 16 px between sections, and a section label (13 px, muted, uppercase) at the top of each section. No floating unlabeled blocks of text.
+12. **Vertical rhythm:** 8 px between related rows, 16 px between sections, and a section label (12 px, muted, uppercase) at the top of each section. No floating unlabeled blocks of text.
 13. **Big empty areas are a bug.** The editions table is ~70 % empty white while the inspector is crammed. Give space to what has content: a short table gets a short frame, and the verdict card goes directly under it.
 
 ### D. Words
@@ -55,7 +51,7 @@ The Match screen is hard to read. These rules apply to **every** screen from now
 16. **Lead with the verdict, then the reason, then the numbers.** Don't run all three into one paragraph.
     - Bad: `Audnexus B00TXM4WT6 · 49 chapters · fit score 0.9 · rate spread 5.0% · runtime ratio 1.120 · rejected: most likely…`
     - Good: headline `Doesn't fit this audio`, then the sentence `The file is 12 % longer than this edition — usually a different recording.`, then the numbers on their own muted line.
-17. **Helper text appears only where it helps,** in 13 px muted, under the thing it explains. Delete taglines like "chooses and verifies the chapter list against the audio".
+17. **Helper text appears only where it helps,** in 12 px muted, under the thing it explains. Delete taglines like "chooses and verifies the chapter list against the audio".
 
 ### E. State and actions
 
@@ -194,7 +190,7 @@ The file is 12 % longer than this edition (6:34 vs 5:52). That usually means a d
 ## Done means
 
 - [ ] `debug_layout.check()` prints nothing for Match at 1600×1030 and 1366×768.
-- [ ] No text under 13 px or over 16 px; table text and inspector text are visibly the same size.
+- [ ] No text under 12 px or over 16 px at the default base; table text and inspector text are visibly the same size.
 - [ ] Nothing starts left of the pane padding; nothing crosses into a neighbouring pane.
 - [ ] Every edition row has Fit and Ch filled in (or `checking…`).
 - [ ] The verdict reads as a headline + one sentence; there are no raw IDs or internal words on screen.

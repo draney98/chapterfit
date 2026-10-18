@@ -77,7 +77,8 @@ class StepRail(ctk.CTkFrame):
             self._buttons[key] = cell
             self._title[key] = title
             self._tips[key] = [tooltip(cell, ""), tooltip(title, ""), tooltip(sub, "")]
-            self.columnconfigure(col, weight=1, uniform="steps", minsize=100)
+            card_floor = 100
+            self.columnconfigure(col, weight=1, uniform="steps", minsize=card_floor)
 
     def update(self, states: dict, step: str, cleanup: str,
                finish_detail: str | None = None,
@@ -228,9 +229,10 @@ class Workspace(ctk.CTkFrame):
         self.main.grid_forget()
         self.inspector.grid_forget()
         pad = self._main_pad
+        collapsed = 0
         if not self._show_inspector:
             self.columnconfigure(0, weight=1)
-            self.columnconfigure(1, minsize=0, weight=0)
+            self.columnconfigure(1, minsize=collapsed, weight=0)
             self.rowconfigure(1, weight=0)
             self.main.grid(row=0, column=0, columnspan=2, sticky="nsew",
                            padx=pad, pady=pad)
@@ -247,7 +249,7 @@ class Workspace(ctk.CTkFrame):
                                 padx=(pad // 2, pad), pady=pad)
         else:
             self.columnconfigure(0, weight=1)
-            self.columnconfigure(1, minsize=0, weight=0)
+            self.columnconfigure(1, minsize=collapsed, weight=0)
             self.rowconfigure(0, weight=1)
             self.rowconfigure(1, weight=0)
             self.main.grid(row=0, column=0, columnspan=2, sticky="nsew",

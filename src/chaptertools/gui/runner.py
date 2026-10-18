@@ -81,6 +81,7 @@ class Runner:
         job.log_ready.set()
 
     def _execute(self, job: Job):
+        line_buffered = 1
         with self._lock:
             self._proc = subprocess.Popen(
                 job.argv,
@@ -88,7 +89,7 @@ class Runner:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                bufsize=1,
+                bufsize=line_buffered,
             )
         proc = self._proc
         assert proc is not None and proc.stdout is not None

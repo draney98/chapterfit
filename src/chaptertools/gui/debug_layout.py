@@ -1,10 +1,7 @@
 """Layout checker for screenshots and legibility tests."""
 from __future__ import annotations
 
-import tkinter.font as tkfont
 from tkinter import ttk
-
-MIN_FONT = 13
 
 
 def check(root) -> list[str]:
@@ -55,40 +52,39 @@ def check(root) -> list[str]:
                     problems.append(
                         f"CLIPPED  {w!s}  wants {w.winfo_reqwidth()} has {ww}")
             try:
-                size = None
+                from .ui_kit import linespace_of
+                spec = None
                 master = getattr(w, "master", None)
                 if master is not None and type(master).__module__.startswith(
                         "customtkinter"):
                     try:
-                        cf = master.cget("font")
-                        if hasattr(cf, "cget"):
-                            size = abs(int(cf.cget("size")))
-                        elif isinstance(cf, (tuple, list)) and len(cf) >= 2:
-                            size = abs(int(cf[1]))
+                        spec = master.cget("font")
                     except Exception:
-                        size = None
-                if size is None:
-                    raw = w.cget("font")
-                    f = (tkfont.nametofont(raw) if isinstance(raw, str)
-                         else tkfont.Font(font=raw))
-                    size = abs(f.actual("size"))
-                if size < MIN_FONT:
-                    problems.append(f"FONT TOO SMALL  {w!s}  size={size}")
+                        spec = None
+                if not spec:
+                    try:
+                        spec = w.cget("font")
+                    except Exception:
+                        spec = None
+                space = linespace_of(spec) if spec else None
+                if space is not None and not 16 <= space <= 24:
+                    problems.append(
+                        f"FONT SIZE  {w!s}  linespace={space}")
             except Exception:
                 pass
             if isinstance(w, ttk.Treeview) and ww >= 2:
-                f = tkfont.nametofont("TkDefaultFont")
+                from .ui_kit import text_width
                 try:
-                    f = tkfont.Font(font=ttk.Style().lookup("Treeview", "font"))
+                    face = ttk.Style().lookup("Treeview", "font")
                 except Exception:
-                    pass
+                    face = ""
                 for col in w["columns"]:
                     width = int(w.column(col, "width"))
                     head = w.heading(col, "text")
-                    values = [f.measure(str(head)) + 16]
+                    widest = text_width(face, head) + 16
                     for i in w.get_children():
-                        values.append(f.measure(str(w.set(i, col))) + 16)
-                    widest = max(values) if values else 0
+                        widest = max(
+                            widest, text_width(face, w.set(i, col)) + 16)
                     stretch = w.column(col, "stretch")
                     if widest > width and not stretch:
                         problems.append(

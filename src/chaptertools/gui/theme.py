@@ -10,7 +10,6 @@ import importlib.util
 import json
 import subprocess
 import tkinter as tk
-import tkinter.font as tkfont
 from datetime import datetime
 from pathlib import Path
 from tkinter import ttk
@@ -199,12 +198,11 @@ def mode() -> str:
 
 def _ctk_theme() -> dict:
     """CustomTkinter theme. Each colour is [light, dark] from the palette."""
-    from .ui_kit import BODY, ctk_px
+    from .ui_kit import BODY
 
     def p(key: str):
         return [LIGHT[key], DARK[key]]
 
-    _body_px = ctk_px(BODY)
     return {
         "CTk": {"fg_color": p("bg")},
         "CTkToplevel": {"fg_color": p("bg")},
@@ -300,9 +298,9 @@ def _ctk_theme() -> dict:
             "text_color": p("field_fg"),
         },
         "CTkFont": {
-            "macOS": {"family": "SF Display", "size": _body_px, "weight": "normal"},
-            "Windows": {"family": "Noto Sans", "size": _body_px, "weight": "normal"},
-            "Linux": {"family": "Noto Sans", "size": _body_px, "weight": "normal"},
+            "macOS": {"family": "SF Display", "size": BODY, "weight": "normal"},
+            "Windows": {"family": "Noto Sans", "size": BODY, "weight": "normal"},
+            "Linux": {"family": "Noto Sans", "size": BODY, "weight": "normal"},
         },
     }
 
@@ -326,7 +324,7 @@ def _style_ttk(root: tk.Misc) -> None:
     p = active()
     style = ttk.Style(root)
     style.theme_use("clam")
-    row_h = tkfont.nametofont("TkDefaultFont", root=root).metrics("linespace") + 6
+    from .ui_kit import ROW_H, SMALL, tk_font
     style.configure(".", background=p["bg"], foreground=p["text"],
                     fieldbackground=p["field_bg"], troughcolor=p["border"],
                     bordercolor=p["border"], lightcolor=p["surface"],
@@ -369,10 +367,11 @@ def _style_ttk(root: tk.Misc) -> None:
               foreground=[("disabled", p["text_muted"])])
     style.configure("Treeview", background=p["field_bg"],
                     fieldbackground=p["field_bg"], foreground=p["field_fg"],
-                    bordercolor=p["border"], rowheight=row_h, borderwidth=0)
+                    bordercolor=p["border"], font=tk_font(root),
+                    rowheight=ROW_H, borderwidth=0)
     style.configure("Treeview.Heading", background=p["surface_alt"],
                     foreground=p["text_muted"], relief="flat",
-                    bordercolor=p["border"])
+                    bordercolor=p["border"], font=tk_font(root, SMALL, "bold"))
     style.map("Treeview",
               background=[("selected", p["select_bg"])],
               foreground=[("selected", p["select_fg"])])
@@ -380,8 +379,7 @@ def _style_ttk(root: tk.Misc) -> None:
               background=[("active", p["surface"])],
               foreground=[("active", p["text"])])
     style.configure("Chapter.Treeview", background=p["field_bg"],
-                    fieldbackground=p["field_bg"], foreground=p["field_fg"],
-                    rowheight=30)
+                    fieldbackground=p["field_bg"], foreground=p["field_fg"])
     style.configure("TScrollbar", background=p["surface_alt"],
                     troughcolor=p["bg"], bordercolor=p["border"],
                     arrowcolor=p["text"])

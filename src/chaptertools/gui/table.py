@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import statistics
 import tkinter as tk
-import tkinter.font as tkfont
 from tkinter import ttk
 
 from . import fonts, palette
@@ -162,13 +161,11 @@ class TableViews:
     """Chapters tab. Mixed into WorkflowPanel."""
 
     def size_table(self):
-        # 15 px and a 30 px row. A +2 pt step on the 14 px body would be
-        # 16, the type-scale ceiling, so the table stays at 15.
-        from .ui_kit import FONT
-        row_font = tkfont.Font(root=self, family=FONT, size=15)
-        head_font = tkfont.nametofont("TkHeadingFont", root=self)
-        ttk.Style(self).configure(
-            "Chapter.Treeview", font=row_font, rowheight=30)
+        # The chapter table uses the same 14 px body as every other table.
+        # The old "+2 pt" chapter-table size is cancelled.
+        from .ui_kit import SMALL, tk_font
+        row_font = tk_font(self)
+        head_font = tk_font(self, SMALL, "bold")
         self.table_font = row_font
         self._chapter_widths = {}
         for col, heading, sample, _anchor in CHAPTER_COLUMNS:

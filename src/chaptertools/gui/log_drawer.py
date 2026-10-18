@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import tkinter as tk
-import tkinter.font as tkfont
 from datetime import datetime
 from tkinter import filedialog
 
@@ -37,11 +36,10 @@ class LogDrawer:
                              command=self.save)
         save.pack(side="right", padx=(0, 8))
         tips.tooltip(save, "write the log to a file")
-        fixed = tkfont.nametofont("TkFixedFont", root=app)
+        from chaptertools.gui.ui_kit import font
         self.text = ctk.CTkTextbox(
             self.win, height=280, wrap="none",
-            font=ctk.CTkFont(family=fixed.actual("family"),
-                             size=fixed.actual("size")))
+            font=font(mono=True))
         self.text.pack(side="top", fill="both", expand=True, padx=4, pady=(0, 4))
         self.text.bind("<Key>", self._key)
         self.text.bind("<Button-2>", lambda e: "break")

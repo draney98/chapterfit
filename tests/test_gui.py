@@ -1535,15 +1535,18 @@ def test_table_tint_and_font_pins(tmp_path):
         # lighter grey for unplaced chapters
         assert wf.tree.tag_configure("unplaced").get("background") \
             == "#b0b0b0"
-        # Chapter table is 15 px (one step over the 14 px body, under the
-        # 16 px ceiling) with a 30 px row.
+        from chaptertools.gui.ui_kit import BODY, ROW_H
+        # Chapter rows use the same body size as every other table.
+        # The old +2 pt / 30 px row is cancelled.
         base = int(tkfont.nametofont("TkDefaultFont", root=app).cget("size"))
         style = ttk.Style(wf)
-        got = style.configure("Chapter.Treeview", "font")
-        named = tkfont.nametofont(str(got), root=app)
-        assert int(named.cget("size")) == 15
-        assert base == 14
-        assert int(style.configure("Chapter.Treeview", "rowheight")) == 30
+        got = style.lookup("Treeview", "font")
+        named = tkfont.nametofont(str(got), root=app) if isinstance(got, str) \
+            else got
+        assert int(named.cget("size")) == -BODY
+        assert base == -BODY
+        assert int(style.lookup("Chapter.Treeview", "rowheight")) == ROW_H
+        assert int(style.lookup("Treeview", "rowheight")) == ROW_H
     finally:
         app.destroy()
 

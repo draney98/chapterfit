@@ -6,7 +6,6 @@ import array
 import json
 import os
 import tkinter as tk
-import tkinter.font as tkfont
 from tkinter import ttk
 
 from chaptertools.util import hms
@@ -14,7 +13,7 @@ from chaptertools.util import hms
 from . import tips
 from .table import gap_marks
 from .theme import ctk_frame, require_customtkinter
-from .ui_kit import FONT, PAD, SMALL, C, panel, secondary, section, small
+from .ui_kit import PAD, SMALL, C, panel, secondary, section, small, tk_font
 
 ctk = require_customtkinter()
 
@@ -353,7 +352,7 @@ class Timeline(ctk.CTkFrame):
             canvas.tag_bind(tag, "<Leave>", lambda _e: self._show_tip(None))
 
     def _draw_chapters(self, canvas, data, start, end, width, height) -> None:
-        font = tkfont.Font(family=FONT, size=SMALL)
+        font = tk_font(self, SMALL)
         x0, y0, plot_w, plot_h = plot_box(width, height)
         marks: list[tuple[float, object, bool, str]] = []
         for row in data["rows"]:
