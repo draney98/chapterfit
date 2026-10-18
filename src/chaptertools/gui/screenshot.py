@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import json
 import os
 import subprocess
 import sys
@@ -37,6 +38,9 @@ def parse_screenshot_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--library", default=None,
         help="library root (default CHAPTERFIT_LIBRARY or cwd)")
+    parser.add_argument(
+        "--appearance", default=None, choices=("light", "dark", "Light", "Dark"),
+        help="start in this appearance (does not change saved settings)")
     parser.add_argument(
         "--settle-ms", type=int, default=800,
         help="ms to wait after layout before capture")
@@ -133,6 +137,13 @@ def run_screenshot(argv: list[str]) -> int:
     from chaptertools.gui.app import App
 
     library = args.library or os.environ.get("CHAPTERFIT_LIBRARY")
+    if args.appearance:
+        import tempfile
+        cfg = tempfile.mkdtemp(prefix="chapterfit-shot-")
+        os.environ["CHAPTERFIT_CONFIG"] = cfg
+        name = "Dark" if args.appearance.lower() == "dark" else "Light"
+        Path(cfg, "gui.json").write_text(
+            json.dumps({"appearance": name}), encoding="utf-8")
     app = App(library_root=library)
     app.geometry(f"{width}x{height}")
     app.update_idletasks()

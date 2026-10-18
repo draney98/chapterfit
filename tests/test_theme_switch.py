@@ -9,6 +9,42 @@ import pytest
 STEPS = ("scan", "match", "place", "finish", "cleanup")
 
 
+def test_auto_label_names_the_resolved_mode(tmp_path, monkeypatch):
+    tkinter = pytest.importorskip("tkinter")
+    try:
+        probe = tkinter.Tk()
+        probe.destroy()
+    except tkinter.TclError:
+        pytest.skip("no display available")
+    monkeypatch.setattr(
+        "chaptertools.gui.theme.desktop_is_dark", lambda: True)
+    cfg = tmp_path / "config"
+    cfg.mkdir()
+    (cfg / "gui.json").write_text(json.dumps({"appearance": "Auto"}))
+    monkeypatch.setenv("CHAPTERFIT_CONFIG", str(cfg))
+    monkeypatch.setenv("CHAPTERFIT_WORK", str(tmp_path / "work"))
+    from chaptertools.gui.app import App
+
+    app = App(library_root=str(tmp_path), modal_busy=False)
+    try:
+        labels = []
+
+        def walk(widget):
+            if isinstance(widget, tkinter.Menu):
+                last = widget.index("end")
+                if last is not None:
+                    for index in range(last + 1):
+                        if widget.type(index) == "radiobutton":
+                            labels.append(widget.entrycget(index, "label"))
+            for child in widget.winfo_children():
+                walk(child)
+
+        walk(app)
+        assert "Auto (Dark)" in labels
+    finally:
+        app.destroy()
+
+
 def test_colors_keep_both_modes():
     from chaptertools.gui.theme import active, pair
     from chaptertools.gui.ui_kit import C, hex

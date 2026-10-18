@@ -37,6 +37,7 @@ from .theme import (
     require_customtkinter,
     dispatch_theme,
     follow_theme,
+    mode,
     restyle_menus,
     restyle_ttk,
     save_gui_prefs,
@@ -199,10 +200,16 @@ class App(ctk.CTk):
         view.add_separator()
         appearance = tk.Menu(view, tearoff=0)
         self._appearance_var = tk.StringVar(value=self.appearance_mode)
-        for mode in APPEARANCE_MODES:
+        if self.appearance_mode == "Auto":
+            resolved = mode()
+        else:
+            from .theme import desktop_is_dark
+            resolved = "Dark" if desktop_is_dark() else "Light"
+        for choice in APPEARANCE_MODES:
+            label = f"Auto ({resolved})" if choice == "Auto" else choice
             appearance.add_radiobutton(
-                label=mode, variable=self._appearance_var, value=mode,
-                command=lambda m=mode: self.set_appearance(m))
+                label=label, variable=self._appearance_var, value=choice,
+                command=lambda m=choice: self.set_appearance(m))
         view.add_cascade(label="Appearance", menu=appearance)
         menu.add_cascade(label="View", menu=view)
         for seq in ("<Control-plus>", "<Control-equal>", "<Control-KP_Add>"):
