@@ -42,7 +42,7 @@ from .theme import (
     save_gui_prefs,
     widget_text,
 )
-from .ui_kit import PAD, C, SMALL, font, secondary, small, style_treeview
+from .ui_kit import PAD, C, SMALL, font, ground, secondary, small, style_treeview
 from .workflow import WorkflowPanel
 
 LIBRARY_WIDTH = 300
@@ -264,7 +264,7 @@ class App(ctk.CTk):
         pane.pack(fill="both", expand=True)
 
         # ---- library pane -------------------------------------------------
-        lib = ctk_frame(pane, corner_radius=0, fg_color="transparent")
+        lib = ground(pane)
         pane.add(lib, weight=0)
         self._lib = lib
         self._library_open = bool(load_gui_prefs().get("library_open"))
@@ -374,7 +374,7 @@ class App(ctk.CTk):
         bind_menu_before(self, "<ButtonRelease>", self._log_menu_click)
 
         # ---- main area ----------------------------------------------------
-        main = ctk_frame(pane, corner_radius=0, fg_color="transparent")
+        main = ground(pane)
         pane.add(main, weight=1)
         self._book_host = main
         self.workflow = WorkflowPanel(main, app=self)

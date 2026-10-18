@@ -513,10 +513,29 @@ def require_customtkinter():
     return ctk
 
 
+def paints_background(master) -> bool:
+    """A transparent child can inherit this master's colour.
+
+    A paned window, a canvas, and a scrollable frame cannot. CustomTkinter
+    then paints its own canvas black in Dark and white in Light.
+    """
+    if master is None:
+        return False
+    if type(master).__name__ in {
+            "Panedwindow", "PanedWindow", "Canvas", "CTkScrollableFrame"}:
+        return False
+    return type(master).__module__.startswith("customtkinter")
+
+
 def ctk_frame(master, **kwargs):
     """A layout frame that shrink-wraps (CTkFrame defaults to 200×200)."""
     ctk = require_customtkinter()
-    kwargs.setdefault("fg_color", "transparent")
+    color = kwargs.get("fg_color", "transparent")
+    if not paints_background(master) and color in (None, "transparent"):
+        from .ui_kit import C
+        kwargs["fg_color"] = C["bg"]
+    else:
+        kwargs.setdefault("fg_color", "transparent")
     kwargs.setdefault("corner_radius", 0)
     kwargs.setdefault("width", 1)
     kwargs.setdefault("height", 1)

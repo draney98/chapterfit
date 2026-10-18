@@ -18,6 +18,8 @@ class ScrollableFrame(ctk.CTkScrollableFrame):
 
     def __init__(self, master):
         super().__init__(master, fg_color=palette.Q_PANEL, corner_radius=0)
+        from chaptertools.gui.ui_kit import watch_scroll
+        watch_scroll(self)
         self.body = self
 
 

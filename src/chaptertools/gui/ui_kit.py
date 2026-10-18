@@ -72,6 +72,25 @@ def hex(key: str) -> str:
     """The colour for the mode on screen. For canvases, ttk, menus, and tags."""
     from .theme import active
     return active()[C._KEYS[key]]
+
+
+def ground(parent):
+    """Window ground. The first child of a pane or a scrollable frame."""
+    from .theme import ctk_frame
+    return ctk_frame(parent, fg_color=C["bg"], corner_radius=0)
+
+
+def watch_scroll(frame) -> None:
+    """Repaint a scrollable frame's tk canvas when the appearance changes."""
+    from .theme import follow_theme
+
+    def _paint(frame=frame):
+        stored = frame.cget("fg_color")
+        if stored in (None, "transparent"):
+            stored = C["bg"]
+        frame.configure(fg_color=stored)
+
+    follow_theme(frame, _paint)
 PAD = 8  # base spacing unit: use PAD, PAD*2, PAD//2 only
 
 

@@ -283,8 +283,10 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         match_host.rowconfigure(0, weight=1)
         match_host.columnconfigure(0, weight=1)
         from .ui_kit import C as kit_colors
+        from .ui_kit import watch_scroll
         self._match_scroll = ctk.CTkScrollableFrame(
             match_host, fg_color=kit_colors["bg"], corner_radius=0)
+        watch_scroll(self._match_scroll)
         self._match_scroll.grid(row=0, column=0, sticky="nsew")
         self._match_scroll.columnconfigure(0, weight=1)
         inner = getattr(self._match_scroll, "_scrollable_frame", None)
@@ -309,6 +311,7 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         from .ui_kit import C as kit_colors
         editions = ctk.CTkScrollableFrame(
             match_main, fg_color=kit_colors["bg"], corner_radius=0, height=120)
+        watch_scroll(editions)
         editions.grid(row=0, column=0, sticky="nsew")
         editions.columnconfigure(0, weight=1)
         self._build_editions(editions)
@@ -410,10 +413,11 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         host = self._main_frames["place"]
         split = ttk.Panedwindow(host, orient="vertical")
         split.grid(row=0, column=0, sticky="nsew")
-        table_host = ctk_frame(split, fg_color="transparent", corner_radius=0)
+        from .ui_kit import ground
+        table_host = ground(split)
         table_host.rowconfigure(0, weight=1)
         table_host.columnconfigure(0, weight=1)
-        controls = ctk_frame(split, fg_color="transparent", corner_radius=0)
+        controls = ground(split)
         controls.columnconfigure(0, weight=1)
         controls.rowconfigure(1, weight=1)
         self._panels["align"] = self._panel_align(controls)
@@ -452,8 +456,10 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         # At 1366x768 the chain is taller than the pane. Scrolling keeps
         # every control reachable instead of painting past the window.
         from .ui_kit import C as kit_colors
+        from .ui_kit import watch_scroll
         scroll = ctk.CTkScrollableFrame(
             parent, fg_color=kit_colors["bg"], corner_radius=0)
+        watch_scroll(scroll)
         scroll.grid(row=0, column=0, sticky="nsew")
         self.quality = QualityTab(scroll, app=self.app, workflow=self)
         self.quality.pack(fill="x", expand=False)
