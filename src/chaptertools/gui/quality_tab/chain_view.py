@@ -67,6 +67,12 @@ class ChainPanel(ctk.CTkFrame):
             self.rows.append(row)
         self.refresh()
         self._paint_selection()
+        from chaptertools.gui.theme import follow_theme
+        follow_theme(self, self._on_theme)
+
+    def _on_theme(self) -> None:
+        self.refresh()
+        self._paint_selection()
 
     def refresh(self) -> None:
         for row in self.rows:
@@ -159,7 +165,7 @@ class ChainRow:
             anchor="e")
         self.summary.grid(row=0, column=2, sticky="ew", padx=4)
         self.dot = tk.Canvas(self.frame, width=10, height=16, highlightthickness=0,
-                             background=palette.Q_PANEL)
+                             background=palette.current("Q_PANEL"))
         self.dot.grid(row=0, column=3)
         ok, _reason = stage.availability()
         self.check = ctk.CTkCheckBox(
@@ -207,6 +213,7 @@ class ChainRow:
         ground = palette.Q_SELECT if selected else palette.Q_PANEL
         muted = palette.Q_MUTED
         text = palette.Q_TEXT
+        dot = palette.current("Q_SELECT" if selected else "Q_PANEL")
         if not self.stage.availability()[0]:
             from chaptertools.gui.ui_kit import C
             text = C["disabled"]
@@ -214,7 +221,8 @@ class ChainRow:
         self.index_label.configure(text_color=muted, fg_color="transparent")
         self.name_label.configure(text_color=text, fg_color="transparent")
         self.summary.configure(text_color=muted, fg_color="transparent")
-        self.dot.configure(background=ground)
+        self.dot.configure(background=dot)
         self.dot.delete("all")
         if self._modified:
-            self.dot.create_oval(1, 5, 8, 12, fill=palette.Q_ACCENT, outline="")
+            self.dot.create_oval(
+                1, 5, 8, 12, fill=palette.current("Q_ACCENT"), outline="")

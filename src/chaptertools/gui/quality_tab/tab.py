@@ -297,10 +297,12 @@ class QualityTab(ctk.CTkFrame):
         self._across_seg.set("Level each file to the target")
         self._across_seg.pack(side="left", padx=(8, 0))
         equalize_segments(self._across_seg)
-        self._mf_strip = tk.Canvas(bar, height=28, bg=palette.RAIL_IDLE,
+        self._mf_strip = tk.Canvas(bar, height=28, bg=palette.current("RAIL_IDLE"),
                                    highlightthickness=0)
         self._mf_strip.grid(row=2, column=0, columnspan=6, sticky="ew",
                             pady=(4, 0))
+        from chaptertools.gui.theme import follow_theme
+        follow_theme(self._mf_strip, self._repaint_mf_strip)
         self._mf_file_states: dict[str, str] = {}
 
     def _show_stage(self, index: int) -> None:
@@ -1084,6 +1086,11 @@ class QualityTab(ctk.CTkFrame):
         progress(1.0, None, "done")
         return {"cleaned": results, "written": meta["cleanup"]["written"]}
 
+    def _repaint_mf_strip(self) -> None:
+        if hasattr(self, "_mf_strip"):
+            self._mf_strip.configure(bg=palette.current("RAIL_IDLE"))
+        self._draw_mf_strip()
+
     def _draw_mf_strip(self) -> None:
         if not hasattr(self, "_mf_strip"):
             return
@@ -1095,10 +1102,10 @@ class QualityTab(ctk.CTkFrame):
         w = max(c.winfo_width(), 100)
         bw = max(4, w / len(files))
         colors = {
-            "waiting": palette.BORDER,
-            "rendering": palette.RAIL_ACCENT,
-            "done": palette.RAIL_DONE,
-            "failed": palette.ERROR,
+            "waiting": palette.current("BORDER"),
+            "rendering": palette.current("RAIL_ACCENT"),
+            "done": palette.current("RAIL_DONE"),
+            "failed": palette.current("ERROR"),
         }
         for i, path in enumerate(files):
             state = self._mf_file_states.get(path, "waiting")
@@ -1111,7 +1118,8 @@ class QualityTab(ctk.CTkFrame):
                 h = max(8, min(24, int(24 + (lufs + 10))))
             x = i * bw
             c.create_rectangle(x, 28 - h, x + bw - 1, 28,
-                               fill=colors.get(state, palette.BORDER), outline="")
+                               fill=colors.get(state, palette.current("BORDER")),
+                               outline="")
 
     def _apply_mf_reports(self, reports: dict) -> None:
         self._multifile_reports = reports or {}

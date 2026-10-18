@@ -6,7 +6,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from . import fonts, palette
-from .theme import ctk_frame, require_customtkinter
+from .theme import ctk_frame, follow_theme, require_customtkinter
 
 ctk = require_customtkinter()
 
@@ -175,6 +175,14 @@ class TableViews:
             self.tree.column(col, minwidth=need, width=need)
             self._chapter_widths[col] = need
 
+    def _paint_row_tags(self) -> None:
+        self.tree.tag_configure(
+            "unplaced", background=palette.current("ROW_UNPLACED"))
+        self.tree.tag_configure(
+            "lowconf", background=palette.current("ROW_LOWCONF"))
+        self.tree.tag_configure(
+            "conflict", background=palette.current("ROW_CONFLICT"))
+
     def _build_chapters_tab(self, parent):
         tab = ctk_frame(parent, fg_color="transparent", corner_radius=0)
         tab.columnconfigure(0, weight=1)
@@ -186,9 +194,8 @@ class TableViews:
             self.tree.heading(col, text=heading, anchor=anchor)
             self.tree.column(col, anchor=anchor, stretch=col == "title")
         self.size_table()
-        self.tree.tag_configure("unplaced", background=palette.ROW_UNPLACED)
-        self.tree.tag_configure("lowconf", background=palette.ROW_LOWCONF)
-        self.tree.tag_configure("conflict", background=palette.ROW_CONFLICT)
+        self._paint_row_tags()
+        follow_theme(self.tree, self._paint_row_tags)
         self.tree.grid(row=0, column=0, sticky="nsew")
         from .ui_kit import vscroll
         vscroll(tab, self.tree, row=0, column=1, sticky="ns")

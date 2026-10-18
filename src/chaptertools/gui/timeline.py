@@ -12,8 +12,8 @@ from chaptertools.util import hms
 
 from . import tips
 from .table import gap_marks
-from .theme import ctk_frame, require_customtkinter
-from .ui_kit import PAD, SMALL, C, panel, secondary, section, small, tk_font
+from .theme import ctk_frame, follow_theme, require_customtkinter
+from .ui_kit import PAD, SMALL, C, hex, panel, secondary, section, small, tk_font
 
 ctk = require_customtkinter()
 
@@ -137,7 +137,7 @@ class Timeline(ctk.CTkFrame):
         plot.grid(row=1, column=0, sticky="ew", pady=(PAD // 2, 0))
         plot.columnconfigure(0, weight=1)
         self.canvas = tk.Canvas(
-            plot, height=_HEIGHT, highlightthickness=0, background=C["panel"],
+            plot, height=_HEIGHT, highlightthickness=0, background=hex("panel"),
             borderwidth=0)
         self.canvas.grid(row=0, column=0, sticky="ew")
         self.canvas.bind("<Configure>", lambda _e: self.redraw())
@@ -148,6 +148,7 @@ class Timeline(ctk.CTkFrame):
         self.canvas.bind("<Button-5>", lambda e: self._wheel(e, -1))
         self.canvas.bind("<MouseWheel>", self._mousewheel)
         self.canvas.bind("<Leave>", lambda _e: self._show_tip(None))
+        follow_theme(self, self._on_theme)
 
     def _swatch(self, parent, color: str, label: str):
         cell = ctk_frame(parent, fg_color="transparent")
@@ -167,7 +168,23 @@ class Timeline(ctk.CTkFrame):
         finally:
             self._menu.grab_release()
 
+    def _on_theme(self) -> None:
+        self.canvas.unbind("<Configure>")
+        self.canvas.configure(background=hex("panel"))
+        self.canvas.bind("<Configure>", lambda _e: self.redraw())
+        self.redraw()
+
     def redraw(self) -> None:
+        depth = getattr(self, "_redraw_depth", 0) + 1
+        if depth > 4:
+            return
+        self._redraw_depth = depth
+        try:
+            self._redraw()
+        finally:
+            self._redraw_depth = depth - 1
+
+    def _redraw(self) -> None:
         canvas = self.canvas
         canvas.delete("all")
         width = max(canvas.winfo_width(), 1)
@@ -179,7 +196,7 @@ class Timeline(ctk.CTkFrame):
         x0, y0, _plot_w, plot_h = plot_box(width, height)
         if duration <= 0:
             canvas.create_text(
-                x0, y0 + plot_h / 2, anchor="w", fill=C["muted"],
+                x0, y0 + plot_h / 2, anchor="w", fill=hex("muted"),
                 text="Open a book to see levels, silences, and chapters.")
             return
         start, end = self._span(duration)
@@ -249,7 +266,7 @@ class Timeline(ctk.CTkFrame):
             x1 = self._x(min(t1, end), start, end, width)
             canvas.create_rectangle(
                 x0, y0 + _TICK, max(x0 + 1, x1), y0 + plot_h,
-                fill=C["warn_bg"], width=0)
+                fill=hex("warn_bg"), width=0)
 
     def _draw_levels(self, canvas, data, start, end, width, height) -> None:
         x0, y0, plot_w, plot_h = plot_box(width, height)
@@ -270,7 +287,7 @@ class Timeline(ctk.CTkFrame):
             left = x0 + index * slot
             canvas.create_rectangle(
                 left, max(lane_top, top), left + max(1, slot - 1), bottom,
-                fill=C["border"], width=0)
+                fill=hex("border"), width=0)
         self._draw_clips(canvas, data["chunks"], start, end, width, height)
 
     def _level_bars(self, data, width: int) -> list[int] | None:
@@ -311,7 +328,7 @@ class Timeline(ctk.CTkFrame):
             top = bottom - 2 - ((value - low) / span) * scale
             canvas.create_rectangle(
                 x0, max(lane_top, top), max(x0 + 1, x1), bottom,
-                fill=C["border"], width=0)
+                fill=hex("border"), width=0)
         self._draw_clips(canvas, chunks, start, end, width, height)
 
     def _draw_clips(self, canvas, chunks, start, end, width, height) -> None:
@@ -326,7 +343,7 @@ class Timeline(ctk.CTkFrame):
             x0 = self._x(max(t0, start), start, end, width)
             x1 = self._x(min(t1, end), start, end, width)
             canvas.create_rectangle(x0, y0, max(x0 + 1, x1), y0 + 3,
-                                    fill=C["bad_fg"], width=0)
+                                    fill=hex("bad_fg"), width=0)
 
     def _draw_silences(self, canvas, data, start, end, width, height) -> None:
         x0, y0, plot_w, plot_h = plot_box(width, height)
@@ -336,7 +353,7 @@ class Timeline(ctk.CTkFrame):
         for x in silence_pixel_xs(data["gaps"], start, end, plot_w):
             canvas.create_line(
                 x0 + x, bottom - band, x0 + x, bottom,
-                fill=C["silence_soft"], width=1)
+                fill=hex("silence_soft"), width=1)
         _chapters, extras = gap_marks(data["gaps"], data["rows"], self.mode.get())
         for item in extras:
             gap = item.get("gap") or {}
@@ -346,7 +363,7 @@ class Timeline(ctk.CTkFrame):
             x = self._x(mid, start, end, width)
             tag = f"gap{round(mid, 3)}"
             canvas.create_line(
-                x, bottom - band, x, bottom, fill=C["silence_soft"], width=1,
+                x, bottom - band, x, bottom, fill=hex("silence_soft"), width=1,
                 tags=(tag,))
             tip = f"{hms(mid)} · {gap.get('dur', 0):.2f} s silence"
             canvas.tag_bind(tag, "<Enter>",
@@ -368,7 +385,7 @@ class Timeline(ctk.CTkFrame):
             marks.append((x, row, problem, tip))
         shown = set(label_indexes([m[0] for m in marks], _LABEL_GAP))
         for index, (x, row, problem, tip) in enumerate(marks):
-            color = C["bad_fg"] if problem else C["mark"]
+            color = hex("bad_fg") if problem else hex("mark")
             tag = f"ch{row.index}"
             canvas.create_line(
                 x, y0, x, y0 + plot_h, fill=color, width=2, tags=(tag,))
@@ -384,7 +401,7 @@ class Timeline(ctk.CTkFrame):
                 ty = y0
                 canvas.create_rectangle(
                     tx, ty, tx + tw, ty + th,
-                    fill=C["panel"], width=0, tags=(tag,))
+                    fill=hex("panel"), width=0, tags=(tag,))
                 canvas.create_text(
                     tx, ty, anchor="nw", text=label,
                     fill=color, font=font, tags=(tag,))
@@ -404,7 +421,7 @@ class Timeline(ctk.CTkFrame):
                 continue
             x = self._x(t, start, end, width)
             canvas.create_line(
-                x, y0, x, y0 + plot_h, fill=C["mark"], dash=(3, 3))
+                x, y0, x, y0 + plot_h, fill=hex("mark"), dash=(3, 3))
 
     def _draw_selection(self, canvas, start, end, width, height) -> None:
         span = self._drag or self.app.session.selection
@@ -416,7 +433,7 @@ class Timeline(ctk.CTkFrame):
         x1 = self._x(max(a, b), start, end, width)
         canvas.create_rectangle(
             x0, y0, max(x0 + 2, x1), y0 + plot_h,
-            fill=C["accent_soft"], outline="", width=0)
+            fill=hex("accent_soft"), outline="", width=0)
 
     def _draw_playhead(self, canvas, start, end, width, height) -> None:
         t = self.app.session.playhead
@@ -424,7 +441,7 @@ class Timeline(ctk.CTkFrame):
             return
         _x0, y0, _plot_w, plot_h = plot_box(width, height)
         x = self._x(t, start, end, width)
-        canvas.create_line(x, y0, x, y0 + plot_h, fill=C["text"], width=1,
+        canvas.create_line(x, y0, x, y0 + plot_h, fill=hex("text"), width=1,
                            tags=("playhead",))
 
     def _press(self, event) -> None:
@@ -495,7 +512,7 @@ class Timeline(ctk.CTkFrame):
         tip = tk.Toplevel(self)
         tip.wm_overrideredirect(True)
         tip.wm_geometry(f"+{self.winfo_pointerx() + 8}+{self.winfo_rooty() - 8}")
-        tip.configure(background=C["border"])
+        tip.configure(background=hex("border"))
         ttk.Label(tip, text=text, style="Tip.TLabel", takefocus=0).pack(
             padx=1, pady=1)
         self._tip = tip

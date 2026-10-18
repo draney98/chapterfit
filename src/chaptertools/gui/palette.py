@@ -1,7 +1,7 @@
 """Legacy colour names. Values come from the active theme palette."""
 from __future__ import annotations
 
-from .theme import DARK, LIGHT, active, contrast, text_pairs
+from .theme import active, contrast, text_pairs
 
 TEXT_PAIRS = text_pairs()
 
@@ -50,38 +50,13 @@ _ACTIVE = {
     "KIT_WHITE": "accent_text",
 }
 
-# Names that always mean one side of the pair (CustomTkinter stores both).
-_FIXED = {
-    "BTN_FACE": ("light", "accent"),
-    "BTN_FACE_DARK": ("dark", "accent"),
-    "BTN_DISABLED_FACE": ("light", "disabled_fill"),
-    "BTN_DISABLED_FACE_DARK": ("dark", "disabled_fill"),
-    "BTN_DISABLED_TEXT": ("light", "accent_text"),
-    "BTN_DISABLED_TEXT_DARK": ("dark", "accent_text"),
-    "BTN_ON_DISABLED": ("light", "accent_text"),
-    "D_WINDOW": ("dark", "bg"),
-    "D_FIELD": ("dark", "field_bg"),
-    "D_TEXT": ("dark", "text"),
-    "D_MUTED": ("dark", "text_muted"),
-    "D_BORDER": ("dark", "border"),
-    "D_SELECT": ("dark", "select_bg"),
-    "D_PANEL": ("dark", "surface"),
-    "D_GROUND": ("dark", "bg"),
-    "D_WARN_BG": ("dark", "warn_bg"),
-    "D_WARN_TEXT": ("dark", "warn"),
-    "D_OK": ("dark", "ok"),
-    "D_TIP": ("dark", "tip"),
-    "D_BANNER": ("dark", "banner"),
-    "D_ROW_UNPLACED": ("dark", "row_unplaced"),
-    "D_ROW_LOWCONF": ("dark", "row_lowconf"),
-    "D_ROW_CONFLICT": ("dark", "row_conflict"),
-}
+def current(name: str) -> str:
+    """One hex for the mode on screen. Canvases, ttk, and tags need this."""
+    return active()[_ACTIVE[name]]
 
 
 def __getattr__(name: str):
     if name in _ACTIVE:
-        return active()[_ACTIVE[name]]
-    if name in _FIXED:
-        side, key = _FIXED[name]
-        return (LIGHT if side == "light" else DARK)[key]
+        from .theme import pair
+        return pair(_ACTIVE[name])
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

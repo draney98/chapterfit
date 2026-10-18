@@ -320,7 +320,18 @@ def _install_ctk_theme(resolved: str) -> None:
     path.write_text(json.dumps(_ctk_theme()), encoding="utf-8")
     ctk.set_appearance_mode("Dark" if resolved == "Dark" else "Light")
     ctk.set_default_color_theme(str(path))
-    ctk.set_widget_scaling(1.0)
+
+
+def _prime_widget_scaling(root: tk.Misc | None) -> None:
+    """Apply the 1× scale once, before this window has children.
+
+    CustomTkinter's default leaves new widgets larger until this runs.
+    Running it again replays every widget's last grid() call, which puts
+    back buttons and panes that were grid_remove'd.
+    """
+    if root is None or root.winfo_children():
+        return
+    require_customtkinter().set_widget_scaling(1.0)
 
 
 def _style_ttk(root: tk.Misc) -> None:
@@ -381,6 +392,9 @@ def _style_ttk(root: tk.Misc) -> None:
     style.map("Treeview.Heading",
               background=[("active", p["surface"])],
               foreground=[("active", p["text"])])
+    style.map("Edition.Treeview",
+              background=[("selected", p["select_bg"])],
+              foreground=[("selected", p["text"])])
     style.configure("Chapter.Treeview", background=p["field_bg"],
                     fieldbackground=p["field_bg"], foreground=p["field_fg"])
     style.configure("TScrollbar", background=p["surface_alt"],
@@ -407,6 +421,7 @@ def _style_ttk(root: tk.Misc) -> None:
     style.configure("Sash", sashthickness=6, background=p["border"])
     style.configure("TSpinbox", fieldbackground=p["field_bg"],
                     foreground=p["field_fg"])
+    style.configure("Note.TFrame", background=p["surface"])
     style.configure("TSeparator", background=p["border"])
     style.configure("RailGap.TSeparator", background=p["border"])
     style.configure("Library.TButton", padding=(2, 2))
@@ -464,6 +479,7 @@ def apply_theme(root: tk.Misc | None = None, mode: str | None = None) -> str:
     resolved = resolve_mode(choice)
     _use(resolved)
     _install_ctk_theme(resolved)
+    _prime_widget_scaling(root)
     if root is not None:
         _style_ttk(root)
         _option_add(root)
@@ -808,6 +824,79 @@ def _menu_active(menu: tk.Menu) -> str:
 def restyle_ttk(root: tk.Misc) -> None:
     """Point Treeview, headings, and paned sashes at the active palette."""
     _style_ttk(root)
+
+
+def restyle_menus(root: tk.Misc) -> None:
+    """Menu bars keep a single colour. Re-apply it for the mode on screen."""
+    p = active()
+    seen: set[int] = set()
+
+    def paint(menu: tk.Menu) -> None:
+        if id(menu) in seen:
+            return
+        seen.add(id(menu))
+        menu.configure(
+            background=p["surface"], foreground=p["text"],
+            activebackground=p["select_bg"], activeforeground=p["select_fg"])
+        last = menu.index("end")
+        if last is None:
+            return
+        for index in range(last + 1):
+            try:
+                menu.entryconfigure(
+                    index, background=p["surface"], foreground=p["text"],
+                    activebackground=p["select_bg"],
+                    activeforeground=p["select_fg"])
+            except tk.TclError:
+                continue
+            if menu.type(index) != "cascade":
+                continue
+            try:
+                child = menu.nametowidget(menu.entrycget(index, "menu"))
+            except (KeyError, tk.TclError):
+                continue
+            paint(child)
+
+    def walk(widget: tk.Misc) -> None:
+        if isinstance(widget, tk.Menu):
+            paint(widget)
+        for child in widget.winfo_children():
+            walk(child)
+
+    walk(root)
+
+
+_theme_batch: set | None = None
+
+
+def dispatch_theme(root: tk.Misc) -> None:
+    """Tell hex() users to repaint. ttk also emits this while styling; ignore those."""
+    global _theme_batch
+    _theme_batch = set()
+    try:
+        root.event_generate("<<ThemeChanged>>")
+    finally:
+        _theme_batch = None
+
+
+def follow_theme(widget: tk.Misc, callback) -> None:
+    """Run callback after a real appearance change. For colours CTk does not store."""
+    def _run(_event=None, widget=widget, callback=callback):
+        if _theme_batch is None or callback in _theme_batch:
+            return
+        _theme_batch.add(callback)
+        try:
+            if not widget.winfo_exists():
+                return
+            callback()
+        except tk.TclError:
+            return
+
+    # CTk widgets refuse bind_all. The Tk root still accepts it.
+    # ttk's theme_use emits this event; a callback that idles must not
+    # re-enter it.
+    root = widget.winfo_toplevel()
+    tk.Misc.bind_all(root, "<<ThemeChanged>>", _run, add="+")
 
 
 def is_ctk(widget) -> bool:

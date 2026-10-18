@@ -47,7 +47,7 @@ class Tip:
         self._tipwin = tw = tk.Toplevel(self.widget)
         tw.wm_overrideredirect(True)
         tw.wm_geometry(f"+{x}+{y}")
-        tw.configure(background=palette.BORDER)
+        tw.configure(background=palette.current("BORDER"))
         # Borderless tip: never take focus or a grab.
         ttk.Label(tw, text=self.shown_text, justify="left",
                   style="Tip.TLabel", wraplength=480,

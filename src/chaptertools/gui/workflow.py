@@ -483,6 +483,22 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
                           lambda _e, step=key: self.show_step(step))
 
     # -------------------------------------------------------------- state --
+    def restore_step_grid(self) -> None:
+        """CTk drops grid_remove when the appearance changes. Put the step back."""
+        step = getattr(self, "_step", None)
+        if not step:
+            return
+        for key, frame in self._main_frames.items():
+            if key == step:
+                frame.grid()
+            else:
+                frame.grid_remove()
+        for key, frame in self._insp_frames.items():
+            if key == step:
+                frame.grid()
+            else:
+                frame.grid_remove()
+
     def show_step(self, step: str) -> None:
         if step not in STEPS:
             return
@@ -1035,7 +1051,7 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         self.head_tooltip = tk.Toplevel(self)
         self.head_tooltip.wm_overrideredirect(True)
         self.head_tooltip.wm_geometry(f"+{x}+{y}")
-        self.head_tooltip.configure(background=palette.BORDER)
+        self.head_tooltip.configure(background=palette.current("BORDER"))
         ttk.Label(self.head_tooltip, text=tip_text, style="Tip.TLabel",
                   font="TkDefaultFont", justify="left",
                   takefocus=0).pack(padx=1, pady=1)
@@ -1768,7 +1784,7 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         self._hide_tip()
         tip = tk.Toplevel(self)
         tip.wm_overrideredirect(True)
-        tip.configure(background=palette.BORDER)
+        tip.configure(background=palette.current("BORDER"))
         ttk.Label(tip, text=full, style="Tip.TLabel", takefocus=0).pack(
             padx=1, pady=1)
         tip.wm_geometry(f"+{event.x_root + 12}+{event.y_root + 16}")
@@ -1803,7 +1819,7 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         self._hide_tip()
         tip = tk.Toplevel(self)
         tip.wm_overrideredirect(True)
-        tip.configure(background=palette.BORDER)
+        tip.configure(background=palette.current("BORDER"))
         ttk.Label(tip, text=text, style="Tip.TLabel", takefocus=0).pack(
             padx=1, pady=1)
         tip.wm_geometry(f"+{event.x_root + 12}+{event.y_root + 16}")
@@ -1898,6 +1914,12 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         elif asin and widget_text(self.use_edition_btn):
             self.use_edition_btn.pack(side="left")
             set_enabled(self.use_edition_btn, False)
+        host = self.use_edition_btn.master
+        if any(child.winfo_manager() for child in host.winfo_children()):
+            if not host.winfo_manager():
+                host.grid()
+        else:
+            host.grid_remove()
 
     def _update_book_conflicts(self) -> None:
         if not hasattr(self, "_meta_conflict"):

@@ -131,7 +131,9 @@ class LibrivoxView(ctk.CTkFrame):
             self.results.column(
                 col, width=width, minwidth=width,
                 stretch=col in ("title", "author"))
-        self.results.tag_configure("unfinished", foreground=palette.MUTED)
+        self._paint_result_tags()
+        from chaptertools.gui.theme import follow_theme
+        follow_theme(self.results, self._paint_result_tags)
         self.results.grid(row=0, column=0, sticky="nsew")
         self._results_empty = ctk.CTkLabel(
             body, text="Search for a title to see recordings.",
@@ -388,6 +390,10 @@ class LibrivoxView(ctk.CTkFrame):
         if kw:
             self.fetch_btn.configure(**kw)
         set_enabled(self.fetch_btn, enabled)
+
+    def _paint_result_tags(self) -> None:
+        self.results.tag_configure(
+            "unfinished", foreground=palette.current("MUTED"))
 
     def _on_result_select(self, _e=None):
         sel = self.results.selection()

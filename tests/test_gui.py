@@ -1208,11 +1208,13 @@ def test_resolve_summary_keeps_next_label(tmp_path):
         assert wf._next_jump.cget("text") == "Listen"
         links = [w.cget("text") for w in wf.unresolved_frame.winfo_children()]
         assert "3" in links
-        from chaptertools.gui import palette
+        from chaptertools.gui.theme import pair
         fg = wf.listen_btn.cget("fg_color")
-        accent = palette.Q_ACCENT.lower()
-        parts = fg if isinstance(fg, (tuple, list)) else (fg,)
-        assert all(str(part).lower() == accent for part in parts)
+        # The accent action stores both modes, so a switch does not leave
+        # the light fill behind.
+        wanted = tuple(part.lower() for part in pair("accent"))
+        got = fg if isinstance(fg, (tuple, list)) else (fg,)
+        assert tuple(str(part).lower() for part in got) == wanted
     finally:
         app.destroy()
 
@@ -1550,9 +1552,10 @@ def test_table_tint_and_font_pins(tmp_path):
     app = _make_app(tmp_path)
     try:
         wf = app.workflow
-        # lighter grey for unplaced chapters
-        assert wf.tree.tag_configure("unplaced").get("background") \
-            == "#b0b0b0"
+        from chaptertools.gui import palette
+        # Unplaced rows use the palette colour for the mode on screen.
+        got = wf.tree.tag_configure("unplaced").get("background")
+        assert str(got).lower() == palette.current("ROW_UNPLACED").lower()
         from chaptertools.gui.ui_kit import BODY, ROW_H
         # Chapter rows use the same body size as every other table.
         # The old +2 pt / 30 px row is cancelled.

@@ -93,11 +93,13 @@ class MultifileBook(ctk.CTkFrame):
         cu.pack(side="left")
         cu.bind("<Button-1>", lambda _e: self.on_cleanup())
 
-        self.file_strip = tk.Canvas(self, height=36, bg=palette.RAIL_IDLE,
+        self.file_strip = tk.Canvas(self, height=36, bg=palette.current("RAIL_IDLE"),
                                     highlightthickness=0)
         self.file_strip.grid(row=2, column=0, sticky="ew", pady=(0, 6))
         self.file_strip.bind("<Button-1>", self._strip_click)
         self.file_strip.bind("<Configure>", lambda _e: self._draw_strip())
+        from chaptertools.gui.theme import follow_theme
+        follow_theme(self.file_strip, self._repaint_strip)
 
         body = ctk_frame(self)
         body.grid(row=3, column=0, sticky="nsew")
@@ -199,6 +201,10 @@ class MultifileBook(ctk.CTkFrame):
         self._index = 0
         self._draw_strip()
 
+    def _repaint_strip(self) -> None:
+        self.file_strip.configure(bg=palette.current("RAIL_IDLE"))
+        self._draw_strip()
+
     def _draw_strip(self):
         c = self.file_strip
         c.delete("all")
@@ -213,10 +219,12 @@ class MultifileBook(ctk.CTkFrame):
         x = 0.0
         for i, dur in enumerate(durs):
             bw = max(4, w * dur / total)
-            color = palette.RAIL_ACCENT if i == self._index else palette.BORDER
+            color = (palette.current("RAIL_ACCENT") if i == self._index
+                     else palette.current("BORDER"))
             c.create_rectangle(x, 4, x + bw - 1, 32, fill=color, outline="")
             c.create_text(x + 4, 18, anchor="w", text=str(i),
-                          fill=palette.Q_ON_ACCENT if i == self._index else palette.TEXT,
+                          fill=(palette.current("Q_ON_ACCENT") if i == self._index
+                                else palette.current("TEXT")),
                           font=font(SMALL))
             x += bw
 

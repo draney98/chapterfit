@@ -326,7 +326,7 @@ def _shape_label(value) -> str:
 
 def _install_note(master) -> ttk.Frame:
     style = ttk.Style(master)
-    style.configure("Note.TFrame", background=palette.Q_PANEL)
+    style.configure("Note.TFrame", background=palette.current("Q_PANEL"))
     box = ttk.Frame(master, style="Note.TFrame", padding=1)
     note = ctk.CTkLabel(
         box,

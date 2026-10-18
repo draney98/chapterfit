@@ -59,12 +59,19 @@ class _Colors:
         "ok_bg": "ok_bg",
     }
 
-    def __getitem__(self, key: str) -> str:
-        from .theme import active
-        return active()[self._KEYS[key]]
+    def __getitem__(self, key: str) -> tuple[str, str]:
+        """Both modes. CustomTkinter stores the pair and switches itself."""
+        from .theme import pair
+        return pair(self._KEYS[key])
 
 
 C = _Colors()
+
+
+def hex(key: str) -> str:
+    """The colour for the mode on screen. For canvases, ttk, menus, and tags."""
+    from .theme import active
+    return active()[C._KEYS[key]]
 PAD = 8  # base spacing unit: use PAD, PAD*2, PAD//2 only
 
 
@@ -409,16 +416,16 @@ def style_treeview(root):
     s = ttk.Style(root)
     s.theme_use("clam")
     s.configure(
-        "Treeview", font=tk_font(root), rowheight=ROW_H, background=C["panel"],
-        fieldbackground=C["panel"], foreground=C["text"], borderwidth=0)
+        "Treeview", font=tk_font(root), rowheight=ROW_H, background=hex("panel"),
+        fieldbackground=hex("panel"), foreground=hex("text"), borderwidth=0)
     s.configure(
         "Treeview.Heading", font=tk_font(root, SMALL, "bold"),
-        foreground=C["muted"],
-        background=C["sunken"], relief="flat", padding=(PAD, 4))
+        foreground=hex("muted"),
+        background=hex("sunken"), relief="flat", padding=(PAD, 4))
     s.map(
         "Treeview",
-        background=[("selected", C["accent"])],
-        foreground=[("selected", C["white"])])
+        background=[("selected", hex("accent"))],
+        foreground=[("selected", hex("white"))])
     # tags used by every table:
     #   tree.tag_configure("bad",  background=C["bad_bg"])
     #   tree.tag_configure("warn", background=C["warn_bg"])

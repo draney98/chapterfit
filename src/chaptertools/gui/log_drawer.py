@@ -36,9 +36,11 @@ class LogDrawer:
                              command=self.save)
         save.pack(side="right", padx=(0, 8))
         tips.tooltip(save, "write the log to a file")
+        from chaptertools.gui.theme import pair
         from chaptertools.gui.ui_kit import font
         self.text = ctk.CTkTextbox(
             self.win, height=280, wrap="none",
+            fg_color=pair("field_bg"), text_color=pair("field_fg"),
             font=font(mono=True))
         self.text.pack(side="top", fill="both", expand=True, padx=4, pady=(0, 4))
         self.text.bind("<Key>", self._key)

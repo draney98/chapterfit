@@ -483,11 +483,6 @@ class StagePanels:
         table_card = panel(parent)
         table_card.grid(row=1, column=0, sticky="ew")
         table_card.columnconfigure(0, weight=1)
-        style = ttk.Style(parent)
-        style.map(
-            "Edition.Treeview",
-            background=[("selected", C["accent_soft"])],
-            foreground=[("selected", C["text"])])
         self.asin_tree = ttk.Treeview(
             table_card, columns=cols, show="headings", height=8,
             style="Edition.Treeview")
@@ -505,7 +500,9 @@ class StagePanels:
             self.asin_tree.column(
                 col, width=width, minwidth=width,
                 stretch=(col == "title"), anchor=anchor)
-        self.asin_tree.tag_configure("divider", foreground=C["muted"])
+        self._style_edition_tree()
+        from chaptertools.gui.theme import follow_theme
+        follow_theme(self.asin_tree, self._style_edition_tree)
         self.asin_tree.grid(row=0, column=0, sticky="ew", padx=1, pady=1)
         self.asin_tree.bind("<<TreeviewSelect>>", self._on_asin_select)
 
@@ -551,6 +548,10 @@ class StagePanels:
         self._edition_in_use.pack_forget()
         # Kept so older refresh paths that set fit_var do not crash.
         self.fit_var = tk.StringVar(value="")
+
+    def _style_edition_tree(self) -> None:
+        from chaptertools.gui.ui_kit import hex
+        self.asin_tree.tag_configure("divider", foreground=hex("muted"))
 
     def _panel_emit(self, host):
         """Finish: one-column write table, plan box, Dry run / Apply."""

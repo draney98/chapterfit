@@ -413,6 +413,12 @@ class StageBar(ttk.Frame):
             if n:
                 ttk.Separator(self, orient="vertical").grid(
                     row=0, column=n * 2 - 1, padx=2)
+        from chaptertools.gui.theme import follow_theme
+        follow_theme(self, self._recolor)
+
+    def _recolor(self) -> None:
+        if self._selected is not None:
+            self.update(self._states, self._selected)
 
     def update(self, states: dict[str, dict], selected: str):
         self._states = states
@@ -425,9 +431,10 @@ class StageBar(ttk.Frame):
             glyph = GLYPH.get(st, "○")
             lbl.configure(text=f"{glyph} {STAGE_LABELS[key]}",
                           font=chosen if key == selected else normal,
-                          foreground={DONE: palette.OK, ATTENTION: palette.WARN,
-                                      BLOCKED: palette.BLOCKED}.get(
-                                          st, palette.TEXT))
+                          foreground={DONE: palette.current("OK"),
+                                      ATTENTION: palette.current("WARN"),
+                                      BLOCKED: palette.current("BLOCKED")}.get(
+                                          st, palette.current("TEXT")))
 
     # tooltips for blocked stages
     def _show_tip(self, key):
@@ -440,7 +447,7 @@ class StageBar(ttk.Frame):
         self._tip = tk.Toplevel(self)
         self._tip.wm_overrideredirect(True)
         self._tip.wm_geometry(f"+{x}+{y}")
-        self._tip.configure(background=palette.BORDER)
+        self._tip.configure(background=palette.current("BORDER"))
         ttk.Label(self._tip, text=st.get("why") or "click to open",
                   style="Tip.TLabel", font="TkDefaultFont",
                   takefocus=0).pack(padx=1, pady=1)

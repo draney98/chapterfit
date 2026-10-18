@@ -35,6 +35,9 @@ from .theme import (
     is_disabled,
     load_gui_prefs,
     require_customtkinter,
+    dispatch_theme,
+    follow_theme,
+    restyle_menus,
     restyle_ttk,
     save_gui_prefs,
     widget_text,
@@ -80,6 +83,7 @@ class App(ctk.CTk):
         self.configure(fg_color=C["bg"])
         self._build_menu()
         self._build_ui()
+        follow_theme(self, lambda: restyle_menus(self))
         self._fill_library()
         self.fit_minsize()
         self.after_idle(self._place_library_sash)
@@ -169,6 +173,11 @@ class App(ctk.CTk):
         self.appearance_mode = mode
         apply_theme(self, mode=mode)
         restyle_ttk(self)
+        restyle_menus(self)
+        dispatch_theme(self)
+        workflow = getattr(self, "workflow", None)
+        if workflow is not None and hasattr(workflow, "restore_step_grid"):
+            workflow.restore_step_grid()
         save_gui_prefs(appearance=mode, library_open=self._library_open)
         self.log(f"appearance {mode.lower()}")
 
@@ -872,7 +881,7 @@ class App(ctk.CTk):
         tip.wm_overrideredirect(True)
         tip.wm_geometry(f"+{event.x_root + 12}+{event.y_root + 16}")
         from . import palette
-        tip.configure(background=palette.BORDER)
+        tip.configure(background=palette.current("BORDER"))
         ttk.Label(tip, text=text, style="Tip.TLabel", takefocus=0).pack(
             padx=1, pady=1)
         self._status_tip = tip
