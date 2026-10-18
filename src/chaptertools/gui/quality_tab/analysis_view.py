@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import ttk
 
 from chaptertools.gui import palette, tips
 from chaptertools.gui.theme import require_customtkinter
@@ -37,11 +36,10 @@ class AnalysisFrame(ctk.CTkFrame):
         ctk.CTkLabel(header, textvariable=self.source_var,
                      text_color=palette.Q_MUTED, anchor="w", text="").grid(
             row=0, column=1, sticky="w", padx=8)
-        menu = tk.Menu(header, tearoff=0)
-        menu.add_command(label="Re-scan", command=on_rescan)
-        more = ttk.Menubutton(header, text="\u22ef", menu=menu, direction="below")
-        more.grid(row=0, column=2, sticky="e")
-        tips.tooltip(more, "measure the file again")
+        from chaptertools.gui.ui_kit import primary, text_button
+        rescan = text_button(header, "Re-scan", command=on_rescan, width=90)
+        rescan.grid(row=0, column=2, sticky="e")
+        tips.tooltip(rescan, "measure the file again")
 
         tiles = ctk.CTkFrame(self, fg_color=palette.Q_GROUND, corner_radius=0)
         tiles.grid(row=1, column=0, sticky="w", pady=(4, 0))
@@ -63,8 +61,8 @@ class AnalysisFrame(ctk.CTkFrame):
         ctk.CTkLabel(self.advice, text=_ADVICE, text_color=palette.Q_WARN_TEXT,
                      wraplength=640, justify="left", anchor="w").grid(
             row=0, column=0, sticky="w", padx=4, pady=4)
-        ctk.CTkButton(self.advice, text="Turn it on", command=on_turn_on,
-                      height=28).grid(row=0, column=1, sticky="e", padx=(8, 4))
+        primary(self.advice, "Turn it on", command=on_turn_on).grid(
+            row=0, column=1, sticky="e", padx=(8, 4))
         self.advice.grid_remove()
 
     def set_source(self, text: str) -> None:

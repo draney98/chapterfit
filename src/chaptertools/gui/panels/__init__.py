@@ -38,8 +38,8 @@ class StagePanels:
         return var
 
     def _primary(self, parent, row, col, text, cmd):
-        b = ctk.CTkButton(parent, text=text, command=cmd, height=28,
-                          width=_btn_width(text))
+        from chaptertools.gui.ui_kit import primary
+        b = primary(parent, text, command=cmd, width=_btn_width(text))
         b.grid(row=row, column=col, sticky="w", padx=2)
         return b
 
@@ -53,16 +53,18 @@ class StagePanels:
         ctk.CTkLabel(row, text="analyzes the audio: loudness envelope, timeline "
                                "check, noise calibration, gaps",
                      anchor="w").grid(row=0, column=1, sticky="w", padx=8)
-        menu = tk.Menu(row, tearoff=0)
-        menu.add_command(label="Re-scan", command=self.cmd_rescan)
-        more = ttk.Menubutton(row, text="\u22ef", menu=menu, direction="below")
-        more.grid(row=0, column=2, sticky="e", padx=(8, 0))
-        self._tip(more, "measure this file again, including loudness and noise")
+        from chaptertools.gui.ui_kit import text_button
+        rescan = text_button(
+            row, "Re-scan", command=self.cmd_rescan, width=_btn_width("Re-scan"))
+        rescan.grid(row=0, column=2, sticky="e", padx=(8, 0))
+        self._tip(rescan, "measure this file again, including loudness and noise")
         self.measure_result = self._result_line(p, row=1, colspan=1)
         self._tip(self.measure_btn, "decode the whole file once: envelope, "
                   "timeline check, calibration, and the gap list")
-        self.copy_fix_btn = ctk.CTkButton(
-            p, text="Copy fix command", command=self._copy_header_fix, height=28)
+        from chaptertools.gui.ui_kit import secondary
+        self.copy_fix_btn = secondary(
+            p, "Copy fix command", command=self._copy_header_fix,
+            width=_btn_width("Copy fix command"))
         self.copy_fix_btn.grid(row=2, column=0, sticky="w", pady=(4, 0))
         self.copy_fix_btn.grid_remove()
         self._tip(self.copy_fix_btn, "copy the ffmpeg command that rewrites "
@@ -103,7 +105,7 @@ class StagePanels:
             command=self._on_identify_seg, height=28, border_width=None,
             dynamic_resizing=True,
             font=font(SMALL), fg_color=C["sunken"],
-            selected_color=C["accent"], selected_hover_color=C["accent_hover"],
+            selected_color=C["accent_soft"], selected_hover_color=C["accent_soft"],
             unselected_color=C["sunken"], unselected_hover_color=C["border"],
             text_color=C["text"])
         self._identify_seg.set("Search")
@@ -278,8 +280,8 @@ class StagePanels:
             cell = control or ctk_frame(left, fg_color="transparent")
             if control is None:
                 cell.grid(row=row, column=1, sticky="w", padx=2, pady=2)
-            b = ctk.CTkButton(cell, text=button, command=cmd, height=28,
-                              width=_btn_width(button))
+            from chaptertools.gui.ui_kit import secondary
+            b = secondary(cell, button, command=cmd, width=_btn_width(button))
             b.pack(side=pack_side, anchor="w")
             meta = ctk_frame(left, fg_color="transparent")
             meta.grid(row=row, column=2, sticky="w", padx=(6, 8), pady=2)
@@ -493,6 +495,8 @@ class StagePanels:
         self.use_anyway_btn.pack_forget()
         self._tip(self.use_anyway_btn,
                   "use this edition even though it does not fit")
+        self._edition_in_use = small(btns, "● In use")
+        self._edition_in_use.pack_forget()
         # Kept so older refresh paths that set fit_var do not crash.
         self.fit_var = tk.StringVar(value="")
 
@@ -575,9 +579,10 @@ class StagePanels:
         ctk.CTkLabel(inner, text="Embed in the audio",
                      text_color=palette.TEXT, anchor="w").grid(
             row=1, column=2, sticky="w", padx=8)
-        self._edit_place = ctk.CTkButton(
-            inner, text="Edit in Place", width=120, height=28,
-            command=lambda: self.show_step("place"))
+        from chaptertools.gui.ui_kit import text_button
+        self._edit_place = text_button(
+            inner, "Change…", command=lambda: self.show_step("place"),
+            width=_btn_width("Change…"))
         self._edit_place.grid(row=1, column=3, sticky="e", padx=8, pady=4)
 
         # Tags row
@@ -593,9 +598,9 @@ class StagePanels:
         ctk.CTkLabel(inner, text="also written to album.nfo",
                      text_color=palette.TEXT, anchor="w").grid(
             row=2, column=2, sticky="w", padx=8)
-        self._edit_match = ctk.CTkButton(
-            inner, text="Edit in Match", width=120, height=28,
-            command=lambda: self.show_step("match"))
+        self._edit_match = text_button(
+            inner, "Change…", command=lambda: self.show_step("match"),
+            width=_btn_width("Change…"))
         self._edit_match.grid(row=2, column=3, sticky="e", padx=8, pady=4)
 
         # Audio cleanup row
@@ -617,9 +622,9 @@ class StagePanels:
             opt, textvariable=self.bitrate_var, values=bitrates,
             width=6, state="readonly")
         self.bitrate_combo.pack(side="left", padx=(6, 0))
-        self._edit_cleanup = ctk.CTkButton(
-            inner, text="Edit cleanup", width=120, height=28,
-            command=lambda: self.show_step("cleanup"))
+        self._edit_cleanup = text_button(
+            inner, "Change…", command=lambda: self.show_step("cleanup"),
+            width=_btn_width("Change…"))
         self._edit_cleanup.grid(row=3, column=3, sticky="e", padx=8, pady=4)
 
         plan_head = ctk_frame(p, fg_color="transparent")
@@ -642,9 +647,10 @@ class StagePanels:
             self._plan_empty_frame,
             text="Dry run shows what Apply will write, without changing the library.",
             text_color=palette.MUTED).pack(pady=(0, 8))
-        self._plan_empty_btn = ctk.CTkButton(
-            self._plan_empty_frame, text="Dry run", height=28,
-            command=self.cmd_finalize_dry)
+        from chaptertools.gui.ui_kit import secondary as _secondary
+        self._plan_empty_btn = _secondary(
+            self._plan_empty_frame, "Dry run", command=self.cmd_finalize_dry,
+            width=_btn_width("Dry run"))
         self._plan_empty_btn.pack()
         fixed = tkfont.nametofont("TkFixedFont", root=self)
         self.dry_log = ctk.CTkTextbox(
@@ -683,12 +689,16 @@ class StagePanels:
         ctk.CTkLabel(foot, textvariable=self.apply_hint,
                      text_color=palette.MUTED, anchor="w", text="").grid(
             row=1, column=0, sticky="w", pady=(4, 0))
-        self.finalize_btn = ctk.CTkButton(
-            foot, text="Dry run", command=self.cmd_finalize_dry, height=28)
+        from chaptertools.gui.theme import set_enabled
+        from chaptertools.gui.ui_kit import primary, secondary
+        self.finalize_btn = secondary(
+            foot, "Dry run", command=self.cmd_finalize_dry,
+            width=_btn_width("Dry run"))
         self.finalize_btn.grid(row=1, column=1, sticky="e", padx=(8, 4))
-        self.apply_btn = ctk.CTkButton(
-            foot, text="Apply to library", state="disabled", height=28,
-            command=self.cmd_apply_library)
+        self.apply_btn = primary(
+            foot, "Apply to library", command=self.cmd_apply_library,
+            width=_btn_width("Apply to library"))
+        set_enabled(self.apply_btn, False)
         self.apply_btn.grid(row=1, column=2, sticky="e")
         self._tip(self.finalize_btn, "preview everything finalize "
                   "would do - nothing is changed")

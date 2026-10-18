@@ -1626,18 +1626,24 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         fit = self._edition_fit_map().get(asin) if asin else None
         verdict = (fit or {}).get("verdict")
         busy = getattr(self, "_busy", False)
+        self.use_edition_btn.pack_forget()
+        self.use_anyway_btn.pack_forget()
+        label = getattr(self, "_edition_in_use", None)
+        if label is not None:
+            label.pack_forget()
+        if asin and asin == self._in_use_asin():
+            if label is not None:
+                label.pack(side="left")
+            return
         if verdict == "consistent" and not busy:
             self.use_edition_btn.pack(side="left")
             set_enabled(self.use_edition_btn, True)
-            self.use_anyway_btn.pack_forget()
         elif verdict in ("rejected", "weak") and not busy:
-            self.use_edition_btn.pack_forget()
             self.use_anyway_btn.pack(side="left")
             set_enabled(self.use_anyway_btn, True)
         else:
             self.use_edition_btn.pack(side="left")
             set_enabled(self.use_edition_btn, False)
-            self.use_anyway_btn.pack_forget()
 
     def _update_book_conflicts(self) -> None:
         if not hasattr(self, "_meta_conflict"):
@@ -2050,19 +2056,21 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         menu.add_command(
             label="Remove pin",
             command=lambda ch=chapter: self._remove_pin(ch))
+        from chaptertools.gui.ui_kit import post_menu, secondary
         for gap in self._candidate_gaps(row)[:1]:
             mid = float(gap["mid"])
             dur = float(gap.get("dur") or 0)
             ctk.CTkLabel(bar, text=f"{clock(mid)} · {dur:.2f} s").grid(
                 row=0, column=col, sticky="w", padx=(8, 2))
             col += 1
-            ctk.CTkButton(
-                bar, text="Use this", height=28, width=80,
-                command=lambda m=mid, ch=chapter: self._pin_at(ch, m),
+            secondary(
+                bar, "Use this", command=lambda m=mid, ch=chapter: self._pin_at(ch, m),
+                width=80,
             ).grid(row=0, column=col, sticky="w")
             col += 1
-        ttk.Menubutton(bar, text="More", menu=menu).grid(
-            row=0, column=col, sticky="w", padx=(8, 0))
+        more = secondary(bar, "More ▾", width=80)
+        more.configure(command=lambda m=menu, b=more: post_menu(m, b))
+        more.grid(row=0, column=col, sticky="w", padx=(8, 0))
         self._problem_menu = menu
         bar.grid()
 

@@ -242,8 +242,8 @@ class App(ctk.CTk):
         self._lib = lib
         self._library_open = bool(load_gui_prefs().get("library_open"))
         self._library_collapsed = False
-        self._lib_expand = ctk.CTkButton(
-            lib, text="›", width=36, height=28, command=self.toggle_library)
+        self._lib_expand = secondary(
+            lib, "›", command=self.toggle_library, width=36)
         self._lib_body = ctk_frame(lib, corner_radius=0, fg_color=C["bg"])
         self._lib_body.pack(side="top", fill="both", expand=True,
                             padx=14, pady=PAD // 2)
@@ -286,8 +286,8 @@ class App(ctk.CTk):
             command=self._on_library_filter, border_width=None,
             dynamic_resizing=True, height=28,
             font=font(SMALL),
-            fg_color=C["sunken"], selected_color=C["accent"],
-            selected_hover_color=C["accent_hover"],
+            fg_color=C["sunken"], selected_color=C["accent_soft"],
+            selected_hover_color=C["accent_soft"],
             unselected_color=C["sunken"],
             unselected_hover_color=C["border"],
             text_color=C["text"])

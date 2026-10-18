@@ -126,6 +126,16 @@ def secondary(parent, text, command=None, **kw):
         text_color=C["text"], border_width=1, border_color=C["border"], **kw)
 
 
+def post_menu(menu, anchor) -> None:
+    """Open a menu under a widget and always drop its grab."""
+    x = anchor.winfo_rootx()
+    y = anchor.winfo_rooty() + anchor.winfo_height()
+    try:
+        menu.tk_popup(x, y)
+    finally:
+        menu.grab_release()
+
+
 def text_button(parent, text, command=None, **kw):
     """e.g. reset glyph, Edit in Match."""
     kw.setdefault("width", 10)

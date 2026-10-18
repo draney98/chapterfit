@@ -6,7 +6,7 @@ import tkinter as tk
 
 from chaptertools.gui import palette
 from chaptertools.gui.theme import require_customtkinter
-from chaptertools.gui.ui_kit import BODY, font
+from chaptertools.gui.ui_kit import BODY, font, secondary
 
 from .summary import close, decimals_for, format_number, parse_number, snap
 
@@ -93,8 +93,10 @@ class ParamRow(ctk.CTkFrame):
         self.scale.bind("<MouseWheel>", self._wheel)
         self.scale.bind("<Button-4>", self._wheel)
         self.scale.bind("<Button-5>", self._wheel)
-        self.reset = ctk.CTkButton(
-            self, text="", width=28, height=24, command=self.reset_to_baseline)
+        self.reset = secondary(
+            self, "", width=28, command=self.reset_to_baseline)
+        from chaptertools.gui import tips
+        tips.tooltip(self.reset, "Reset to the preset value")
         if compact:
             self.label.grid(row=0, column=0, sticky="w")
             self.value_label = ctk.CTkLabel(
@@ -182,8 +184,11 @@ class ParamRow(ctk.CTkFrame):
 
     def _show_reset(self) -> None:
         changed = not close(self.stage.params[self.spec.key], self.baseline)
-        self.reset.configure(text="\u21ba" if changed else "",
-                             state="normal" if changed else "disabled")
+        if changed:
+            self.reset.configure(text="\u21ba")
+            self.reset.grid()
+        else:
+            self.reset.grid_remove()
         if self.spin is not None:
             self.spin.configure(
                 border_color=palette.Q_ACCENT if changed else palette.Q_BORDER)
@@ -205,8 +210,10 @@ class ChoiceRow(ctk.CTkFrame):
                                 width=22, state=state)
         self.box.pack(side="left", fill="x", expand=True)
         self.box.bind("<<ComboboxSelected>>", self._picked)
-        self.reset = ctk.CTkButton(self, text="", width=28, height=24,
-                                   command=self._reset)
+        from chaptertools.gui.ui_kit import secondary
+        from chaptertools.gui import tips
+        self.reset = secondary(self, "", width=28, command=self._reset)
+        tips.tooltip(self.reset, "Reset to the preset value")
         self.reset.pack(side="right")
         self.baseline = current
         self._show_reset()
@@ -227,5 +234,8 @@ class ChoiceRow(ctk.CTkFrame):
 
     def _show_reset(self) -> None:
         changed = self.var.get() != self.baseline
-        self.reset.configure(text="\u21ba" if changed else "",
-                             state="normal" if changed else "disabled")
+        if changed:
+            self.reset.configure(text="\u21ba")
+            self.reset.pack(side="right")
+        else:
+            self.reset.pack_forget()

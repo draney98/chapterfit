@@ -85,8 +85,9 @@ class DetailPanel(ctk.CTkFrame):
         self.enabled_check.grid(row=0, column=1, sticky="e")
         if not ok:
             self.enabled_check.configure(state="disabled")
-        ctk.CTkButton(self.header, text="Reset to preset", height=28,
-                      command=lambda: self.on_reset_stage(stage)).grid(
+        from chaptertools.gui.ui_kit import secondary
+        secondary(self.header, "Reset to preset",
+                  command=lambda: self.on_reset_stage(stage), width=140).grid(
             row=0, column=2, sticky="e", padx=(8, 0))
         ctk.CTkLabel(self.header, text=DESCRIPTIONS.get(stage.name, ""),
                      text_color=palette.Q_MUTED, anchor="w").grid(
@@ -159,8 +160,9 @@ class DetailPanel(ctk.CTkFrame):
         learn_state = "normal" if self.selection else "disabled"
         block = ctk.CTkFrame(body, fg_color=palette.Q_PANEL, corner_radius=0)
         block.grid(row=2, column=0, sticky="ew", pady=2)
-        ctk.CTkButton(block, text="Learn from selection", command=self.on_learn,
-                   state=learn_state).pack(side="left")
+        from chaptertools.gui.ui_kit import secondary
+        secondary(block, "Learn from selection", command=self.on_learn,
+                  state=learn_state, width=160).pack(side="left")
         if not self.selection:
             ctk.CTkLabel(block, text=note, text_color=palette.Q_MUTED).pack(side="left", padx=8)
         slider = ParamRow(body, stage, strength, base.get("strength", strength.default),
@@ -232,30 +234,34 @@ class DetailPanel(ctk.CTkFrame):
         row.grid(row=row_index, column=0, sticky="w", pady=2)
         var = tk.BooleanVar(value=bool(stage.params[spec.key]))
 
+        def _sync_reset():
+            changed = not close(var.get(), baseline)
+            if changed:
+                reset.configure(text="\u21ba", state="normal")
+                if not reset.winfo_ismapped():
+                    reset.pack(side="left", padx=4)
+            else:
+                reset.pack_forget()
+
         def _set():
             stage.params[spec.key] = bool(var.get())
-            reset.configure(
-                text="\u21ba" if not close(var.get(), baseline) else "",
-                state="normal" if not close(var.get(), baseline) else "disabled",
-            )
+            _sync_reset()
             self.on_edit()
 
         ctk.CTkCheckBox(row, text=spec.label, variable=var, command=_set,
                         ).pack(side="left")
         if recommend and not stage.params[spec.key]:
             ctk.CTkLabel(row, text="recommended", text_color=palette.Q_MUTED).pack(side="left", padx=6)
-        reset = ctk.CTkButton(row, text="", width=28, height=24,
-                              command=lambda: _reset())
-        reset.pack(side="left", padx=4)
+        from chaptertools.gui.ui_kit import secondary
+        from chaptertools.gui import tips
+        reset = secondary(row, "", width=28, command=lambda: _reset())
+        tips.tooltip(reset, "Reset to the preset value")
 
         def _reset():
             var.set(bool(baseline))
             _set()
 
-        reset.configure(
-            text="\u21ba" if not close(var.get(), baseline) else "",
-            state="normal" if not close(var.get(), baseline) else "disabled",
-        )
+        _sync_reset()
 
     def _choice(self, body, stage, spec, row_index) -> None:
         base = (self.baseline or {}).get("params", {}).get(spec.key, spec.default)
@@ -327,8 +333,9 @@ def _install_note(master) -> ttk.Frame:
              "for neural denoise.",
         text_color=palette.Q_MUTED, wraplength=420, justify="left",
     ).pack(anchor="w", padx=8, pady=(8, 4))
-    ctk.CTkButton(box, text="Install neural extra\u2026", command=_show_install).pack(
-        anchor="w", padx=8, pady=(0, 8))
+    from chaptertools.gui.ui_kit import secondary
+    secondary(box, "Install neural extra…", command=_show_install,
+              width=180).pack(anchor="w", padx=8, pady=(0, 8))
     return box
 
 

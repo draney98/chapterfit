@@ -59,7 +59,7 @@ class PlayerBar(ctk.CTkFrame):
             command=self._hear_seg, height=28, border_width=None,
             dynamic_resizing=True,
             font=font(SMALL), fg_color=C["sunken"],
-            selected_color=C["accent"], selected_hover_color=C["accent_hover"],
+            selected_color=C["accent_soft"], selected_hover_color=C["accent_soft"],
             unselected_color=C["sunken"], unselected_hover_color=C["border"],
             text_color=C["text"])
         self._source_seg.set("Edited")

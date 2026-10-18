@@ -34,15 +34,18 @@ class ChainPanel(ctk.CTkFrame):
             presets, textvariable=self.preset_var, width=18, state="readonly")
         self.preset_box.grid(row=0, column=0, sticky="ew")
         self.preset_box.bind("<<ComboboxSelected>>", lambda _e: on_preset(self.preset_var.get()))
-        ctk.CTkButton(presets, text="Save as\u2026", width=90, height=28,
-                      command=on_save).grid(row=0, column=1, padx=4)
+        from chaptertools.gui.ui_kit import post_menu, secondary
+        secondary(presets, "Save as…", command=on_save, width=90).grid(
+            row=0, column=1, padx=4)
         self.menu = tk.Menu(self, tearoff=0)
         self.menu.add_command(label="Restore defaults", command=on_restore)
         self.menu.add_command(label="Rename", command=on_rename)
         self.menu.add_command(label="Delete", command=on_delete)
         self.menu.configure(postcommand=self._menu_state)
-        ttk.Menubutton(presets, text="\u22ef", menu=self.menu, width=3).grid(
-            row=0, column=2)
+        more = secondary(presets, "More ▾", width=90)
+        more.configure(command=lambda: post_menu(self.menu, more))
+        more.grid(row=0, column=2)
+
         self.status_var = tk.StringVar(value="")
         ctk.CTkLabel(self, textvariable=self.status_var,
                      text_color=palette.Q_MUTED, wraplength=300,

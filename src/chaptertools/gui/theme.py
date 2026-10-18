@@ -520,15 +520,11 @@ def equalize_segments(seg, *, width: int | None = None) -> None:
 
 
 def paint_segment_text(seg) -> None:
-    """Dark text on sunken segments; white text on the selected accent."""
+    """Dark text on every segment. The selected chip is not an accent fill."""
     from .ui_kit import C
 
-    current = ""
-    with contextlib.suppress(Exception):
-        current = seg.get()
-    for value, button in getattr(seg, "_buttons_dict", {}).items():
-        button.configure(
-            text_color=C["white"] if value == current else C["text"])
+    for _value, button in getattr(seg, "_buttons_dict", {}).items():
+        button.configure(text_color=C["text"])
     if getattr(seg, "_segment_text_wrapped", False):
         return
     orig = seg.set
