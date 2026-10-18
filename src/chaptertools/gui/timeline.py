@@ -117,7 +117,9 @@ class Timeline(ctk.CTkFrame):
         legend.grid(row=0, column=1, sticky="w", padx=(PAD, 0))
         self._swatch(legend, C["mark"], "Chapter")
         self._swatch(legend, C["bad_fg"], "Problem")
-        self._swatch(legend, C["silence"], "Silence")
+        self._swatch(legend, C["silence_soft"], "Silence")
+        self._edition_swatch = self._swatch(legend, C["mark"], "Edition")
+        self._edition_swatch.pack_forget()
         self._menu = tk.Menu(bar, tearoff=0)
         self._menu.add_radiobutton(
             label="Similar by chapter cadence", variable=self.mode,
@@ -147,7 +149,7 @@ class Timeline(ctk.CTkFrame):
         self.canvas.bind("<MouseWheel>", self._mousewheel)
         self.canvas.bind("<Leave>", lambda _e: self._show_tip(None))
 
-    def _swatch(self, parent, color: str, label: str) -> None:
+    def _swatch(self, parent, color: str, label: str):
         cell = ctk_frame(parent, fg_color="transparent")
         cell.pack(side="left", padx=(0, PAD))
         chip = ctk.CTkFrame(
@@ -155,6 +157,7 @@ class Timeline(ctk.CTkFrame):
         chip.pack(side="left", padx=(0, 4))
         chip.pack_propagate(False)
         small(cell, text=label).pack(side="left")
+        return cell
 
     def _open_options(self) -> None:
         try:
@@ -327,14 +330,13 @@ class Timeline(ctk.CTkFrame):
 
     def _draw_silences(self, canvas, data, start, end, width, height) -> None:
         x0, y0, plot_w, plot_h = plot_box(width, height)
-        # Silences sit in the bottom third so chapter marks stay readable.
-        band = max(_TICK, plot_h // 3)
+        # A short, half-weight band. Chapter marks stay the darker lines.
+        band = min(7, plot_h)
         bottom = y0 + plot_h
         for x in silence_pixel_xs(data["gaps"], start, end, plot_w):
             canvas.create_line(
                 x0 + x, bottom - band, x0 + x, bottom,
-                fill=C["silence"], width=1)
-        # Candidate extras (Options mode) get a slightly taller tick + tip.
+                fill=C["silence_soft"], width=1)
         _chapters, extras = gap_marks(data["gaps"], data["rows"], self.mode.get())
         for item in extras:
             gap = item.get("gap") or {}
@@ -344,7 +346,7 @@ class Timeline(ctk.CTkFrame):
             x = self._x(mid, start, end, width)
             tag = f"gap{round(mid, 3)}"
             canvas.create_line(
-                x, bottom - band - 4, x, bottom, fill=C["silence"], width=1,
+                x, bottom - band, x, bottom, fill=C["silence_soft"], width=1,
                 tags=(tag,))
             tip = f"{hms(mid)} · {gap.get('dur', 0):.2f} s silence"
             canvas.tag_bind(tag, "<Enter>",
@@ -369,23 +371,35 @@ class Timeline(ctk.CTkFrame):
             color = C["bad_fg"] if problem else C["mark"]
             tag = f"ch{row.index}"
             canvas.create_line(
-                x, y0, x, y0 + plot_h, fill=color, width=1, tags=(tag,))
+                x, y0, x, y0 + plot_h, fill=color, width=2, tags=(tag,))
             if index in shown:
                 label = str(row.index + 1)
-                if x + 2 + font.measure(label) > x0 + plot_w:
-                    tx, anchor = x - 2, "ne"
-                else:
-                    tx, anchor = x + 2, "nw"
+                tw = font.measure(label)
+                th = font.metrics("linespace")
+                tx = x + 3
+                right = x0 + plot_w
+                if tx + tw > right:
+                    tx = right - tw
+                tx = max(x0, tx)
+                ty = y0
+                canvas.create_rectangle(
+                    tx, ty, tx + tw, ty + th,
+                    fill=C["panel"], width=0, tags=(tag,))
                 canvas.create_text(
-                    tx, y0 + _TICK + 1, anchor=anchor, text=label,
+                    tx, ty, anchor="nw", text=label,
                     fill=color, font=font, tags=(tag,))
             canvas.tag_bind(tag, "<Enter>",
                             lambda _e, text=tip: self._show_tip(text))
             canvas.tag_bind(tag, "<Leave>", lambda _e: self._show_tip(None))
         show_preview = getattr(self.app.workflow, "_step", "") == "match"
+        marks_preview = list(self.app.session.preview_marks)
+        if show_preview and marks_preview:
+            self._edition_swatch.pack(side="left", padx=(0, PAD))
+        else:
+            self._edition_swatch.pack_forget()
         if not show_preview:
             return
-        for t in self.app.session.preview_marks:
+        for t in marks_preview:
             if not (start <= t <= end):
                 continue
             x = self._x(t, start, end, width)

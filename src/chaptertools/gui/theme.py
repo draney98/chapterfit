@@ -36,6 +36,8 @@ LIGHT = {
     "field_fg": "#1C1B19",
     "chapter": "#5B2E8C",
     "silence": "#3E5A78",
+    # silence blended halfway toward bg, so the band is half the visual weight
+    "silence_soft": "#95A2B0",
     "warn_bg": "#FFF4E0",
     "warn_border": "#C4924A",
     "ok_bg": "#E6F1E8",
@@ -76,6 +78,7 @@ DARK = {
     "field_fg": "#E8E6E1",
     "chapter": "#D2B4EA",
     "silence": "#9DB3CC",
+    "silence_soft": "#5E6874",
     "warn_bg": "#3D2E14",
     "warn_border": "#C4924A",
     "ok_bg": "#1E3324",

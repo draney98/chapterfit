@@ -53,6 +53,7 @@ class _Colors:
         "bad_bg": "error_bg",
         "bad_fg": "error",
         "silence": "silence",
+        "silence_soft": "silence_soft",
         "mark": "chapter",
         "white": "accent_text",
         "ok_bg": "ok_bg",
