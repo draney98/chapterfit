@@ -1229,6 +1229,9 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         self._fill_asin_list()
         self._states = states
         self._update_controls()
+        view = getattr(self, "transcripts", None)
+        if view is not None and view.visible:
+            view.fill()
 
     def set_busy(self, working: bool):
         """Called when a job starts or ends: lock conflicting controls."""
@@ -2291,7 +2294,9 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
             text = str(pos.get("heading") or pos.get("text") or "")
             if not text or (rx and not rx.search(text)):
                 continue
-            moment = pos.get("time")
+            moment = pos.get("mid")
+            if not isinstance(moment, (int, float)):
+                moment = pos.get("time")
             if target is None or not isinstance(moment, (int, float)):
                 best = best or text
                 continue
@@ -2299,6 +2304,15 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
             if delta < best_d:
                 best, best_d = text, delta
         return best
+
+    def _show_transcripts(self) -> None:
+        """Open the stored speech. Place stays put."""
+        view = getattr(self, "transcripts", None)
+        if view is None:
+            from .transcript_view import TranscriptView
+            view = TranscriptView(self)
+            self.transcripts = view
+        view.show()
 
     def _problem_sentence(self, row) -> str:
         if "conflict" in row.tags:

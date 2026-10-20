@@ -410,6 +410,13 @@ class StagePanels:
         heard_entry.pack(side="left", padx=4)
         self.grep_var.trace_add("write", lambda *_: self._refresh_soon())
         self._tip(heard_entry, "only heard lines matching this regular expression")
+        from chaptertools.gui.ui_kit import secondary
+        self.transcript_btn = secondary(
+            heard, "View transcripts", command=self._show_transcripts,
+            width=_btn_width("View transcripts"))
+        self.transcript_btn.pack(side="left", padx=(8, 0))
+        self._tip(self.transcript_btn,
+                  "read the speech Listen and Sweep have already transcribed")
         self._resolve_stacked = None
         self._layout_resolve(side_by_side=True)
         return p
