@@ -64,6 +64,9 @@ class App(ctk.CTk):
         super().__init__()
         apply_theme(self, mode=mode)
         install_click_focus(self)
+        # Stay hidden until the requested size is applied. CustomTkinter
+        # otherwise maps at minsize and the window jumps on the first paint.
+        self.withdraw()
         self.title("chaptertools")
         self.geometry("1600x960")
         self.appearance_mode = mode
@@ -87,9 +90,25 @@ class App(ctk.CTk):
         follow_theme(self, lambda: restyle_menus(self))
         self._fill_library()
         self.fit_minsize()
+        self.bind("<Map>", self._open_at_requested_size, add="+")
         self.after_idle(self._place_library_sash)
         self.after(100, self._pump)
         self.protocol("WM_DELETE_WINDOW", self._quit)
+        self.deiconify()
+        self.update()
+        # The idle sash placement can run while the window is still 1 px
+        # wide, which pins the library pane at 0. Place it again at the
+        # real width.
+        self._place_library_sash()
+
+    def _open_at_requested_size(self, event=None):
+        """First map applies 1600x960 (or a later geometry request)."""
+        if event is not None and event.widget is not self:
+            return
+        self.realize_geometry()
+        self.deiconify()
+        self.update_idletasks()
+        self._place_library_sash()
 
     def minsize(self, width=None, height=None):
         """Query form (no args) still works; CustomTkinter only sets size."""
@@ -967,6 +986,10 @@ class App(ctk.CTk):
             style.configure("Library.TPanedwindow", sashthickness=6)
             style.configure("Sash", gripcount=10, sashthickness=6)
         with contextlib.suppress(tk.TclError):
+            # A not-yet-mapped pane clamps every sash to 0. Skip until
+            # there is room for the library and the book.
+            if self._pane.winfo_width() < width + 80:
+                return
             self._pane.sashpos(0, width)
 
     def _on_select(self, _event=None):

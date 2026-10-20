@@ -447,7 +447,7 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         split.add(table_host, weight=1)
         split.add(controls, weight=0)
 
-        def _keep_rows(_event=None, pane=split):
+        def _keep_rows(_event=None, pane=split, controls=controls):
             try:
                 height = pane.winfo_height()
                 row_h = int(ttk.Style(pane).lookup(
@@ -456,8 +456,16 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
                 least = 8 * row_h + row_h + 12
                 if height < least + 36:
                     return
-                # Align plus the Resolve summary. The rest of Resolve scrolls.
-                target = max(least, height - 110)
+                # Align plus the Automatic card. 340 px fits them; use the
+                # laid-out request when it is taller. Never under 160 px
+                # unless the 8-row table floor needs the rest.
+                bottom = 340
+                req = controls.winfo_reqheight()
+                if req >= 160:
+                    bottom = max(340, req)
+                target = max(least, height - bottom)
+                if height - target < 160 and height - least >= 160:
+                    target = height - 160
                 if abs(pane.sashpos(0) - target) > 4:
                     pane.sashpos(0, target)
             except tk.TclError:
@@ -527,7 +535,6 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
     def show_step(self, step: str) -> None:
         if step not in STEPS:
             return
-        self._auto_stage = False
         self._step = step
         for key, frame in self._main_frames.items():
             if key == step:
@@ -682,9 +689,6 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
             self._set_harvest(harvest)
         self._refresh()
         self._maybe_identify_from_nfo()
-        if self._auto_stage:
-            self._auto_stage = False
-            self.set_stage(next_stage(self._compute_states()))
 
     def _set_harvest(self, harvest: dict):
         """Fill Book info, leaving any field the user has edited."""
@@ -709,8 +713,6 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
             if var.get() == self._harvest_shown.get(key, var.get()):
                 var.set(new)
             self._harvest_shown[key] = new
-
-    _auto_stage = False
 
     def _compute_states(self) -> dict:
         states = stage_states(self.analysis,
@@ -806,9 +808,6 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         self._fill_asin_list()
         self._fill_asin_query()
         self.set_stage(next_stage(self._compute_states()))
-        # the stage is chosen again once disk facts are in, unless the
-        # user picks one first
-        self._auto_stage = True
         self._request_facts(harvest=True)
         self._maybe_autoscan()
         if hasattr(self.app, "sync_library_strip"):
@@ -927,8 +926,7 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         self._step = "multifile"
 
     def _pick_stage(self, key: str):
-        """A stage chosen by the user: no automatic re-choice after that."""
-        self._auto_stage = False
+        """A stage chosen by the user."""
         self.set_stage(key)
 
     def _prefill_identify(self):
@@ -1269,10 +1267,11 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
             off(self._job_controls(), "a job is running - wait or Cancel job")
         if not self.audio:
             off(self._job_controls(), "select a book in the library first")
-        stage_btns = {"align": [self.align_btn],
-                      "resolve": [self.hint_btn, self.listen_btn,
-                                  self.range_btn, self.probe_btn,
-                                  self.full_btn]}
+        # Align with hint, Listen, and the sweeps are how Place gets a
+        # first alignment, so they wait on Match, not on Align having run.
+        stage_btns = {"align": [self.align_btn, self.hint_btn,
+                                self.listen_btn, self.range_btn,
+                                self.probe_btn, self.full_btn]}
         for key, btns in stage_btns.items():
             if states[key]["state"] == BLOCKED:
                 off(btns, f"{STAGE_LABELS[key]} is blocked: "
@@ -1461,20 +1460,10 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
             self._remember_dry_run()
             self._update_controls()
             return
-        if stage == "identify":
-            if self.section_files:
-                # LibriVox: edition is the section files; pin and place next.
-                self._maybe_pin_section_starts()
-                return
-            # Stay on Match so an edition can be chosen. Use this edition
-            # is what opens Place. A later facts refresh must not jump either.
-            self._auto_stage = False
+        if stage == "identify" and self.section_files:
+            # LibriVox: edition is the section files; pin and place next.
+            self._maybe_pin_section_starts()
             return
-        if stage:
-            target = next_stage(self._compute_states())
-            if target != self._stage:
-                self.set_stage(target)
-            self._auto_stage = True  # again once fresh disk facts land
         if stage == "measure" and code == 0:
             self._write_playlist_sig()
             self._maybe_identify_from_nfo()

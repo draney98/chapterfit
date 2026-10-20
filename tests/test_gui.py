@@ -1192,6 +1192,29 @@ WEAK_ART = {
 }
 
 
+def test_automatic_tools_stay_live_before_align(tmp_path):
+    """Align with hint, Listen, and the sweeps are how Place gets run."""
+    app = _make_app(tmp_path)
+    try:
+        wf = app.workflow
+        wf.set_book(_book(tmp_path))
+        _write_artifact(wf, {
+            "envelope": {"duration": 3600.0}, "calibration": {"x": 1},
+            "gaps": {"gaps": []}, "fingerprint": {"x": 1},
+            "identification": WEAK_ART["identification"],
+        })
+        wf._refresh()
+        from chaptertools.gui.theme import is_disabled
+        assert not is_disabled(wf.hint_btn)
+        for btn in (wf.listen_btn, wf.range_btn, wf.probe_btn, wf.full_btn):
+            reason = wf._tips[btn].reason or ""
+            assert "align first" not in reason
+            if is_disabled(btn):
+                assert "Whisper" in reason
+    finally:
+        app.destroy()
+
+
 def test_resolve_summary_keeps_next_label(tmp_path):
     app = _make_app(tmp_path)
     try:
@@ -1219,26 +1242,22 @@ def test_resolve_summary_keeps_next_label(tmp_path):
         app.destroy()
 
 
-def test_auto_advance_follows_next_stage(tmp_path):
+def test_place_stays_put_when_a_job_finishes(tmp_path):
+    """A button on Place must not switch the tab, even when Place is done."""
     app = _make_app(tmp_path)
     try:
         wf = app.workflow
         wf.set_book(_book(tmp_path))
-        assert wf._stage == "measure"
-        measured = {k: v for k, v in WEAK_ART.items()
-                    if k not in ("identification", "alignment")}
-        _write_artifact(wf, measured)
-        wf._on_done(0, stage="measure", name="measure")
-        assert wf._stage == "identify"
-        identified = {**measured,
-                      "identification": WEAK_ART["identification"]}
-        _write_artifact(wf, identified)
-        wf._on_done(0, stage="identify", name="identify")
-        assert wf._step == "match"  # stay put so an edition can be chosen
-        assert not wf._auto_stage
-        _write_artifact(wf, WEAK_ART)
+        placed = {**WEAK_ART, "alignment": {
+            "rate": 1.0, "conflicts": [], "results": [
+                {**row, "confidence": 1.0, "spread": 0.0}
+                for row in WEAK_ART["alignment"]["results"]]}}
+        _write_artifact(wf, placed)
+        wf.show_step("place")
         wf._on_done(0, stage="align", name="align")
-        assert wf._stage == "resolve"  # weak chapters skip past Align
+        assert wf._step == "place"
+        wf._apply_facts(wf._facts_token, wf.audio, None, None, None)
+        assert wf._step == "place"
     finally:
         app.destroy()
 

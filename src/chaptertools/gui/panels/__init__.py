@@ -278,7 +278,7 @@ class StagePanels:
         p.columnconfigure(0, weight=1)
         from chaptertools.gui.ui_kit import C, watch_scroll
         self._resolve_scroll = ctk.CTkScrollableFrame(
-            p, fg_color=C["bg"], corner_radius=0, height=120)
+            p, fg_color=C["bg"], corner_radius=0)
         watch_scroll(self._resolve_scroll)
         self._resolve_scroll.grid(row=0, column=0, sticky="nsew")
         summary = ctk_frame(self._resolve_scroll, fg_color="transparent")

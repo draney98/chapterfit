@@ -162,6 +162,77 @@ def _settle(app, geometry):
         f"asked {width}x{height}, got {app.winfo_width()}x{app.winfo_height()}")
 
 
+def test_library_pane_stays_visible(tmp_path, monkeypatch):
+    """The book list is on screen at the opening size, not pinned at 0."""
+    tkinter = pytest.importorskip("tkinter")
+    try:
+        tkinter.Tk().destroy()
+    except tkinter.TclError:
+        pytest.skip("no display available")
+    monkeypatch.setenv("CHAPTERFIT_WORK", str(tmp_path / "work"))
+    monkeypatch.setenv("CHAPTERFIT_LIBRARY", str(tmp_path / "library"))
+    from chaptertools.gui.app import LIBRARY_WIDTH, App
+
+    (tmp_path / "library").mkdir()
+    opened = App(library_root=str(tmp_path / "library"), modal_busy=False)
+    try:
+        opened.update()
+        assert opened.lib_tree.winfo_ismapped()
+        assert opened.lib_tree.winfo_width() > 40
+        assert opened._pane.sashpos(0) >= LIBRARY_WIDTH - 8
+    finally:
+        opened.destroy()
+
+
+def test_window_opens_at_requested_size(tmp_path, monkeypatch):
+    """First realized size is 1600x960, not the smaller minimum."""
+    tkinter = pytest.importorskip("tkinter")
+    try:
+        tkinter.Tk().destroy()
+    except tkinter.TclError:
+        pytest.skip("no display available")
+    monkeypatch.setenv("CHAPTERFIT_WORK", str(tmp_path / "work"))
+    monkeypatch.setenv("CHAPTERFIT_LIBRARY", str(tmp_path / "library"))
+    from chaptertools.gui.app import App
+
+    (tmp_path / "library").mkdir()
+    opened = App(library_root=str(tmp_path / "library"), modal_busy=False)
+    try:
+        opened.update()
+        assert opened.winfo_width() == 1600
+        assert opened.winfo_height() == 960
+    finally:
+        opened.destroy()
+
+
+def test_place_bottom_pane_shows_full_sweep(app):
+    _settle(app, "1600x1030+0+0")
+    wf = app.workflow
+    wf.show_step("place")
+    app.update()
+    btn = wf.full_btn
+    assert btn.winfo_ismapped()
+    window_bottom = app.winfo_rooty() + app.winfo_height()
+    assert btn.winfo_rooty() + btn.winfo_height() <= window_bottom + 2
+    card = wf._resolve_left
+    assert card.winfo_rooty() + card.winfo_height() <= window_bottom + 2
+    split = wf._place_split
+    assert split.winfo_height() - split.sashpos(0) >= 300
+
+
+def test_place_table_keeps_eight_rows_when_short(app):
+    _settle(app, "1600x800+0+0")
+    wf = app.workflow
+    wf.show_step("place")
+    app.update()
+    split = wf._place_split
+    import tkinter.ttk as ttk
+    row_h = int(ttk.Style(split).lookup("Chapter.Treeview", "rowheight") or 26)
+    least = 8 * row_h + row_h + 12
+    assert split.sashpos(0) >= least - 8
+    assert split.winfo_height() - split.sashpos(0) >= 160
+
+
 @pytest.mark.parametrize("size", SIZES, ids=lambda s: f"{s[0]}x{s[1]}")
 def test_nothing_clips(app, size):
     w, h = size
