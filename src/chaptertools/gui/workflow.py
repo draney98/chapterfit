@@ -223,6 +223,7 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
 
         shell = ctk_frame(self, fg_color="transparent")
         shell.grid(row=0, column=0, sticky="nsew", padx=14, pady=(4, 0))
+        self._shell = shell
         shell.columnconfigure(0, weight=1)
         shell.rowconfigure(2, weight=1)
 
@@ -353,8 +354,10 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
             for c, *_rest in CHAPTER_COLUMNS
             if c in shown and int(self.tree.column(c, "width")) > 0
         ) + 24
+        rail = (self.rail.need_width() if hasattr(self.rail, "need_width")
+                else self.rail.winfo_reqwidth())
         return max([self._panel_need(k)[0] for k in self._panels]
-                   + [self.rail.winfo_reqwidth(), table]) + 16
+                   + [rail, table]) + 16
 
     def min_height(self) -> int:
         """Header, timeline, and enough rows that the table is usable.
@@ -450,22 +453,24 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         def _keep_rows(_event=None, pane=split, controls=controls):
             try:
                 height = pane.winfo_height()
+                if height < 2:
+                    return
                 row_h = int(ttk.Style(pane).lookup(
                     "Chapter.Treeview", "rowheight") or ROW_H)
-                # Header plus 8 full rows. Real rowheight, not the nominal one.
-                least = 8 * row_h + row_h + 12
-                if height < least + 36:
-                    return
-                # Align plus the Automatic card. 340 px fits them; use the
-                # laid-out request when it is taller. Never under 160 px
-                # unless the 8-row table floor needs the rest.
-                bottom = 340
-                req = controls.winfo_reqheight()
-                if req >= 160:
-                    bottom = max(340, req)
-                target = max(least, height - bottom)
-                if height - target < 160 and height - least >= 160:
-                    target = height - 160
+                foot = getattr(self, "_chapter_foot", None)
+                footer = foot.winfo_reqheight() if foot is not None else 0
+                # Header, eight chapter rows, and the filter under the
+                # tree. The lower pane stays at 300 when that still fits:
+                # shorter hides Full sweep, taller hides chapter rows.
+                least = row_h + 8 * row_h + footer + 4
+                bottom = 300
+                if height - bottom < least:
+                    bottom = max(0, height - least)
+                if bottom < 160 and height - 160 >= least:
+                    bottom = 160
+                target = max(1, height - int(bottom))
+                if target >= height:
+                    target = height - 1
                 if abs(pane.sashpos(0) - target) > 4:
                     pane.sashpos(0, target)
             except tk.TclError:
@@ -475,6 +480,31 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         split.after_idle(_keep_rows)
         self._place_split = split
         self._keep_place_rows = _keep_rows
+        self._paint_place_chrome()
+        from .theme import follow_theme
+        follow_theme(split, self._paint_place_chrome)
+
+    def _paint_place_chrome(self) -> None:
+        """The paned window and the Resolve canvas do not inherit the ground."""
+        from .ui_kit import C, hex
+        split = getattr(self, "_place_split", None)
+        if split is None:
+            return
+        try:
+            ttk.Style(split).configure(
+                "Place.TPanedwindow", background=hex("bg"))
+            split.configure(style="Place.TPanedwindow")
+        except tk.TclError:
+            return
+        scroll = getattr(self, "_resolve_scroll", None)
+        if scroll is None:
+            return
+        with contextlib.suppress(tk.TclError):
+            scroll.configure(fg_color=C["bg"])
+        canvas = getattr(scroll, "_parent_canvas", None)
+        if canvas is not None:
+            with contextlib.suppress(tk.TclError):
+                canvas.configure(background=hex("bg"))
 
     def _build_quality_tab(self, parent):
         from chaptertools.gui.quality_tab import QualityTab
@@ -548,7 +578,16 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
                 frame.grid_remove()
         self.workspace.set_inspector(step == "match" and bool(self.audio),
                                      table=False)
-        self.timeline.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        # Place spends its height on the chapter table. The timeline and
+        # the top inset come back on every other step.
+        place = step == "place"
+        self.workspace.set_tight(place)
+        if place:
+            self.timeline.grid_remove()
+            self._shell.grid_configure(pady=0)
+        else:
+            self.timeline.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+            self._shell.grid_configure(pady=(4, 0))
         self._sync_rail()
         self._show_workspace()
         bar = getattr(self.app, "player_bar", None)
@@ -1232,6 +1271,28 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         view = getattr(self, "transcripts", None)
         if view is not None and view.visible:
             view.fill()
+        self._fit_window()
+
+    def _fit_window(self) -> None:
+        """The minimum follows the open book. Empty columns drop out of it.
+
+        The first refresh runs inside ``WorkflowPanel.__init__``, before
+        the app has stored this panel. Fitting then would look up a
+        window attribute that does not exist yet.
+        """
+        if getattr(self, "_fitting", False):
+            return
+        app = getattr(self, "app", None)
+        if app is None or getattr(app, "workflow", None) is not self:
+            return
+        fit = getattr(app, "fit_minsize", None)
+        if fit is None:
+            return
+        self._fitting = True
+        try:
+            fit()
+        finally:
+            self._fitting = False
 
     def set_busy(self, working: bool):
         """Called when a job starts or ends: lock conflicting controls."""
@@ -2337,7 +2398,7 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
             return
         for child in bar.winfo_children():
             child.destroy()
-        bar.grid_remove()
+        bar.place_forget()
 
     def _fill_problem_bar(self, row) -> None:
         """One line under the table. Not a tree child: a child hid rows."""
@@ -2376,7 +2437,13 @@ class WorkflowPanel(TableViews, StagePanels, ctk.CTkFrame):
         more.configure(command=lambda m=menu, b=more: post_menu(m, b))
         more.grid(row=0, column=col, sticky="w", padx=(8, 0))
         self._problem_menu = menu
-        bar.grid()
+        # Cover the filter line. A row of its own shortens the table by
+        # two chapters, which is the room Place is measured on.
+        foot = getattr(self, "_chapter_foot", None)
+        if foot is None:
+            return
+        bar.place(in_=foot, x=0, y=0, relwidth=1, relheight=1)
+        bar.lift()
 
     def _play_before(self, seconds: float) -> None:
         if not self.audio:

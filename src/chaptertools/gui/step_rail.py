@@ -69,8 +69,10 @@ class StepRail(ctk.CTkFrame):
             sub = small(cell, text="")
             sub.configure(textvariable=var, wraplength=160)
             sub.grid(row=1, column=0, sticky="ew", padx=PAD, pady=(0, PAD))
+            # width 1: a CTkFrame defaults to 200px, and five of those
+            # push the window minimum past 1280.
             bar = ctk.CTkFrame(
-                cell, height=2, corner_radius=0, fg_color=C["border"])
+                cell, height=2, width=1, corner_radius=0, fg_color=C["border"])
             bar.grid(row=2, column=0, sticky="ew")
 
             def _fit(_event, label=sub, rule=bar, card=cell):
@@ -88,6 +90,19 @@ class StepRail(ctk.CTkFrame):
             self._tips[key] = [tooltip(cell, ""), tooltip(title, ""), tooltip(sub, "")]
             card_floor = 100
             self.columnconfigure(col, weight=1, uniform="steps", minsize=card_floor)
+
+    def need_width(self) -> int:
+        """Width of the five cards at their designed size.
+
+        Once the window is open, ``winfo_reqwidth`` follows the stretched
+        cards and would lock the minimum to whatever size the window
+        already is.
+        """
+        from .ui_kit import PAD
+        if not self._buttons:
+            return int(self.winfo_reqwidth())
+        return (sum(int(cell._desired_width) for cell in self._buttons.values())
+                + len(self._buttons) * PAD)
 
     def update(self, states: dict, step: str, cleanup: str,
                finish_detail: str | None = None,
@@ -231,8 +246,16 @@ class Workspace(ctk.CTkFrame):
         self._beside = True
         self._table_step = False
         self._show_inspector = True
+        self._tight = False
         self._mode: tuple | None = None
         self.bind("<Configure>", self._layout)
+
+    def set_tight(self, tight: bool) -> None:
+        """Drop the top inset so Place can keep its chapter rows."""
+        if tight == self._tight:
+            return
+        self._tight = tight
+        self._apply()
 
     def set_inspector(self, visible: bool, beside: bool = True,
                       table: bool = False) -> None:
@@ -263,8 +286,9 @@ class Workspace(ctk.CTkFrame):
             self.columnconfigure(0, weight=1)
             self.columnconfigure(1, minsize=collapsed, weight=0)
             self.rowconfigure(1, weight=0)
+            y = (0, pad) if self._tight else pad
             self.main.grid(row=0, column=0, columnspan=2, sticky="nsew",
-                           padx=pad, pady=pad)
+                           padx=pad, pady=y)
             return
         if self._wants_beside():
             self.columnconfigure(0, weight=1)

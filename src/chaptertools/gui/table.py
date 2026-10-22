@@ -211,7 +211,8 @@ class TableViews:
                         ("Delete", lambda e: self.cmd_unpin())):
             self.tree.bind(seq, fn)
         foot = ctk_frame(tab, fg_color="transparent")
-        foot.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(2, 0))
+        foot.grid(row=1, column=0, columnspan=2, sticky="ew")
+        self._chapter_foot = foot
         foot.columnconfigure(0, weight=1)
         legend = ctk_frame(foot, fg_color="transparent")
         legend.grid(row=0, column=0, sticky="w")
@@ -267,8 +268,5 @@ class TableViews:
             tab, textvariable=self.conflict_note, text_color=palette.WARN,
             anchor="w", text="")
         self.problem_bar = ctk_frame(tab, fg_color="transparent")
-        self.problem_bar.grid(row=2, column=0, columnspan=2, sticky="ew",
-                              pady=(4, 0))
-        self.problem_bar.grid_remove()
         tab.grid(row=0, column=0, sticky="nsew")
         self._chapters_tab = tab
