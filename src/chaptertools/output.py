@@ -82,10 +82,16 @@ def abs_json(placed: list[Placed], local_dur: float) -> str:
 
 
 def embed(src: str, meta_path: str, dest: str, verbose: bool = False):
-    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+    """Copy the audio into ``dest`` and attach the ffmetadata chapters.
+
+    An attached cover is a video stream, so it is mapped too and kept as
+    an attached picture.
+    """
+    cmd = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
            "-i", src, "-i", meta_path,
-           "-map", "0:a", "-map_metadata", "1", "-map_chapters", "1",
-           "-c", "copy", dest]
+           "-map", "0:a", "-map", "0:v?",
+           "-map_metadata", "1", "-map_chapters", "1",
+           "-c", "copy", "-disposition:v", "attached_pic", dest]
     if verbose:
         print(f"  $ {' '.join(cmd)}", file=__import__("sys").stderr)
     r = subprocess.run(cmd, capture_output=True, text=True)

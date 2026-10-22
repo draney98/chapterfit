@@ -14,6 +14,24 @@ ENV_FLOOR_DB = -96.0
 AUDNEX = "https://api.audnex.us"
 SCHEMA = 3
 
+
+def analysis_matches_audio(data: dict, audio: str) -> bool:
+    """True when this analysis still belongs to ``audio``.
+
+    A tag rewrite moves mtime without changing the audio. The same size
+    keeps the measured stages; a different size does not. An older schema
+    does not either.
+    """
+    if not isinstance(data, dict) or data.get("schema") != SCHEMA:
+        return False
+    stored = data.get("file")
+    try:
+        size = os.path.getsize(audio)
+    except OSError:
+        return False
+    return isinstance(stored, dict) and stored.get("size") == size
+
+
 class Artifact:
     """One JSON document per book. Stages read and write it; each records
     what it depended on so staleness is detectable rather than assumed."""
@@ -50,17 +68,11 @@ class Artifact:
                     self.data = json.load(f)
             except (OSError, ValueError):
                 self.data = {}
-        if self.data.get("schema") != SCHEMA:
-            self.data = {}
-        stored = self.data.get("file")
-        current = self.fingerprint()
-        # A tag rewrite moves mtime without changing the audio. Same size
-        # keeps the measured stages; a different size still voids them.
-        if not isinstance(stored, dict) or stored.get("size") != current["size"]:
+        if not analysis_matches_audio(self.data, self.audio):
             self.data = {}
         self.data.setdefault("schema", SCHEMA)
         self.data.setdefault("audio", self.audio)
-        self.data["file"] = current
+        self.data["file"] = self.fingerprint()
 
     def save(self):
         self.data["written_by"] = f"chaptertools {__version__}"

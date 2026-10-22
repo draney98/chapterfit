@@ -202,7 +202,18 @@ def test_scan_library_finds_audio(tmp_path):
     assert out["Isaac Asimov"] == [str(book / "Foundation.mp3")]
 
 
-def test_book_marks_follow_the_artifact(tmp_path):
+def _valid_analysis(audio, **body):
+    payload = {
+        "schema": 3,
+        "file": {"size": audio.stat().st_size,
+                 "mtime": int(audio.stat().st_mtime)},
+    }
+    payload.update(body)
+    return payload
+
+
+def test_book_marks_follow_the_artifact(tmp_path, monkeypatch):
+    monkeypatch.setenv("CHAPTERFIT_WORK", str(tmp_path / "workroot"))
     audio = tmp_path / "Author" / "Book" / "Book.mp3"
     audio.parent.mkdir(parents=True)
     audio.write_bytes(b"x")
@@ -211,15 +222,34 @@ def test_book_marks_follow_the_artifact(tmp_path):
     os.makedirs(work, exist_ok=True)
     art = lib.analysis_path(str(audio), work)
     with open(art, "w") as handle:
-        json.dump({"envelope": {"duration": 1}}, handle)
+        json.dump(_valid_analysis(audio, envelope={"duration": 1}), handle)
     assert lib.book_marks(str(audio)) == "●"
     with open(art, "w") as handle:
-        json.dump({"emitted": {"count": 3}}, handle)
+        json.dump(_valid_analysis(audio, emitted={"count": 3}), handle)
     assert lib.book_marks(str(audio)) == "✓"
     stem, _ext = os.path.splitext(os.path.basename(audio))
     with open(os.path.join(work, f"{stem}.quality.mp3"), "wb") as handle:
         handle.write(b"x")
     assert lib.book_marks(str(audio)) == "✓♪"
+
+
+def test_book_marks_ignore_analysis_for_a_different_file(tmp_path, monkeypatch):
+    """A finished file is a different size. Marks must not trust the old JSON."""
+    monkeypatch.setenv("CHAPTERFIT_WORK", str(tmp_path / "workroot"))
+    audio = tmp_path / "Author" / "Book" / "Book.mp3"
+    audio.parent.mkdir(parents=True)
+    audio.write_bytes(b"chaptered-audio")
+    work = lib.work_dir_for(str(audio))
+    os.makedirs(work, exist_ok=True)
+    art = lib.analysis_path(str(audio), work)
+    with open(art, "w") as handle:
+        json.dump({"schema": 3, "file": {"size": 1, "mtime": 0},
+                   "emitted": {"count": 3}}, handle)
+    assert lib.book_marks(str(audio)) == ""
+    with open(art, "w") as handle:
+        json.dump({"schema": 1, "file": {"size": audio.stat().st_size, "mtime": 0},
+                   "emitted": {"count": 3}}, handle)
+    assert lib.book_marks(str(audio)) == ""
 
 
 def test_search_filters_library(tmp_path):

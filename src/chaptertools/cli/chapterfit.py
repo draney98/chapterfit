@@ -88,7 +88,7 @@ from chaptertools.envelope.measurement import (  # noqa: E402
     stage_verify,
     valley_split,
 )
-from chaptertools.output import merge_tags, read_tags  # noqa: E402
+from chaptertools.output import embed, merge_tags, read_tags  # noqa: E402
 from chaptertools.util import (  # noqa: E402
     clock,
     die,
@@ -398,7 +398,7 @@ def cmd_emit(args):
         art.save()
         al = seeded
         print("  seeded alignment from album.nfo / placed chapters")
-    dur = art.data["envelope"]["duration"]
+    dur = art.require("envelope", "chapterfit.py measure FILE")["duration"]
     thr = args.min_confidence or al["min_confidence"]
     dedup, _withheld = select_chapters(al["results"], thr)
     if dedup:
@@ -458,14 +458,10 @@ def cmd_emit(args):
             tmp = dest + ".ffmeta.tmp"
             with open(tmp, "w") as f:
                 f.write(meta)
-            r = subprocess.run(["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
-                                "-y", "-i", media, "-i", tmp,
-                                "-map", "0:a", "-map_metadata", "1",
-                                "-map_chapters", "1", "-c", "copy", dest],
-                               capture_output=True, text=True)
-            os.unlink(tmp)
-            if r.returncode:
-                die(f"embed failed: {r.stderr[-400:]}")
+            try:
+                embed(media, tmp, dest)
+            finally:
+                os.unlink(tmp)
             print(f"  wrote {dest}")
     if args.chapters_txt:
         with open(args.chapters_txt, "w") as f:
@@ -596,7 +592,7 @@ def main():
     p.add_argument("--chaptered", help="the embedded-chapter file "
                                        "(default <name>.chapters.<ext>)")
     p.add_argument("--stage", help="where displaced files go "
-                                   "(default /tmp/chapterfit/<author>/<title>)")
+                                   "(default <work-dir>/originals)")
     p.add_argument("--env", help="path to a .env with ABS_URL / ABS_TOKEN")
     p.add_argument("--library-id")
     p.add_argument("--library-name")

@@ -1,6 +1,7 @@
 """Audiobookshelf client and finalize helpers."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -10,8 +11,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from chaptertools import media
-from chaptertools import __version__
+from chaptertools import __version__, media, workdir
 from chaptertools.envelope.artifact import Artifact
 from chaptertools.nfo import write_album_nfo
 from chaptertools.util import die, hms, need
@@ -261,6 +261,75 @@ def find_item(abs_api: ABS, lid: str, audio: str, title_hint: str | None):
     return None, None
 
 
+def sha256_file(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def stage_destination(stage: str, name: str) -> str:
+    """Where a displaced file lands.
+
+    The first copy keeps ``name``. A later one gets a timestamp, so the
+    first original is never replaced.
+    """
+    dest = os.path.join(stage, name)
+    if not os.path.exists(dest):
+        return dest
+    stem, ext = os.path.splitext(name)
+    stamp = time.strftime("%Y%m%dT%H%M%S")
+    candidate = os.path.join(stage, f"{stem}.{stamp}{ext}")
+    n = 2
+    while os.path.exists(candidate):
+        candidate = os.path.join(stage, f"{stem}.{stamp}.{n}{ext}")
+        n += 1
+    return candidate
+
+
+def displace(path: str, stage: str) -> str:
+    os.makedirs(stage, exist_ok=True)
+    dest = stage_destination(stage, os.path.basename(path))
+    shutil.move(path, dest)
+    return dest
+
+
+def originals_dir(audio: str, work_dir: str | None) -> str:
+    """Persistent home for files finalize moves out of the library."""
+    return os.path.join(workdir.resolve_work_dir(audio, work_dir), "originals")
+
+
+def remember_original(art: Artifact, final: str, staged: dict) -> None:
+    """Point the analysis at the file now in the library.
+
+    ``staged`` is the original's path, size and sha256. The first record
+    stays; a later finalize does not overwrite it.
+    """
+    if not (art.data.get("derived_from") or {}).get("sha256"):
+        art.data["derived_from"] = {
+            "path": staged["path"],
+            "size": staged["size"],
+            "sha256": staged["sha256"],
+        }
+    old_json = art.path
+    old_env = art.env_path
+    art.audio = os.path.abspath(final)
+    art.path = workdir.artifact_path(final, art.work_dir)
+    art.env_path = workdir.envelope_path(final, art.work_dir)
+    if (os.path.abspath(old_env) != os.path.abspath(art.env_path)
+            and os.path.isfile(old_env)
+            and not os.path.exists(art.env_path)):
+        os.replace(old_env, art.env_path)
+    st = os.stat(final)
+    art.data["audio"] = art.audio
+    art.data["file"] = {"size": st.st_size, "mtime": int(st.st_mtime)}
+    art.save()
+    if (os.path.abspath(old_json) != os.path.abspath(art.path)
+            and os.path.isfile(old_json)):
+        os.remove(old_json)
+
+
 def verify_embedded(path: str, expect_dur: float | None):
     """The embedded copy must be sound before the original is displaced."""
     if not media.readable(path):
@@ -376,8 +445,8 @@ def cmd_finalize(args):
             break
     if art is None:
         art = Artifact(src if os.path.isfile(src) else given, args.work_dir)
-    al = art.require("alignment", "chapterfit.py align FILE")
-    measured = art.data["envelope"]["duration"]
+    art.require("alignment", "chapterfit.py align FILE")
+    measured = art.require("envelope", "chapterfit.py measure FILE")["duration"]
     audio = final
     nch, dur = verify_embedded(src, measured)
     print(f"  chaptered file : {os.path.basename(src)}")
@@ -385,11 +454,17 @@ def cmd_finalize(args):
 
     # ---- 2. what moves ---------------------------------------------------
     move_audio, move_side, stay = classify_folder(folder, src)
-    stage = args.stage or os.path.join(
-        "/tmp/chapterfit",
-        os.path.basename(os.path.dirname(folder)) or "unknown",
-        os.path.basename(folder))
+    stage = args.stage or originals_dir(final, getattr(args, "work_dir", None))
+    src_abs = os.path.abspath(src)
+    final_abs = os.path.abspath(final)
+    original = final if src_abs != final_abs and os.path.isfile(final) else None
+    if original:
+        move_audio = [f for f in move_audio if os.path.abspath(f) != final_abs]
     print(f"\n  staging dir    : {stage}")
+    if original:
+        print(f"  first original : {os.path.basename(original)}")
+        print("                   kept in the staging dir; a later copy of")
+        print("                   the same name gets a timestamp")
     if move_audio:
         print("  extra audio (this is what makes ABS merge books):")
         for f in move_audio:
@@ -401,20 +476,25 @@ def cmd_finalize(args):
     for f in stay:
         print(f"      keep  {os.path.basename(f)}")
 
-    if os.path.abspath(src) != os.path.abspath(final):
+    if src_abs != final_abs:
         print(f"      rename {os.path.basename(src)} -> "
               f"{os.path.basename(final)}")
 
     if apply:
-        os.makedirs(stage, exist_ok=True)
+        staged_original = None
+        if original:
+            staged_original = {
+                "size": os.path.getsize(original),
+                "sha256": sha256_file(original),
+                "path": displace(original, stage),
+            }
         for f in move_audio + move_side:
-            dest = os.path.join(stage, os.path.basename(f))
-            shutil.move(f, dest)
-        if os.path.abspath(src) != os.path.abspath(final):
-            if os.path.exists(final):
-                shutil.move(final, os.path.join(stage,
-                                                os.path.basename(final)))
+            if os.path.isfile(f):
+                displace(f, stage)
+        if src_abs != final_abs:
             shutil.move(src, final)
+        if staged_original:
+            remember_original(art, final, staged_original)
         # the service user has to be able to read it
         if args.group:
             try:
@@ -622,7 +702,7 @@ def finalize_done(api, iid, art, args):
               f"from the analysis;\n  push them with --push-chapters, or use "
               f"the chapter editor's bulk import.")
         if args.push_chapters and chapters:
-            dur = art.data["envelope"]["duration"]
+            dur = art.require("envelope", "chapterfit.py measure FILE")["duration"]
             for i, c in enumerate(chapters):
                 c["end"] = (chapters[i + 1]["start"]
                             if i + 1 < len(chapters) else dur)

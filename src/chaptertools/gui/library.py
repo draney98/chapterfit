@@ -5,6 +5,7 @@ import json
 import os
 
 from chaptertools import workdir
+from chaptertools.envelope.artifact import analysis_matches_audio
 from chaptertools.media import probe_tags
 
 AUDIO_EXTS = {".mp3", ".m4a", ".m4b", ".flac", ".ogg", ".wav"}
@@ -174,7 +175,7 @@ def book_marks(audio: str) -> str:
         try:
             with open(path) as handle:
                 loaded = json.load(handle)
-            if isinstance(loaded, dict):
+            if isinstance(loaded, dict) and analysis_matches_audio(loaded, audio):
                 data = loaded
         except (OSError, ValueError):
             data = {}
